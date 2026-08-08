@@ -1,0 +1,430 @@
+import { OneEuroFilter, clamp, lerp, TAU } from './math';
+import type { InputSample, Stamp } from './types';
+
+export interface BrushPreset {
+  id: string;
+  name: string;
+  /** Diámetro base en píxeles de documento. */
+  size: number;
+  /** Opacidad del trazo completo, 0..1. */
+  opacity: number;
+  /** Alfa de cada estampa individual. Bajo = acumulación gradual. */
+  flow: number;
+  /** 0 = degradado hasta el centro, 1 = borde duro. */
+  hardness: number;
+  /** Separación entre estampas como fracción del diámetro. */
+  spacing: number;
+  /** Cuánto reduce el tamaño la presión mínima, 0..1. */
+  pressureSize: number;
+  /** Cuánto reduce el alfa la presión mínima, 0..1. */
+  pressureOpacity: number;
+  /** Achatamiento de la punta al inclinar el lápiz, 0..1. */
+  tiltAspect: number;
+  /** Positivo adelgaza al acelerar (plumilla), negativo engorda. */
+  velocitySize: number;
+  /** Estabilización del trazo, 0..1. */
+  smoothing: number;
+  /** Variación aleatoria del tamaño por estampa, 0..1. */
+  jitterSize: number;
+  /** Dispersión aleatoria perpendicular, en fracción del diámetro. */
+  scatter: number;
+  /** La punta gira siguiendo la dirección del trazo. */
+  followDirection: boolean;
+  /** Achatamiento fijo de la punta, 1 = círculo. */
+  aspect: number;
+  /** Borra en vez de pintar. */
+  erase: boolean;
+}
+
+export const DEFAULT_BRUSHES: BrushPreset[] = [
+  {
+    id: 'pencil',
+    name: 'Lápiz',
+    size: 6,
+    opacity: 0.95,
+    flow: 0.55,
+    hardness: 0.55,
+    spacing: 0.07,
+    pressureSize: 0.55,
+    pressureOpacity: 0.7,
+    tiltAspect: 0.5,
+    velocitySize: 0.15,
+    smoothing: 0.35,
+    jitterSize: 0.12,
+    scatter: 0.05,
+    followDirection: true,
+    aspect: 1,
+    erase: false,
+  },
+  {
+    id: 'ink',
+    name: 'Entintado',
+    size: 8,
+    opacity: 1,
+    flow: 1,
+    hardness: 0.95,
+    spacing: 0.04,
+    pressureSize: 0.85,
+    pressureOpacity: 0.1,
+    tiltAspect: 0,
+    velocitySize: 0.35,
+    smoothing: 0.6,
+    jitterSize: 0,
+    scatter: 0,
+    followDirection: true,
+    aspect: 1,
+    erase: false,
+  },
+  {
+    id: 'marker',
+    name: 'Marcador',
+    size: 28,
+    opacity: 0.85,
+    flow: 0.9,
+    hardness: 0.8,
+    spacing: 0.05,
+    pressureSize: 0.15,
+    pressureOpacity: 0.25,
+    tiltAspect: 0.2,
+    velocitySize: 0,
+    smoothing: 0.4,
+    jitterSize: 0,
+    scatter: 0,
+    followDirection: true,
+    aspect: 0.35,
+    erase: false,
+  },
+  {
+    id: 'airbrush',
+    name: 'Aerógrafo',
+    size: 70,
+    opacity: 0.6,
+    flow: 0.06,
+    hardness: 0,
+    spacing: 0.03,
+    pressureSize: 0.3,
+    pressureOpacity: 0.9,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.3,
+    jitterSize: 0,
+    scatter: 0,
+    followDirection: false,
+    aspect: 1,
+    erase: false,
+  },
+  {
+    id: 'paint',
+    name: 'Pintura',
+    size: 40,
+    opacity: 1,
+    flow: 0.75,
+    hardness: 0.35,
+    spacing: 0.06,
+    pressureSize: 0.4,
+    pressureOpacity: 0.5,
+    tiltAspect: 0.6,
+    velocitySize: 0,
+    smoothing: 0.45,
+    jitterSize: 0.08,
+    scatter: 0.12,
+    followDirection: true,
+    aspect: 0.85,
+    erase: false,
+  },
+  {
+    id: 'eraser',
+    name: 'Borrador',
+    size: 40,
+    opacity: 1,
+    flow: 1,
+    hardness: 0.6,
+    spacing: 0.05,
+    pressureSize: 0.4,
+    pressureOpacity: 0.5,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.4,
+    jitterSize: 0,
+    scatter: 0,
+    followDirection: false,
+    aspect: 1,
+    erase: true,
+  },
+];
+
+interface Anchor {
+  x: number;
+  y: number;
+  pressure: number;
+  altitude: number;
+  azimuth: number;
+  time: number;
+  /** Velocidad en px/ms, ya suavizada. */
+  speed: number;
+}
+
+/**
+ * Convierte muestras de puntero en estampas espaciadas uniformemente.
+ *
+ * El recorrido usa Catmull-Rom sobre los puntos ya filtrados, así que la curva
+ * pasa exactamente por donde estuvo el lápiz. El coste es un punto de retardo
+ * (necesitamos el siguiente ancla para calcular la tangente), que compensamos
+ * con las muestras predichas del navegador.
+ */
+export class StrokeBuilder {
+  private anchors: Anchor[] = [];
+  private filterX = new OneEuroFilter();
+  private filterY = new OneEuroFilter();
+  private leftover = 0;
+  private emittedUpTo = 0;
+  private speed = 0;
+  private lastEmit: { x: number; y: number } | null = null;
+
+  private brush: BrushPreset;
+
+  constructor(brush: BrushPreset) {
+    this.brush = brush;
+    this.configureFilters();
+  }
+
+  private configureFilters() {
+    // Más suavizado = frecuencia de corte más baja = más inercia.
+    const cutoff = lerp(6.0, 0.4, this.brush.smoothing);
+    this.filterX = new OneEuroFilter(cutoff, 0.006);
+    this.filterY = new OneEuroFilter(cutoff, 0.006);
+  }
+
+  get isEmpty() {
+    return this.anchors.length === 0;
+  }
+
+  begin(sample: InputSample): Stamp[] {
+    this.anchors = [];
+    this.leftover = 0;
+    this.emittedUpTo = 0;
+    this.speed = 0;
+    this.lastEmit = null;
+    this.configureFilters();
+    this.addAnchor(sample);
+    // Un toque sin arrastre debe dejar una marca: emitimos la primera estampa ya.
+    const a = this.anchors[0];
+    this.lastEmit = { x: a.x, y: a.y };
+    return [this.makeStamp(a, 0)];
+  }
+
+  /** Añade una muestra real y devuelve las estampas nuevas confirmadas. */
+  push(sample: InputSample): Stamp[] {
+    this.addAnchor(sample);
+    return this.emitPending(false);
+  }
+
+  /**
+   * Estampas especulativas a partir de las muestras predichas del navegador.
+   * No modifican el estado: se dibujan en una capa aparte que se descarta.
+   */
+  speculate(predicted: InputSample[]): Stamp[] {
+    if (predicted.length === 0 || this.anchors.length === 0) return [];
+    const saved = {
+      anchors: this.anchors.slice(),
+      leftover: this.leftover,
+      emittedUpTo: this.emittedUpTo,
+      speed: this.speed,
+      lastEmit: this.lastEmit ? { ...this.lastEmit } : null,
+    };
+    // Los filtros son stateful; los clonamos vía recalculo barato: aceptamos
+    // que la especulación use posiciones sin filtrar, es material desechable.
+    const out: Stamp[] = [];
+    for (const p of predicted) {
+      const last = this.anchors[this.anchors.length - 1];
+      const dt = Math.max(p.time - last.time, 1);
+      const dist = Math.hypot(p.x - last.x, p.y - last.y);
+      this.anchors.push({
+        x: p.x,
+        y: p.y,
+        pressure: p.pressure,
+        altitude: p.altitude,
+        azimuth: p.azimuth,
+        time: p.time,
+        speed: dist / dt,
+      });
+      out.push(...this.emitPending(false));
+    }
+    this.anchors = saved.anchors;
+    this.leftover = saved.leftover;
+    this.emittedUpTo = saved.emittedUpTo;
+    this.speed = saved.speed;
+    this.lastEmit = saved.lastEmit;
+    return out;
+  }
+
+  /** Cierra el trazo vaciando el último segmento. */
+  end(): Stamp[] {
+    if (this.anchors.length === 0) return [];
+    return this.emitPending(true);
+  }
+
+  private addAnchor(sample: InputSample) {
+    const x = this.filterX.filter(sample.x, sample.time);
+    const y = this.filterY.filter(sample.y, sample.time);
+    const prev = this.anchors[this.anchors.length - 1];
+    if (prev) {
+      const dt = Math.max(sample.time - prev.time, 1);
+      const dist = Math.hypot(x - prev.x, y - prev.y);
+      // Suavizamos la velocidad: si no, la dinámica de tamaño tiembla.
+      this.speed = lerp(this.speed, dist / dt, 0.3);
+      // Descartamos muestras que no aportan curvatura ni distancia.
+      if (dist < 0.02) return;
+    }
+    this.anchors.push({
+      x,
+      y,
+      pressure: sample.pressure,
+      altitude: sample.altitude,
+      azimuth: sample.azimuth,
+      time: sample.time,
+      speed: this.speed,
+    });
+  }
+
+  /**
+   * Recorre los segmentos aún no emitidos a paso constante de arco.
+   * `flush` procesa también el último segmento duplicando el punto final.
+   */
+  private emitPending(flush: boolean): Stamp[] {
+    const stamps: Stamp[] = [];
+    const pts = this.anchors;
+    const lastSegment = flush ? pts.length - 1 : pts.length - 2;
+
+    for (let i = this.emittedUpTo; i < lastSegment; i++) {
+      const p0 = pts[Math.max(0, i - 1)];
+      const p1 = pts[i];
+      const p2 = pts[Math.min(pts.length - 1, i + 1)];
+      const p3 = pts[Math.min(pts.length - 1, i + 2)];
+      this.emitSegment(p0, p1, p2, p3, stamps);
+      this.emittedUpTo = i + 1;
+    }
+    return stamps;
+  }
+
+  private emitSegment(p0: Anchor, p1: Anchor, p2: Anchor, p3: Anchor, out: Stamp[]) {
+    const chord = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    if (chord < 1e-4) return;
+
+    // Subdividimos el spline en pasos de ~1px y avanzamos por longitud de arco:
+    // así el spacing es uniforme aunque la curva sea cerrada.
+    const steps = Math.max(2, Math.min(256, Math.ceil(chord * 1.5)));
+    let prevX = p1.x;
+    let prevY = p1.y;
+
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const x = catmullRom(p0.x, p1.x, p2.x, p3.x, t);
+      const y = catmullRom(p0.y, p1.y, p2.y, p3.y, t);
+      const segLen = Math.hypot(x - prevX, y - prevY);
+      if (segLen <= 0) continue;
+
+      const interp: Anchor = {
+        x,
+        y,
+        pressure: lerp(p1.pressure, p2.pressure, t),
+        altitude: lerp(p1.altitude, p2.altitude, t),
+        azimuth: lerp(p1.azimuth, p2.azimuth, t),
+        time: lerp(p1.time, p2.time, t),
+        speed: lerp(p1.speed, p2.speed, t),
+      };
+      const spacingPx = Math.max(
+        0.5,
+        this.stampSize(interp) * this.brush.spacing,
+      );
+
+      let travelled = 0;
+      while (this.leftover + (segLen - travelled) >= spacingPx) {
+        const need = spacingPx - this.leftover;
+        travelled += need;
+        this.leftover = 0;
+        const f = travelled / segLen;
+        const sx = lerp(prevX, x, f);
+        const sy = lerp(prevY, y, f);
+        const dir = this.lastEmit
+          ? Math.atan2(sy - this.lastEmit.y, sx - this.lastEmit.x)
+          : 0;
+        out.push(this.makeStamp({ ...interp, x: sx, y: sy }, dir));
+        this.lastEmit = { x: sx, y: sy };
+      }
+      this.leftover += segLen - travelled;
+      prevX = x;
+      prevY = y;
+    }
+  }
+
+  private stampSize(a: Anchor): number {
+    const b = this.brush;
+    let size = b.size;
+
+    const pressureFactor = 1 - b.pressureSize * (1 - a.pressure);
+    size *= pressureFactor;
+
+    if (b.velocitySize !== 0) {
+      // La velocidad típica de un trazo cómodo ronda 1 px/ms.
+      const norm = clamp(a.speed / 2.5, 0, 1);
+      size *= 1 - b.velocitySize * norm;
+    }
+    return Math.max(0.4, size);
+  }
+
+  private makeStamp(a: Anchor, direction: number): Stamp {
+    const b = this.brush;
+    let size = this.stampSize(a);
+
+    if (b.jitterSize > 0) {
+      size *= 1 - b.jitterSize * Math.random();
+    }
+
+    let alpha = b.flow * (1 - b.pressureOpacity * (1 - a.pressure));
+
+    let x = a.x;
+    let y = a.y;
+    if (b.scatter > 0) {
+      const r = (Math.random() - 0.5) * 2 * b.scatter * size;
+      const ang = Math.random() * TAU;
+      x += Math.cos(ang) * r;
+      y += Math.sin(ang) * r;
+    }
+
+    // La inclinación achata la punta perpendicular a la dirección del lápiz,
+    // que es lo que hace que un lápiz tumbado sombree en vez de trazar línea.
+    let aspect = b.aspect;
+    let angle = b.followDirection ? direction : 0;
+    if (b.tiltAspect > 0) {
+      const tilt = clamp(1 - a.altitude / (Math.PI / 2), 0, 1);
+      aspect *= 1 - b.tiltAspect * tilt;
+      if (tilt > 0.15) {
+        angle = a.azimuth;
+        size *= 1 + tilt * 0.6;
+      }
+    }
+
+    return {
+      x,
+      y,
+      size,
+      angle,
+      alpha: clamp(alpha, 0, 1),
+      hardness: b.hardness,
+      aspect: clamp(aspect, 0.05, 1),
+    };
+  }
+}
+
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (
+    0.5 *
+    (2 * p1 +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+  );
+}
