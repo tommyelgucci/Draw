@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Engine } from '../core/engine';
 import { clamp } from '../core/math';
+import type { SelectionMode, SelectionShape } from '../core/selection';
 import type { InputSample, Vec2 } from '../core/types';
 import { useActiveBrush, useUI } from '../state/store';
 
@@ -41,6 +42,12 @@ export function CanvasView() {
   const drawingId = useRef<number | null>(null);
   const gesture = useRef<GestureState | null>(null);
   const lastPenAt = useRef(0);
+  const selectingId = useRef<number | null>(null);
+  const selectPath = useRef<{
+    shape: SelectionShape;
+    points: Vec2[];
+    mode: SelectionMode;
+  } | null>(null);
 
   const setEngine = useUI((s) => s.setEngine);
   const brush = useActiveBrush();
@@ -254,6 +261,10 @@ export function CanvasView() {
         engine.cancelStroke();
         drawingId.current = null;
       }
+      if (selectingId.current !== null) {
+        selectingId.current = null;
+        selectPath.current = null;
+      }
       beginGesture();
       if (gesture.current) gesture.current.maxPointers = pointers.current.size;
       return;
@@ -264,6 +275,17 @@ export function CanvasView() {
     if (!canDrawWith(e.pointerType)) return;
 
     const sample = toSample(e);
+
+    if (tool === 'selectRect' || tool === 'selectLasso') {
+      engine.beginSelectionDrag();
+      selectPath.current = {
+        shape: tool === 'selectRect' ? 'rect' : 'lasso',
+        points: [{ x: sample.x, y: sample.y }],
+        mode: uiRef.current.selectionMode,
+      };
+      selectingId.current = e.pointerId;
+      return;
+    }
 
     if (tool === 'eyedropper') {
       const picked = engine.pickColor({ x: sample.x, y: sample.y });
@@ -303,6 +325,21 @@ export function CanvasView() {
       return;
     }
 
+    if (selectingId.current === e.pointerId && selectPath.current) {
+      const path = selectPath.current;
+      const s = toSample(e);
+      const last = path.points[path.points.length - 1];
+      // El lazo no necesita cada muestra: un punto por píxel sobra y mantiene
+      // barata la rasterización en cada movimiento.
+      if (path.shape === 'rect') {
+        path.points = [path.points[0], { x: s.x, y: s.y }];
+      } else if (!last || Math.hypot(s.x - last.x, s.y - last.y) > 1.5) {
+        path.points.push({ x: s.x, y: s.y });
+      }
+      engine.previewSelectionShape(path.shape, path.points, path.mode);
+      return;
+    }
+
     if (drawingId.current !== e.pointerId) return;
 
     // Los eventos fusionados traen todas las muestras que el navegador agrupó
@@ -328,6 +365,25 @@ export function CanvasView() {
     if (drawingId.current === e.pointerId) {
       engine.endStroke();
       drawingId.current = null;
+    }
+    if (selectingId.current === e.pointerId) {
+      const path = selectPath.current;
+      selectingId.current = null;
+      selectPath.current = null;
+      if (path) {
+        const tooSmall =
+          path.shape === 'rect'
+            ? path.points.length < 2 ||
+              Math.hypot(
+                path.points[1].x - path.points[0].x,
+                path.points[1].y - path.points[0].y,
+              ) < 3
+            : path.points.length < 3;
+        // Un toque suelto con la herramienta de selección deselecciona, que
+        // es lo que espera cualquiera que venga de un editor de imagen.
+        if (tooSmall) engine.clearSelection();
+        else engine.applySelectionShape(path.shape, path.points, path.mode);
+      }
     }
     if (gesture.current && pointers.current.size < 2) {
       endGesture();

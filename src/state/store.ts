@@ -2,9 +2,21 @@ import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { DEFAULT_BRUSHES, type BrushPreset } from '../core/brush';
 import type { Engine } from '../core/engine';
+import type { SelectionMode } from '../core/selection';
 import type { RGB } from '../core/types';
 
-export type Tool = 'brush' | 'eraser' | 'transform' | 'pan' | 'eyedropper' | 'fill';
+export type Tool =
+  | 'brush'
+  | 'eraser'
+  | 'fill'
+  | 'eyedropper'
+  | 'selectRect'
+  | 'selectLasso'
+  | 'transform'
+  | 'pan';
+
+/** Herramientas que construyen una máscara de selección. */
+export const SELECT_TOOLS: Tool[] = ['selectRect', 'selectLasso'];
 
 export type PanelId = 'layers' | 'brush' | 'color' | 'export' | 'settings' | null;
 
@@ -21,6 +33,8 @@ interface UIState {
   palette: RGB[];
   recentColors: RGB[];
   panel: PanelId;
+  /** Cómo combina el siguiente gesto de selección con la máscara actual. */
+  selectionMode: SelectionMode;
   /** Un dedo dibuja; con lápiz conectado suele preferirse desactivado. */
   fingerDraws: boolean;
   showTimeline: boolean;
@@ -34,6 +48,7 @@ interface UIState {
   setOpacity: (v: number | null) => void;
   setColor: (c: RGB, remember?: boolean) => void;
   setPanel: (p: PanelId) => void;
+  setSelectionMode: (m: SelectionMode) => void;
   togglePanel: (p: Exclude<PanelId, null>) => void;
   setFingerDraws: (v: boolean) => void;
   setShowTimeline: (v: boolean) => void;
@@ -64,6 +79,7 @@ export const useUI = create<UIState>((set, get) => ({
   palette: DEFAULT_PALETTE,
   recentColors: [],
   panel: null,
+  selectionMode: 'replace',
   fingerDraws: true,
   showTimeline: true,
   busy: null,
@@ -99,6 +115,7 @@ export const useUI = create<UIState>((set, get) => ({
       return { color, recentColors: recent.slice(0, 12) };
     }),
   setPanel: (panel) => set({ panel }),
+  setSelectionMode: (selectionMode) => set({ selectionMode }),
   togglePanel: (p) => set((s) => ({ panel: s.panel === p ? null : p })),
   setFingerDraws: (fingerDraws) => set({ fingerDraws }),
   setShowTimeline: (showTimeline) => set({ showTimeline }),

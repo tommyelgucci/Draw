@@ -18,6 +18,14 @@ import {
   type TraceDocument,
 } from './document';
 import { History } from './history';
+import {
+  rasterizeSelection,
+  rectCorners,
+  shapeBounds,
+  unionRect,
+  type SelectionMode,
+  type SelectionShape,
+} from './selection';
 import { clamp, mat3Identity, mat3Invert, mat3Multiply, type Mat3 } from './math';
 import {
   BLEND_INDEX,
@@ -55,6 +63,32 @@ export interface StrokeContext {
   color: RGB;
 }
 
+export interface SelectionState {
+  active: boolean;
+  /** Límites reales de la máscara, no del gesto que la creó. */
+  bounds: Rect;
+}
+
+/**
+ * Píxeles levantados de un cel que se están moviendo, escalando o girando.
+ * Mientras existe, el cel tiene un hueco donde estaban.
+ */
+export interface FloatingSelection {
+  surface: Surface;
+  layerId: string;
+  /** Fotograma donde empieza el cel de origen, no el fotograma actual. */
+  celFrame: number;
+  tx: number;
+  ty: number;
+  scale: number;
+  rotation: number;
+  pivotX: number;
+  pivotY: number;
+  sourceRect: Rect;
+  /** Píxeles originales de `sourceRect`, para cancelar o deshacer. */
+  before: Uint8Array;
+}
+
 const MAX_ONION = 3;
 
 export class Engine {
@@ -77,12 +111,18 @@ export class Engine {
   playing = false;
   loop = true;
 
+  selection: SelectionState = { active: false, bounds: emptyRect() };
+  floating: FloatingSelection | null = null;
+  private selectionCanvas: HTMLCanvasElement | null = null;
+  private selectionBackup: HTMLCanvasElement | null = null;
+
   /** Se incrementa en cualquier cambio estructural; la UI se suscribe. */
   revision = 0;
   private listeners = new Set<() => void>();
 
   private renderQueued = false;
   private belowCacheKey = '';
+  private thumbCache = new Map<string, { canvas: HTMLCanvasElement; version: number }>();
   private lastViewportW = 0;
   private lastViewportH = 0;
   private viewInitialised = false;
@@ -669,6 +709,7 @@ export class Engine {
       ctx.brush.opacity,
       undefined,
       ctx.brush.erase,
+      this.clipMask,
     );
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
@@ -811,7 +852,9 @@ export class Engine {
     const cel = celAt(layer, frame);
     const isStrokeTarget =
       includeWet && this.builder !== null && this.strokeLayer?.id === layer.id;
-    if (!cel && !isStrokeTarget) return null;
+    const hasFloating =
+      includeWet && this.floating !== null && this.floating.layerId === layer.id;
+    if (!cel && !isStrokeTarget && !hasFloating) return null;
 
     let src = cel ? this.renderer.ensureResident(cel.surface) : null;
 
@@ -820,12 +863,14 @@ export class Engine {
       if (src) this.renderer.copy(combined, src, 1);
       else this.renderer.clear(combined);
       const erase = this.strokeCtx.brush.erase;
+      const mask = this.clipMask;
       this.renderer.drawOver(
         combined,
         this.renderer.scratch('wet'),
         this.strokeCtx.brush.opacity,
         undefined,
         erase,
+        mask,
       );
       if (this.predictedStamps.length > 0) {
         const predict = this.renderer.scratch('predict');
@@ -837,8 +882,22 @@ export class Engine {
           this.strokeCtx.brush.opacity,
           undefined,
           erase,
+          mask,
         );
       }
+      src = combined;
+    }
+
+    if (hasFloating && this.floating) {
+      const combined = this.renderer.scratch('xf1');
+      if (src && src !== combined) this.renderer.copy(combined, src, 1);
+      else if (!src) this.renderer.clear(combined);
+      this.renderer.drawOver(
+        combined,
+        this.floating.surface,
+        1,
+        this.floatingMatrixFor(this.floating),
+      );
       src = combined;
     }
 
@@ -1049,7 +1108,378 @@ export class Engine {
 
     const result = this.compositeFrame();
     const checker = Math.max(6, 16 / this.view.zoom);
-    r.present(result, this.viewMatrix(), this.doc.paper, this.doc.paperAlpha, checker);
+    const matrix = this.viewMatrix();
+    r.present(result, matrix, this.doc.paper, this.doc.paperAlpha, checker);
+
+    if (this.selection.active && !this.floating) {
+      r.drawSelectionOutline(
+        this.selectionMask,
+        matrix,
+        this.view.zoom,
+        performance.now() / 1000,
+      );
+      // El contorno se mueve solo, así que hay que seguir pidiendo cuadros.
+      this.requestRender();
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Selección
+   * ---------------------------------------------------------------- */
+
+  /** Máscara de selección: alfa = cobertura, en resolución de documento. */
+  get selectionMask(): Surface {
+    return this.renderer.scratch('selmask');
+  }
+
+  /** Máscara a pasar a las operaciones de dibujo, o null si no hay selección. */
+  private get clipMask(): Surface | null {
+    return this.selection.active ? this.selectionMask : null;
+  }
+
+  private selectionSurfaceCanvas(): HTMLCanvasElement {
+    if (
+      !this.selectionCanvas ||
+      this.selectionCanvas.width !== this.doc.width ||
+      this.selectionCanvas.height !== this.doc.height
+    ) {
+      this.selectionCanvas = document.createElement('canvas');
+      this.selectionCanvas.width = this.doc.width;
+      this.selectionCanvas.height = this.doc.height;
+    }
+    return this.selectionCanvas;
+  }
+
+  /** Sube la máscara rasterizada a GPU y recalcula sus límites reales. */
+  private commitSelectionCanvas() {
+    const canvas = this.selectionSurfaceCanvas();
+    const mask = this.selectionMask;
+    this.renderer.clear(mask);
+    this.renderer.uploadImage(mask, canvas);
+
+    const data = canvas
+      .getContext('2d')!
+      .getImageData(0, 0, canvas.width, canvas.height).data;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let y = 0; y < canvas.height; y++) {
+      const row = y * canvas.width;
+      for (let x = 0; x < canvas.width; x++) {
+        if (data[(row + x) * 4 + 3] > 8) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (minX > maxX) {
+      this.selection = { active: false, bounds: emptyRect() };
+    } else {
+      this.selection = {
+        active: true,
+        bounds: { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 },
+      };
+    }
+    this.touch();
+  }
+
+  /**
+   * Guarda la máscara antes de empezar a arrastrar.
+   *
+   * Sin esto, sumar o restar área acumularía la forma en cada movimiento del
+   * dedo en vez de mostrar el resultado de un único gesto.
+   */
+  beginSelectionDrag() {
+    if (this.floating) this.commitFloating();
+    const src = this.selectionSurfaceCanvas();
+    if (
+      !this.selectionBackup ||
+      this.selectionBackup.width !== src.width ||
+      this.selectionBackup.height !== src.height
+    ) {
+      this.selectionBackup = document.createElement('canvas');
+      this.selectionBackup.width = src.width;
+      this.selectionBackup.height = src.height;
+    }
+    const ctx = this.selectionBackup.getContext('2d')!;
+    ctx.clearRect(0, 0, src.width, src.height);
+    ctx.drawImage(src, 0, 0);
+  }
+
+  private restoreSelectionBackup() {
+    const canvas = this.selectionSurfaceCanvas();
+    const ctx = canvas.getContext('2d')!;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (this.selectionBackup) ctx.drawImage(this.selectionBackup, 0, 0);
+  }
+
+  /**
+   * Vista previa mientras se arrastra. Usa los límites del gesto en vez de
+   * escanear la máscara: el escaneo cuesta un recorrido del documento entero
+   * y aquí sólo hace falta al soltar.
+   */
+  previewSelectionShape(shape: SelectionShape, points: Vec2[], mode: SelectionMode) {
+    if (points.length === 0) return;
+    this.restoreSelectionBackup();
+    rasterizeSelection(this.selectionSurfaceCanvas(), shape, points, mode);
+    const mask = this.selectionMask;
+    this.renderer.clear(mask);
+    this.renderer.uploadImage(mask, this.selectionSurfaceCanvas());
+    this.selection = {
+      active: true,
+      bounds: shapeBounds(shape, points, this.doc.width, this.doc.height),
+    };
+    this.touch(false);
+  }
+
+  /** Cierra el gesto y calcula los límites reales de la máscara. */
+  applySelectionShape(shape: SelectionShape, points: Vec2[], mode: SelectionMode) {
+    if (points.length === 0) return;
+    this.restoreSelectionBackup();
+    rasterizeSelection(this.selectionSurfaceCanvas(), shape, points, mode);
+    this.commitSelectionCanvas();
+  }
+
+  selectAll() {
+    if (this.floating) this.commitFloating();
+    const canvas = this.selectionSurfaceCanvas();
+    const ctx = canvas.getContext('2d')!;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    this.commitSelectionCanvas();
+  }
+
+  invertSelection() {
+    if (!this.selection.active) return this.selectAll();
+    if (this.floating) this.commitFloating();
+    const canvas = this.selectionSurfaceCanvas();
+    const ctx = canvas.getContext('2d')!;
+    // XOR con un relleno completo deja alfa = 1 - alfa: la inversión exacta.
+    ctx.globalCompositeOperation = 'xor';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.globalCompositeOperation = 'source-over';
+    this.commitSelectionCanvas();
+  }
+
+  clearSelection() {
+    if (this.floating) this.commitFloating();
+    const canvas = this.selectionSurfaceCanvas();
+    canvas.getContext('2d')!.clearRect(0, 0, canvas.width, canvas.height);
+    this.renderer.clear(this.selectionMask);
+    this.selection = { active: false, bounds: emptyRect() };
+    this.touch();
+  }
+
+  /** Borra los píxeles de la capa activa que caen dentro de la selección. */
+  deleteSelection() {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || !this.selection.active) return;
+    const cel = celAt(layer, this.currentFrame);
+    if (!cel) return;
+    const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
+    const before = this.renderer.readRect(cel.surface, rect);
+    this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
+    const after = this.renderer.readRect(cel.surface, rect);
+    this.history.push({
+      label: 'Borrar selección',
+      cost: before.byteLength + after.byteLength,
+      redo: () => {
+        this.renderer.writeRect(cel.surface, rect, after);
+        this.touch();
+      },
+      undo: () => {
+        this.renderer.writeRect(cel.surface, rect, before);
+        this.touch();
+      },
+    });
+    this.touch();
+  }
+
+  /** Rellena la selección con un color plano en la capa activa. */
+  fillSelection(color: RGB) {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || !this.selection.active) return;
+    const { cel, created } = this.ensureCel(layer, this.currentFrame);
+    const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
+    const before = created >= 0 ? null : this.renderer.readRect(cel.surface, rect);
+
+    const flat = this.renderer.scratch('flat');
+    this.renderer.fill(flat, color, 1);
+    this.renderer.drawOver(cel.surface, flat, 1, undefined, false, this.selectionMask);
+
+    const after = this.renderer.readRect(cel.surface, rect);
+    const prev = before ?? new Uint8Array(after.length);
+    this.history.push({
+      label: 'Rellenar selección',
+      cost: prev.byteLength + after.byteLength,
+      redo: () => {
+        if (created >= 0) layer.cels.set(created, cel);
+        this.renderer.writeRect(cel.surface, rect, after);
+        this.touch();
+      },
+      undo: () => {
+        this.renderer.writeRect(cel.surface, rect, prev);
+        if (created >= 0) layer.cels.delete(created);
+        this.touch();
+      },
+    });
+    this.touch();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Transformación libre de la selección
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Levanta los píxeles seleccionados a una capa flotante y los quita del cel.
+   *
+   * A partir de aquí la selección se mueve, escala y gira sin volver a tocar
+   * el cel hasta confirmar, así que arrastrarla no acumula pérdidas de
+   * remuestreo: cada fotograma se compone desde los píxeles originales.
+   */
+  liftSelection(): boolean {
+    if (this.floating) return true;
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || !this.selection.active) return false;
+    const cel = celAt(layer, this.currentFrame);
+    if (!cel || cel.surface.empty) return false;
+
+    const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
+    if (rectIsEmpty(rect)) return false;
+
+    const surface = this.renderer.createSurface('floating');
+    surface.pinned = true;
+    this.renderer.copy(surface, cel.surface, 1, undefined, this.selectionMask);
+
+    const before = this.renderer.readRect(cel.surface, rect);
+    this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
+
+    this.floating = {
+      surface,
+      layerId: layer.id,
+      celFrame: celStartFrame(layer, this.currentFrame),
+      tx: 0,
+      ty: 0,
+      scale: 1,
+      rotation: 0,
+      pivotX: (rect.x + rect.x2) / 2,
+      pivotY: (rect.y + rect.y2) / 2,
+      sourceRect: rect,
+      before,
+    };
+    this.touch();
+    return true;
+  }
+
+  updateFloating(patch: Partial<Pick<FloatingSelection, 'tx' | 'ty' | 'scale' | 'rotation'>>) {
+    if (!this.floating) return;
+    Object.assign(this.floating, patch);
+    this.touch(false);
+  }
+
+  /** Matriz que lleva el quad unidad a la posición transformada del flotante. */
+  private floatingMatrixFor(f: FloatingSelection): Mat3 {
+    const c = Math.cos(f.rotation) * f.scale;
+    const s = Math.sin(f.rotation) * f.scale;
+    return new Float32Array([
+      this.doc.width * c,
+      this.doc.width * s,
+      0,
+      -this.doc.height * s,
+      this.doc.height * c,
+      0,
+      f.pivotX + f.tx - (c * f.pivotX - s * f.pivotY),
+      f.pivotY + f.ty - (s * f.pivotX + c * f.pivotY),
+      1,
+    ]);
+  }
+
+  private floatingCornersFor(f: FloatingSelection): Vec2[] {
+    const c = Math.cos(f.rotation) * f.scale;
+    const s = Math.sin(f.rotation) * f.scale;
+    return rectCorners(f.sourceRect).map((p) => {
+      const dx = p.x - f.pivotX;
+      const dy = p.y - f.pivotY;
+      return {
+        x: c * dx - s * dy + f.pivotX + f.tx,
+        y: s * dx + c * dy + f.pivotY + f.ty,
+      };
+    });
+  }
+
+  floatingMatrix(): Mat3 | null {
+    return this.floating ? this.floatingMatrixFor(this.floating) : null;
+  }
+
+  /** Esquinas del flotante en coordenadas de documento, para los tiradores. */
+  floatingCorners(): Vec2[] | null {
+    return this.floating ? this.floatingCornersFor(this.floating) : null;
+  }
+
+  commitFloating() {
+    const f = this.floating;
+    if (!f) return;
+    const layer = this.doc.layers.find((l) => l.id === f.layerId);
+    const cel = layer ? layer.cels.get(f.celFrame) : null;
+    this.floating = null;
+
+    if (!layer || !cel) {
+      this.renderer.release(f.surface);
+      this.touch();
+      return;
+    }
+
+    // La operación toca dos zonas: de donde se levantaron los píxeles y donde
+    // acaban. Deshacer necesita ambas, así que el paso se guarda sobre su
+    // rectángulo unión en vez de sobre el documento entero.
+    const destRect = emptyRect();
+    for (const p of this.floatingCornersFor(f)) expandRect(destRect, p.x, p.y, 1);
+    const region = clampRect(
+      unionRect(f.sourceRect, destRect),
+      this.doc.width,
+      this.doc.height,
+    );
+
+    // Estado previo a levantar la selección: lo que hay ahora en el cel es el
+    // original menos los píxeles levantados, así que basta con reinsertarlos.
+    const beforeRegion = this.renderer.readRect(cel.surface, region);
+    spliceRect(beforeRegion, region, f.before, f.sourceRect);
+
+    this.renderer.drawOver(cel.surface, f.surface, 1, this.floatingMatrixFor(f));
+    this.renderer.release(f.surface);
+    const afterRegion = this.renderer.readRect(cel.surface, region);
+
+    this.history.push({
+      label: 'Transformar selección',
+      cost: beforeRegion.byteLength + afterRegion.byteLength,
+      redo: () => {
+        this.renderer.writeRect(cel.surface, region, afterRegion);
+        this.touch();
+      },
+      undo: () => {
+        this.renderer.writeRect(cel.surface, region, beforeRegion);
+        this.touch();
+      },
+    });
+    this.touch();
+  }
+
+  cancelFloating() {
+    const f = this.floating;
+    if (!f) return;
+    const layer = this.doc.layers.find((l) => l.id === f.layerId);
+    const cel = layer ? layer.cels.get(f.celFrame) : null;
+    if (cel) this.renderer.writeRect(cel.surface, f.sourceRect, f.before);
+    this.renderer.release(f.surface);
+    this.floating = null;
+    this.touch();
   }
 
   /* ---------------------------------------------------------------- *
@@ -1212,26 +1642,50 @@ export class Engine {
   }
 
   /** Miniatura del cel para el panel de capas y la línea de tiempo. */
+  /**
+   * Miniatura del cel visible, cacheada por versión de contenido.
+   *
+   * El panel de capas se redibuja en cada cambio del documento, así que sin
+   * caché cada trazo costaría una miniatura por capa. Y sin la reducción en
+   * GPU cada una de ésas se traería el documento entero a CPU.
+   */
   celThumbnail(layer: Layer, frame: number, maxSize = 64): HTMLCanvasElement | null {
     const cel = celAt(layer, frame);
     if (!cel || cel.surface.empty) return null;
-    const data = this.renderer.toImageData(cel.surface);
-    const scale = Math.min(maxSize / data.width, maxSize / data.height);
-    const full = document.createElement('canvas');
-    full.width = data.width;
-    full.height = data.height;
-    full.getContext('2d')!.putImageData(data, 0, 0);
-    const out = document.createElement('canvas');
-    out.width = Math.max(1, Math.round(data.width * scale));
-    out.height = Math.max(1, Math.round(data.height * scale));
-    const ctx = out.getContext('2d')!;
-    ctx.imageSmoothingQuality = 'medium';
-    ctx.drawImage(full, 0, 0, out.width, out.height);
-    return out;
+
+    const key = `${cel.id}@${maxSize}`;
+    const cached = this.thumbCache.get(key);
+    if (cached && cached.version === cel.surface.version) return cached.canvas;
+
+    const canvas = this.renderer.downscaleToCanvas(cel.surface, maxSize);
+    if (!canvas) return null;
+
+    if (this.thumbCache.size > 200) this.thumbCache.clear();
+    this.thumbCache.set(key, { canvas, version: cel.surface.version });
+    return canvas;
   }
 
   hasKeyframes(layer: Layer) {
     return hasAnyKeyframes(layer.transform);
+  }
+}
+
+/**
+ * Copia `src` (que cubre `srcRect`) dentro de `dst` (que cubre `dstRect`).
+ * Se usa para reconstruir el estado previo a levantar una selección sin
+ * guardar un segundo snapshot del cel entero.
+ */
+function spliceRect(dst: Uint8Array, dstRect: Rect, src: Uint8Array, srcRect: Rect) {
+  const dstW = dstRect.x2 - dstRect.x;
+  const srcW = srcRect.x2 - srcRect.x;
+  const srcH = srcRect.y2 - srcRect.y;
+  for (let y = 0; y < srcH; y++) {
+    const dy = srcRect.y + y - dstRect.y;
+    if (dy < 0 || dy >= dstRect.y2 - dstRect.y) continue;
+    const dx = srcRect.x - dstRect.x;
+    if (dx < 0 || dx + srcW > dstW) continue;
+    const from = y * srcW * 4;
+    dst.set(src.subarray(from, from + srcW * 4), (dy * dstW + dx) * 4);
   }
 }
 

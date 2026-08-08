@@ -1,4 +1,5 @@
 import {
+  ANTS_FS,
   COMPOSITE_FS,
   COPY_FS,
   PRESENT_FS,
@@ -25,6 +26,12 @@ export class Surface {
   /** Las superficies de trabajo del renderizador nunca se expulsan. */
   pinned = false;
   lastUse = 0;
+  /**
+   * Se incrementa en cada escritura. Quien cachee algo derivado de esta
+   * superficie (miniaturas, por ejemplo) compara este número en vez de
+   * recalcular a ciegas.
+   */
+  version = 0;
   readonly label: string;
 
   constructor(label: string) {
@@ -67,6 +74,7 @@ export class Renderer {
   private stampData = new Float32Array(0);
 
   private scratches = new Map<string, Surface>();
+  private smallTargets = new Map<string, { tex: WebGLTexture; fbo: WebGLFramebuffer }>();
   private resident = new Set<Surface>();
   private clock = 0;
   private maxResident = MAX_RESIDENT;
@@ -152,7 +160,17 @@ export class Renderer {
       'uResolution',
       'uFlipY',
       'uSource',
+      'uMask',
       'uOpacity',
+      'uUseMask',
+    ]);
+    this.link('ants', QUAD_VS, ANTS_FS, [
+      'uMatrix',
+      'uResolution',
+      'uFlipY',
+      'uMask',
+      'uEdgeStep',
+      'uTime',
     ]);
     this.link('present', QUAD_VS, PRESENT_FS, [
       'uMatrix',
@@ -221,6 +239,11 @@ export class Renderer {
     );
     for (const s of this.scratches.values()) this.release(s, false);
     this.scratches.clear();
+    for (const t of this.smallTargets.values()) {
+      this.gl.deleteFramebuffer(t.fbo);
+      this.gl.deleteTexture(t.tex);
+    }
+    this.smallTargets.clear();
   }
 
   /** Cuántas superficies caben en GPU con el lienzo actual. */
@@ -348,6 +371,7 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     s.empty = true;
+    s.version++;
   }
 
   fill(s: Surface, color: RGB, alpha: number) {
@@ -359,6 +383,7 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     s.empty = alpha === 0;
+    s.version++;
   }
 
   /* ---------------------------------------------------------------- *
@@ -417,6 +442,7 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     target.empty = false;
+    target.version++;
   }
 
   /** Rectángulo completo del documento como matriz para el quad unidad. */
@@ -424,8 +450,8 @@ export class Renderer {
     return new Float32Array([this.docWidth, 0, 0, 0, this.docHeight, 0, 0, 0, 1]);
   }
 
-  /** `dst = src` (con opacidad), sin mezcla: sobrescribe el destino. */
-  copy(dst: Surface, src: Surface, opacity = 1, matrix?: Mat3) {
+  /** `dst = src` (con opacidad y máscara opcionales), sobrescribiendo el destino. */
+  copy(dst: Surface, src: Surface, opacity = 1, matrix?: Mat3, mask?: Surface | null) {
     const gl = this.gl;
     this.ensureResident(dst);
     this.ensureResident(src);
@@ -442,18 +468,39 @@ export class Renderer {
     gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
     gl.uniform1f(p.uniforms.uFlipY, 0);
     gl.uniform1f(p.uniforms.uOpacity, opacity);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, src.tex);
-    gl.uniform1i(p.uniforms.uSource, 0);
+    this.bindSource(p, src, mask);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     dst.empty = src.empty;
+    dst.version++;
+  }
+
+  /** Enlaza la textura fuente y, si la hay, la máscara de recorte. */
+  private bindSource(p: ProgramInfo, src: Surface, mask?: Surface | null) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+    if (mask) {
+      this.ensureResident(mask);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, mask.tex);
+      gl.uniform1i(p.uniforms.uMask, 1);
+    }
+    gl.uniform1f(p.uniforms.uUseMask, mask ? 1 : 0);
   }
 
   /** Dibuja `src` encima de lo que ya haya en `dst`, con src-over simple. */
-  drawOver(dst: Surface, src: Surface, opacity = 1, matrix?: Mat3, erase = false) {
+  drawOver(
+    dst: Surface,
+    src: Surface,
+    opacity = 1,
+    matrix?: Mat3,
+    erase = false,
+    mask?: Surface | null,
+  ) {
     const gl = this.gl;
     this.ensureResident(dst);
     this.ensureResident(src);
@@ -470,14 +517,13 @@ export class Renderer {
     gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
     gl.uniform1f(p.uniforms.uFlipY, 0);
     gl.uniform1f(p.uniforms.uOpacity, opacity);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, src.tex);
-    gl.uniform1i(p.uniforms.uSource, 0);
+    this.bindSource(p, src, mask);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     if (!erase && !src.empty) dst.empty = false;
+    dst.version++;
   }
 
   /**
@@ -516,6 +562,7 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     dst.empty = backdrop.empty && src.empty;
+    dst.version++;
   }
 
   /** Pase final a pantalla, con la transformación de vista y el tablero. */
@@ -552,6 +599,35 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
 
+  /** Contorno animado de la selección, encima de la imagen ya presentada. */
+  drawSelectionOutline(mask: Surface, viewMatrix: Mat3, zoom: number, timeSeconds: number) {
+    const gl = this.gl;
+    this.ensureResident(mask);
+    const p = this.programs.get('ants')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(this.quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    gl.uniformMatrix3fv(p.uniforms.uMatrix, false, viewMatrix);
+    gl.uniform2f(p.uniforms.uResolution, this.canvas.width, this.canvas.height);
+    gl.uniform1f(p.uniforms.uFlipY, 1);
+    // Un píxel del framebuffer, convertido a distancia en UV del documento.
+    const dpr = this.canvas.width / (this.canvas.clientWidth || 1);
+    const step = 1 / Math.max(zoom * dpr, 0.0001);
+    gl.uniform2f(p.uniforms.uEdgeStep, step / this.docWidth, step / this.docHeight);
+    gl.uniform1f(p.uniforms.uTime, timeSeconds);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, mask.tex);
+    gl.uniform1i(p.uniforms.uMask, 0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+  }
+
   /* ---------------------------------------------------------------- *
    * Transferencia CPU <-> GPU
    * ---------------------------------------------------------------- */
@@ -579,6 +655,7 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, s.tex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     s.empty = false;
+    s.version++;
   }
 
   /** Sube una imagen decodificada a una superficie (usado al abrir proyectos). */
@@ -600,6 +677,117 @@ export class Renderer {
     );
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     s.empty = false;
+    s.version++;
+  }
+
+  /**
+   * Objetivo de render pequeño y reutilizable, fuera del tamaño del documento.
+   * Los tamaños se repiten entre llamadas, así que la caché se estabiliza en
+   * unas pocas entradas.
+   */
+  private smallTarget(w: number, h: number): { tex: WebGLTexture; fbo: WebGLFramebuffer } {
+    const key = `${w}x${h}`;
+    let t = this.smallTargets.get(key);
+    if (t) return t;
+
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    t = { tex, fbo };
+    this.smallTargets.set(key, t);
+    return t;
+  }
+
+  /** Dibuja una textura llenando un destino de tamaño arbitrario. */
+  private blitTo(srcTex: WebGLTexture, fbo: WebGLFramebuffer | null, w: number, h: number) {
+    const gl = this.gl;
+    const p = this.programs.get('copy')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(this.quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND);
+    gl.uniformMatrix3fv(p.uniforms.uMatrix, false, new Float32Array([w, 0, 0, 0, h, 0, 0, 0, 1]));
+    gl.uniform2f(p.uniforms.uResolution, w, h);
+    gl.uniform1f(p.uniforms.uFlipY, 0);
+    gl.uniform1f(p.uniforms.uOpacity, 1);
+    gl.uniform1f(p.uniforms.uUseMask, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /**
+   * Miniatura de una superficie sin traerse el documento entero a CPU.
+   *
+   * Reduce por mitades sucesivas en vez de saltar de 1920 px a 64 de golpe:
+   * una minificación directa con filtro lineal muestrea cuatro téxeles y se
+   * salta el resto, con lo que las líneas finas desaparecen. Encadenando
+   * halvings cada paso es un filtro de caja correcto.
+   */
+  downscaleToCanvas(src: Surface, maxSize: number): HTMLCanvasElement | null {
+    if (src.empty && !src.backing) return null;
+    const gl = this.gl;
+    this.ensureResident(src);
+
+    const scale = Math.min(maxSize / this.docWidth, maxSize / this.docHeight, 1);
+    const targetW = Math.max(1, Math.round(this.docWidth * scale));
+    const targetH = Math.max(1, Math.round(this.docHeight * scale));
+
+    let curTex = src.tex!;
+    let curW = this.docWidth;
+    let curH = this.docHeight;
+
+    while (curW > targetW * 2 && curH > targetH * 2) {
+      const nw = Math.max(targetW, curW >> 1);
+      const nh = Math.max(targetH, curH >> 1);
+      const t = this.smallTarget(nw, nh);
+      this.blitTo(curTex, t.fbo, nw, nh);
+      curTex = t.tex;
+      curW = nw;
+      curH = nh;
+    }
+
+    const final = this.smallTarget(targetW, targetH);
+    if (curW !== targetW || curH !== targetH) {
+      this.blitTo(curTex, final.fbo, targetW, targetH);
+    }
+
+    const readFbo =
+      curW === targetW && curH === targetH
+        ? this.smallTarget(curW, curH).fbo
+        : final.fbo;
+    const px = new Uint8Array(targetW * targetH * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, readFbo);
+    gl.readPixels(0, 0, targetW, targetH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    unpremultiply(px);
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    canvas
+      .getContext('2d')!
+      .putImageData(
+        new ImageData(new Uint8ClampedArray(px.buffer as ArrayBuffer), targetW, targetH),
+        0,
+        0,
+      );
+    return canvas;
   }
 
   /**
@@ -608,15 +796,7 @@ export class Renderer {
    */
   toImageData(s: Surface): ImageData {
     const px = this.readRect(s, { x: 0, y: 0, x2: this.docWidth, y2: this.docHeight });
-    for (let i = 0; i < px.length; i += 4) {
-      const a = px[i + 3];
-      if (a !== 0 && a !== 255) {
-        const inv = 255 / a;
-        px[i] = Math.min(255, px[i] * inv);
-        px[i + 1] = Math.min(255, px[i + 1] * inv);
-        px[i + 2] = Math.min(255, px[i + 2] * inv);
-      }
-    }
+    unpremultiply(px);
     return new ImageData(
       new Uint8ClampedArray(px.buffer as ArrayBuffer),
       this.docWidth,
@@ -626,5 +806,18 @@ export class Renderer {
 
   identity(): Mat3 {
     return mat3Identity();
+  }
+}
+
+/** Convierte RGBA premultiplicado a alfa recta, en el sitio. */
+function unpremultiply(px: Uint8Array) {
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3];
+    if (a !== 0 && a !== 255) {
+      const inv = 255 / a;
+      px[i] = Math.min(255, px[i] * inv);
+      px[i + 1] = Math.min(255, px[i + 1] * inv);
+      px[i + 2] = Math.min(255, px[i + 2] * inv);
+    }
   }
 }
