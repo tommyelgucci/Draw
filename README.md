@@ -36,6 +36,15 @@ probar un cambio abriendo una URL.
   crecimiento configurable para que no quede orla blanca.
 - Cuentagotas sobre la imagen compuesta.
 
+**Selección y transformación**
+
+- Selección por rectángulo y por lazo, con modos sustituir, sumar y restar.
+- Los trazos se recortan a la selección activa.
+- Transformación libre: mover, escalar y girar con tiradores. Los píxeles se
+  levantan a una capa flotante, así que arrastrar no acumula pérdidas de
+  remuestreo.
+- Rellenar, borrar, invertir y seleccionar todo.
+
 **Capas**
 
 - Los 13 modos de fusión separables de la especificación de compositing.
@@ -85,7 +94,12 @@ codificador de vídeo.
 
 | Tecla | Acción |
 | --- | --- |
-| `B` `E` `G` `I` `V` `H` | Pincel, borrador, relleno, cuentagotas, transformar, mano |
+| `B` `E` `G` `I` | Pincel, borrador, relleno, cuentagotas |
+| `M` `L` `V` `H` | Selección, lazo, transformar capa, mano |
+| `Ctrl/Cmd + A` `D` | Seleccionar todo / deseleccionar |
+| `Ctrl/Cmd + Shift + I` | Invertir selección |
+| `Supr` | Borrar la selección |
+| `Enter` `Esc` | Confirmar / cancelar la transformación |
 | `Espacio` | Reproducir / pausar |
 | `←` `→` | Cuadro anterior / siguiente (con `Shift`, un segundo) |
 | `,` `.` | Cel anterior / siguiente de la capa activa |
@@ -119,6 +133,7 @@ app de dibujo son visuales:
 
 ```bash
 npm run test:smoke        # dibujo, deshacer, sostenido, onion, capas, export
+npm run test:selection    # selección, recorte, transformación libre
 npm run test:responsive   # maquetación en iPhone e iPad
 ```
 
@@ -135,6 +150,7 @@ src/
     math.ts       matrices 3x3, color, filtro One Euro
     brush.ts      presets y generación de estampas
     document.ts   capas, cels, canales animados, grupos de recorte
+    selection.ts  rasterizado de máscaras de selección
     history.ts    pila de deshacer con presupuesto de memoria
     engine.ts     composición, trazos, reproducción, herramientas
     io.ts         .trace, PNG, APNG, IndexedDB
@@ -167,13 +183,15 @@ caben se bajan a memoria de CPU y se vuelven a subir cuando hacen falta.
 **Deshacer.** Cada trazo guarda sólo el rectángulo que ensució, antes y
 después. La pila se recorta por número de pasos y por memoria total.
 
+**Miniaturas.** Se reducen en GPU por halvings sucesivos y se cachean por
+versión de contenido. El camino ingenuo costaba 146 ms por capa y por trazo.
+
 ## Estado y siguientes pasos
 
-Lo que hay funciona de punta a punta, pero faltan cosas que un uso serio va a
-pedir:
+El estado detallado está en `CHECKPOINT.md` y la dirección del proyecto en
+`RUMBO.md`. En corto, lo siguiente es:
 
-- Selección y transformación libre de una región.
-- Texturas de punta de pincel (el shader ya las soporta, falta la interfaz).
 - Importar imágenes y vídeo como referencia para rotoscopia.
 - Exportar a MP4/WebM.
+- Texturas de punta de pincel (el shader ya las soporta, falta la interfaz).
 - Empaquetado con Capacitor para instalación nativa y acceso a archivos.

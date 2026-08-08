@@ -966,9 +966,17 @@ button:focus-visible {
 
   .rail__group {
     flex-direction: row;
-    justify-content: space-between;
+    justify-content: center;
     width: 100%;
     gap: 2px;
+    /* Con muchas herramientas, una segunda fila es preferible a que el
+       último control se salga de la pantalla. */
+    flex-wrap: wrap;
+  }
+
+  .rail--left .icon-btn {
+    width: 38px;
+    height: 38px;
   }
 
   .rail__sliders {
@@ -1088,4 +1096,145 @@ button:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Selección y transformación libre
+ * ------------------------------------------------------------------ */
+
+.mode-row {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.mode-row button {
+  flex: 1;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mode-row button.is-active {
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+.sel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  /* El contenedor deja pasar los eventos; sólo los tiradores los capturan. */
+  pointer-events: none;
+}
+
+.sel-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.sel-outline polygon {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.sel-outline line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.sel-handle {
+  position: absolute;
+  padding: 0;
+  border: 2px solid var(--accent);
+  background: var(--surface);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sel-handle--corner {
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 4px;
+}
+
+.sel-handle--rotate {
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border-radius: 50%;
+}
+
+.sel-handle--move {
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 50%;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.sel-bar {
+  position: absolute;
+  z-index: 32;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.sel-bar button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sel-bar button:hover {
+  background: var(--surface-2);
+}
+
+.sel-bar--commit button:first-of-type {
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+.sel-bar__readout {
+  padding: 0 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }

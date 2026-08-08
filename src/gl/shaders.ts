@@ -173,15 +173,60 @@ void main() {
 }
 `;
 
-/** Copia directa premultiplicada, con opacidad opcional. */
+/**
+ * Copia directa premultiplicada, con opacidad y máscara opcionales.
+ *
+ * La máscara es lo que hace que un trazo respete la selección: como todo va
+ * premultiplicado, recortar es multiplicar el color y el alfa por la
+ * cobertura, sin ningún caso especial.
+ */
 export const COPY_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uSource;
+uniform sampler2D uMask;
 uniform float uOpacity;
+uniform float uUseMask;
 out vec4 fragColor;
 void main() {
-  fragColor = texture(uSource, vUV) * uOpacity;
+  vec4 c = texture(uSource, vUV) * uOpacity;
+  if (uUseMask > 0.5) c *= texture(uMask, vUV).a;
+  fragColor = c;
+}
+`;
+
+/**
+ * Contorno animado de la selección ("hormigas marchando").
+ *
+ * El borde se detecta comparando la máscara con sus vecinos a una distancia
+ * de un píxel *de pantalla*, no de documento: así el contorno mantiene su
+ * grosor con cualquier zoom. El patrón discontinuo usa gl_FragCoord para que
+ * las rayas no se deformen al rotar el lienzo.
+ */
+export const ANTS_FS = /* glsl */ `#version 300 es
+precision highp float;
+
+in vec2 vUV;
+
+uniform sampler2D uMask;
+uniform vec2 uEdgeStep;   // un píxel de pantalla, expresado en UV
+uniform float uTime;
+
+out vec4 fragColor;
+
+void main() {
+  float c = texture(uMask, vUV).a;
+  float l = texture(uMask, vUV - vec2(uEdgeStep.x, 0.0)).a;
+  float r = texture(uMask, vUV + vec2(uEdgeStep.x, 0.0)).a;
+  float u = texture(uMask, vUV - vec2(0.0, uEdgeStep.y)).a;
+  float d = texture(uMask, vUV + vec2(0.0, uEdgeStep.y)).a;
+
+  float edge = max(max(abs(c - l), abs(c - r)), max(abs(c - u), abs(c - d)));
+  if (edge < 0.25) discard;
+
+  float dash = mod((gl_FragCoord.x + gl_FragCoord.y) * 0.16 - uTime * 3.0, 2.0);
+  vec3 color = dash < 1.0 ? vec3(1.0) : vec3(0.05);
+  fragColor = vec4(color, 1.0);
 }
 `;
 

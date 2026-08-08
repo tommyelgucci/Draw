@@ -3,6 +3,7 @@ import { CanvasView } from './ui/CanvasView';
 import { Toolbar } from './ui/Toolbar';
 import { Timeline } from './ui/Timeline';
 import { BrushPanel, ColorPanel, ExportPanel, LayersPanel } from './ui/Panels';
+import { SelectionOverlay } from './ui/SelectionOverlay';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -77,7 +78,40 @@ export default function App() {
         else engine.history.undo();
         return;
       }
+      if (mod && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        engine.selectAll();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        engine.clearSelection();
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        engine.invertSelection();
+        return;
+      }
       switch (e.key) {
+        case 'Enter':
+          if (engine.floating) engine.commitFloating();
+          break;
+        case 'Escape':
+          if (engine.floating) engine.cancelFloating();
+          else if (engine.selection.active) engine.clearSelection();
+          break;
+        case 'Delete':
+        case 'Backspace':
+          e.preventDefault();
+          engine.deleteSelection();
+          break;
+        case 'm':
+          useUI.getState().setTool('selectRect');
+          break;
+        case 'l':
+          useUI.getState().setTool('selectLasso');
+          break;
         case ' ':
           e.preventDefault();
           engine.togglePlay();
@@ -152,6 +186,7 @@ export default function App() {
   return (
     <div className={`app ${panel ? 'has-panel' : ''}`}>
       <CanvasView />
+      {engine && <SelectionOverlay engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 

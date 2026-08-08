@@ -186,6 +186,23 @@ export const IconClose = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconSelectRect = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className} strokeDasharray="3 2.5">
+    <rect x="4" y="5" width="16" height="14" rx="1" />
+  </svg>
+);
+
+export const IconLasso = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path
+      d="M12 4.5c4.4 0 8 2.5 8 5.6 0 2.6-2.5 4.8-6 5.4"
+      strokeDasharray="3 2.5"
+    />
+    <path d="M12 4.5C7.6 4.5 4 7 4 10.1c0 1.8 1.2 3.4 3.1 4.4" strokeDasharray="3 2.5" />
+    <path d="M7.1 14.5c.6 1.2.3 2.4-.6 3a1.7 1.7 0 0 1-2.5-1.6c0-.9.7-1.6 1.6-1.7" />
+  </svg>
+);
+
 export const IconFit = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />
