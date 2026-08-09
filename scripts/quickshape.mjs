@@ -114,6 +114,29 @@ async function drawAndCloseSlowly(cx, cy, r, gapFraction = 0.08) {
   await page.waitForTimeout(450);
 }
 
+/** Un hexágono real, pero dibujado sólo hasta `fraction` de su perímetro y
+ * sin cerrar — simula el dwell disparando en una pausa entre vértices,
+ * mientras el polígono todavía se está dibujando. */
+function partialPolygonPoints(cx, cy, r, sides, fraction) {
+  const verts = Array.from({ length: sides }, (_, i) => {
+    const t = (i / sides) * Math.PI * 2;
+    return [cx + Math.cos(t) * r, cy + Math.sin(t) * r];
+  });
+  const edgesToDraw = fraction * sides;
+  const pts = [];
+  for (let e = 0; e < Math.ceil(edgesToDraw); e++) {
+    const a = verts[e % sides];
+    const b = verts[(e + 1) % sides];
+    const edgeFrac = Math.min(1, edgesToDraw - e);
+    const steps = Math.round(6 * edgeFrac);
+    for (let s = 0; s <= steps; s++) {
+      const t = s / 6;
+      pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return pts;
+}
+
 const pendingShape = () =>
   page.evaluate(() => {
     const p = window.__trace.pendingQuickShape;
@@ -274,6 +297,36 @@ check(
 await release();
 if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
 await page.screenshot({ path: `${out}/qs-10-cierre-lento.png` });
+
+console.log('\n— Círculo confundido con un polígono de muchos lados —');
+// Reportado con captura: un óvalo dibujado a mano salía como eneágono.
+// Douglas-Peucker con el epsilon justo "encuentra" muchas esquinas falsas
+// en un círculo ruidoso; cuantos más lados se le permiten a un polígono,
+// mejor aproxima cualquier curva suave por definición.
+await drawAndHold(shakyCirclePoints(cx - 200, cy - 100, 95, 10, 12, seededRandom(11), 30));
+s = await pendingShape();
+check(
+  'un círculo con bastante ruido no sale como polígono de muchos lados',
+  s?.kind === 'ellipse',
+  JSON.stringify(s),
+);
+await release();
+if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
+
+console.log('\n— Polígono a medio dibujar no se confunde con una línea —');
+// El otro lado del mismo bug: si el dwell dispara en una pausa entre
+// vértices (el trazo todavía va por la primera o segunda esquina, sin
+// cerrar el lazo), ese recorrido parcial no debe colarse como línea recta
+// sólo porque el ajuste global por mínimos cuadrados dé un error bajo.
+await drawAndHold(partialPolygonPoints(cx + 250, cy + 150, 130, 6, 0.3));
+s = await pendingShape();
+check(
+  'un hexágono a un tercio de dibujar no se reconoce como línea',
+  s?.kind !== 'line',
+  JSON.stringify(s),
+);
+await release();
+if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
 
 let lineHits = 0;
 const angles = [0, 18, -22, 40, -55, 70, -80, 100, -130, 160];
