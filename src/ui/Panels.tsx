@@ -20,6 +20,8 @@ import {
   exportAPNG,
   exportFramePNG,
   exportSequenceZip,
+  importReferenceImage,
+  importReferenceVideo,
   serializeProject,
 } from '../core/io';
 import { useActiveBrush, useEngineRevision, useUI } from '../state/store';
@@ -29,10 +31,12 @@ import {
   IconDownload,
   IconEye,
   IconEyeOff,
+  IconImage,
   IconKey,
   IconLock,
   IconPlus,
   IconTrash,
+  IconVideo,
 } from './icons';
 
 /* ================================================================== *
@@ -60,8 +64,12 @@ function LayerThumb({ engine, layer }: { engine: Engine; layer: Layer }) {
 export function LayersPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const setPanel = useUI((s) => s.setPanel);
+  const setBusy = useUI((s) => s.setBusy);
   const layers = engine.doc.layers.slice().reverse();
   const active = engine.activeLayer;
+  const imageInput = useRef<HTMLInputElement>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
+  const [refProgress, setRefProgress] = useState<string | null>(null);
 
   return (
     <Panel title="Capas" onClose={() => setPanel(null)} width={310}>
@@ -112,8 +120,10 @@ export function LayersPanel({ engine }: { engine: Engine }) {
                   onClick={(e) => e.stopPropagation()}
                 />
                 <div className="layer__meta">
+                  {layer.kind === 'reference' && <span className="layer__badge">Ref</span>}
                   {BLEND_LABELS[layer.blend]} · {Math.round(layer.opacity * 100)}%
-                  {layer.cels.size > 0 && ` · ${layer.cels.size} dib.`}
+                  {layer.cels.size > 0 &&
+                    ` · ${layer.cels.size} ${layer.kind === 'reference' ? 'fotogramas' : 'dib.'}`}
                 </div>
               </div>
               <div className="layer__buttons">
@@ -211,6 +221,72 @@ export function LayersPanel({ engine }: { engine: Engine }) {
           </p>
         </div>
       )}
+
+      <div className="panel__section">
+        <h3 className="panel__subtitle">Referencia</h3>
+        <button
+          className="btn btn--ghost"
+          disabled={!!refProgress}
+          onClick={() => imageInput.current?.click()}
+        >
+          <IconImage size={16} /> Imagen…
+        </button>
+        <button
+          className="btn btn--ghost"
+          disabled={!!refProgress}
+          onClick={() => videoInput.current?.click()}
+        >
+          <IconVideo size={16} /> Vídeo…
+        </button>
+        <input
+          ref={imageInput}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            setBusy('Importando imagen…');
+            try {
+              await importReferenceImage(engine, file);
+            } catch (err) {
+              console.error(err);
+              alert(`No se pudo importar la imagen: ${(err as Error).message}`);
+            } finally {
+              setBusy(null);
+            }
+          }}
+        />
+        <input
+          ref={videoInput}
+          type="file"
+          accept="video/*"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            setRefProgress('0/0');
+            setBusy('Extrayendo fotogramas de vídeo…');
+            try {
+              await importReferenceVideo(engine, file, (d, t) => setRefProgress(`${d}/${t}`));
+            } catch (err) {
+              console.error(err);
+              alert(`No se pudo importar el vídeo: ${(err as Error).message}`);
+            } finally {
+              setBusy(null);
+              setRefProgress(null);
+            }
+          }}
+        />
+        {refProgress && <p className="hint">Extrayendo fotogramas… {refProgress}</p>}
+        <p className="hint">
+          Se añade como una capa de referencia: no se puede dibujar sobre ella y queda
+          fuera de la exportación final. Un vídeo se trocea en un cel por fotograma del
+          documento, listo para calcar (rotoscopia).
+        </p>
+      </div>
     </Panel>
   );
 }

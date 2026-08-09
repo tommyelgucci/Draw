@@ -123,9 +123,17 @@ export interface Cel {
   label?: string;
 }
 
+/**
+ * `draw`: capa normal, se dibuja y se exporta. `reference`: imagen o vídeo
+ * importado para calcar (rotoscopia) — no admite trazo, bote ni selección, y
+ * queda fuera de PNG/APNG/secuencia porque no es parte de la obra final.
+ */
+export type LayerKind = 'draw' | 'reference';
+
 export interface Layer {
   id: string;
   name: string;
+  kind: LayerKind;
   visible: boolean;
   locked: boolean;
   opacity: number;
@@ -164,10 +172,11 @@ export function uid(prefix = 'id'): string {
   return `${prefix}_${Date.now().toString(36)}_${idCounter.toString(36)}`;
 }
 
-export function newLayer(name: string, animated = true): Layer {
+export function newLayer(name: string, animated = true, kind: LayerKind = 'draw'): Layer {
   return {
     id: uid('layer'),
     name,
+    kind,
     visible: true,
     locked: false,
     opacity: 1,
