@@ -167,7 +167,10 @@ check(
 console.log('\n— La interfaz de tamaño está en el panel —');
 await page.locator('.rail--top [aria-label="Proyecto"]').click();
 await page.waitForTimeout(400);
-const presets = await page.locator('.preset-grid button').count();
+// El panel de Proyecto tiene dos rejillas de presets — la de redimensionar
+// el lienzo actual y la de "Proyecto nuevo" — con los mismos 6 tamaños
+// cada una; ésta es la del redimensionado, la primera del panel.
+const presets = await page.locator('.preset-grid').first().locator('button').count();
 check('hay tamaños predefinidos', presets === 6, `${presets}`);
 const anchors = await page.locator('.anchor-grid button').count();
 check('hay selector de anclaje de 9 posiciones', anchors === 9, `${anchors}`);

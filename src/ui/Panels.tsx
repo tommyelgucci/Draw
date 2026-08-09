@@ -869,6 +869,91 @@ function CanvasSizeControls({ engine }: { engine: Engine }) {
 }
 
 /* ================================================================== *
+ * Proyecto nuevo
+ * ================================================================== */
+
+type ProjectType = 'animation' | 'painting';
+
+/**
+ * Tipo de proyecto: Trace siempre tiene línea de tiempo (a diferencia de
+ * Procreate, no hay un modo "sólo pintura" distinto de verdad), así que
+ * esto no es más que un atajo de valores por defecto sensatos — cuántos
+ * fotogramas arranca teniendo el documento y si la línea de tiempo se ve
+ * de entrada. Nada se guarda como "tipo" en el documento: nada impide
+ * añadir fotogramas después a un proyecto que empezó como "Pintura".
+ */
+const PROJECT_TYPES: { id: ProjectType; label: string; frameCount: number }[] = [
+  { id: 'animation', label: 'Animación', frameCount: 24 },
+  { id: 'painting', label: 'Pintura', frameCount: 1 },
+];
+
+function NewProjectControls({ engine }: { engine: Engine }) {
+  const setShowTimeline = useUI((s) => s.setShowTimeline);
+  const [type, setType] = useState<ProjectType>('animation');
+  const [preset, setPreset] = useState(SIZE_PRESETS[0]);
+  const [confirming, setConfirming] = useState(false);
+
+  const create = () => {
+    const t = PROJECT_TYPES.find((p) => p.id === type)!;
+    engine.newProject(preset.w, preset.h, 12, t.frameCount);
+    setShowTimeline(type === 'animation');
+    setConfirming(false);
+  };
+
+  return (
+    <>
+      <div className="mode-row" role="group" aria-label="Tipo de proyecto">
+        {PROJECT_TYPES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={type === t.id ? 'is-active' : ''}
+            onClick={() => setType(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="preset-grid">
+        {SIZE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className={p === preset ? 'is-active' : ''}
+            onClick={() => setPreset(p)}
+          >
+            <strong>{p.label}</strong>
+            <span>
+              {p.w} × {p.h}
+            </span>
+          </button>
+        ))}
+      </div>
+      {confirming ? (
+        <>
+          <p className="hint">
+            Esto descarta el proyecto actual. Descárgalo antes si te importa — no hay
+            forma de recuperarlo después.
+          </p>
+          <div className="field-row">
+            <button className="btn" onClick={create}>
+              Sí, empezar de cero
+            </button>
+            <button className="btn btn--ghost" onClick={() => setConfirming(false)}>
+              Cancelar
+            </button>
+          </div>
+        </>
+      ) : (
+        <button className="btn" onClick={() => setConfirming(true)}>
+          <IconPlus size={16} /> Nuevo proyecto
+        </button>
+      )}
+    </>
+  );
+}
+
+/* ================================================================== *
  * Exportar / proyecto
  * ================================================================== */
 
@@ -969,6 +1054,9 @@ export function ExportPanel({ engine }: { engine: Engine }) {
       <h3 className="panel__subtitle">Tamaño del lienzo</h3>
       <CanvasSizeControls engine={engine} />
 
+      <h3 className="panel__subtitle">Proyecto nuevo</h3>
+      <NewProjectControls engine={engine} />
+
       <h3 className="panel__subtitle">Guardar</h3>
       <button
         className="btn"
@@ -999,13 +1087,7 @@ export function ExportPanel({ engine }: { engine: Engine }) {
           await run('Abriendo proyecto…', async () => {
             const bytes = new Uint8Array(await file.arrayBuffer());
             const doc = await deserializeProject(engine, bytes);
-            engine.doc = doc;
-            engine.renderer.setDocumentSize(doc.width, doc.height);
-            engine.currentFrame = 0;
-            engine.activeLayerId = doc.layers[doc.layers.length - 1]?.id ?? null;
-            engine.history.clear();
-            engine.resetView();
-            engine.touch();
+            engine.loadDocument(doc);
           });
         }}
       />

@@ -2580,6 +2580,46 @@ export class Engine {
   }
 
   /**
+   * Sustituye el documento entero — proyecto nuevo o archivo abierto —
+   * liberando antes las superficies GPU del anterior. Sin esto, cada cel de
+   * cada capa se queda ocupando textura sin que nada vuelva a soltarla: el
+   * documento viejo lo recoge el recolector de basura de JS, pero la GPU no
+   * tiene uno propio.
+   */
+  private replaceDocument(doc: TraceDocument) {
+    if (this.floating) this.cancelFloating();
+    if (this.builder) this.cancelStroke();
+    if (this.pendingQuickShape) this.cancelQuickShape();
+    for (const layer of this.doc.layers) {
+      for (const cel of layer.cels.values()) this.renderer.release(cel.surface);
+    }
+    this.doc = doc;
+    this.renderer.setDocumentSize(doc.width, doc.height);
+    this.currentFrame = 0;
+    this.activeLayerId = doc.layers[doc.layers.length - 1]?.id ?? null;
+    this.selection = { active: false, bounds: emptyRect() };
+    this.history.clear();
+    this.thumbCache.clear();
+    this.resetView();
+    this.touch();
+  }
+
+  /** Empieza un proyecto en blanco, descartando el actual (con su propia
+   * capa "Capa 1" — un documento sin capas no se puede dibujar). */
+  newProject(width: number, height: number, fps = 12, frameCount = 24) {
+    const w = Math.round(clamp(width, 16, 8192));
+    const h = Math.round(clamp(height, 16, 8192));
+    const doc = newDocument(w, h, fps, frameCount);
+    doc.layers.push(newLayer('Capa 1'));
+    this.replaceDocument(doc);
+  }
+
+  /** Reemplaza el documento por uno leído de un archivo `.trace`. */
+  loadDocument(doc: TraceDocument) {
+    this.replaceDocument(doc);
+  }
+
+  /**
    * Cambia el tamaño del lienzo conservando los dibujos.
    *
    * `anchor` va de 0 a 1 en cada eje y decide dónde queda el contenido
