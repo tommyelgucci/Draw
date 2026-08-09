@@ -203,6 +203,21 @@ export const IconLasso = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconImage = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <circle cx="8.5" cy="9.5" r="1.6" />
+    <path d="m4 17 5-5 3.5 3.5L17 11l3.5 4" />
+  </svg>
+);
+
+export const IconVideo = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3.5" y="6" width="12" height="12" rx="2" />
+    <path d="m15.5 10 5-2.7v9.4l-5-2.7z" />
+  </svg>
+);
+
 export const IconFit = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />

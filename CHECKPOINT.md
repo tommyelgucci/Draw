@@ -2,9 +2,9 @@
 
 Estado real del proyecto. Se actualiza al cerrar cada tanda de trabajo.
 
-**Fecha:** 8 de agosto de 2026
-**Rama:** `claude/trace-drawing-animation-app-ov7j6d`
-**Fase:** 0 cerrada, 1 empezando (ver `RUMBO.md`)
+**Fecha:** 9 de agosto de 2026
+**Rama:** `claude/trace-app-development-2o45w2`
+**Fase:** 0 cerrada, 1 en curso (ver `RUMBO.md`)
 
 ## Verificación de este checkpoint
 
@@ -14,8 +14,9 @@ Todo lo de abajo está comprobado en un Chromium real, no sólo compilado.
 npm run test:smoke        TODO EN VERDE   (17 comprobaciones)
 npm run test:selection    TODO EN VERDE   (14 comprobaciones)
 npm run test:responsive   iPhone y iPad sin desbordes ni controles fuera de pantalla
+npm run test:reference    TODO EN VERDE   (14 comprobaciones, imagen + vídeo real vía MediaRecorder)
 npx oxlint                sin warnings
-npm run build             310 kB / 98 kB gzip
+npm run build             315 kB / 99 kB gzip
 ```
 
 ## Funciona
@@ -59,6 +60,21 @@ npm run build             310 kB / 98 kB gzip
 - Rellenar, borrar, invertir, seleccionar todo, deseleccionar.
 - Deshacer restaura exactamente el estado previo al levantado (22 089 px
   antes y después en el test).
+
+### Referencia (rotoscopia)
+- Importar una imagen suelta o un vídeo como capa de referencia: reutiliza el
+  mismo modelo de cels que la animación normal, así que un vídeo entra como un
+  cel por fotograma del documento con sostenido automático — no hizo falta
+  inventar un tipo de dato nuevo.
+- La capa de referencia no admite trazo, bote ni selección (bloqueado en el
+  motor, no sólo en la interfaz) y queda fuera de PNG/APNG/secuencia: es
+  material para calcar, no parte de la obra.
+- El vídeo se extrae buscando (`seek`) fotograma a fotograma a la fps del
+  documento, no reproduciendo en tiempo real: así el cel *n* es el fotograma
+  exacto, no lo que caiga a 60 Hz. Si la duración no cabe en el documento
+  actual, éste crece para acomodarla.
+- Encaja y centra el origen (imagen o vídeo) al lienzo por contención,
+  conservando su proporción — nunca lo estira ni lo recorta.
 
 ### Guardar y exportar
 - Formato `.trace` (zip con cels en PNG y estructura en JSON); ida y vuelta
@@ -110,14 +126,12 @@ Todos salieron de mirar capturas, no del compilador:
 
 Por orden, según `RUMBO.md` (Fase 1):
 
-1. **Importar imágenes y vídeo como referencia.** Es el hueco más grande para
-   trabajo serio: sin esto no hay rotoscopia.
-2. **Exportar a MP4/WebM.** El APNG sirve para compartir, no para editar
+1. **Exportar a MP4/WebM.** El APNG sirve para compartir, no para editar
    después en otro programa.
-3. **Texturas de punta de pincel.** El shader ya tiene el sampler y el
+2. **Texturas de punta de pincel.** El shader ya tiene el sampler y el
    uniforme `uUseTexture`; falta generar o cargar las texturas y exponerlo en
    el panel de pincel.
-4. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
+3. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
    memoria en un iPad físico, no en el emulador.
 
 ## Deuda conocida
@@ -136,3 +150,9 @@ Por orden, según `RUMBO.md` (Fase 1):
   `getImageData` del documento entero para calcular los límites al soltar.
   Aceptable porque ocurre una vez por gesto, pero es el punto más caro del
   flujo de selección.
+- **Importar un vídeo largo es lento y sin cancelar.** Cada fotograma se
+  extrae con un `seek` + subida a GPU secuenciales; un clip de varios minutos
+  tarda en proporción y hoy no hay botón para abortar a medio camino, sólo el
+  progreso. Si el evento `seeked` no llega (pasa en algún navegador para un
+  fotograma suelto), hay un plazo de 2 s que lo salta duplicando el anterior
+  en vez de colgar la importación entera.
