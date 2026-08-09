@@ -12,7 +12,8 @@
     "test:responsive": "node scripts/responsive.mjs",
     "test:selection": "node scripts/selection.mjs",
     "test:reference": "node scripts/reference.mjs",
-    "test:brush-texture": "node scripts/brush-texture.mjs"
+    "test:brush-texture": "node scripts/brush-texture.mjs",
+    "test:brushes": "node scripts/kit-sanity.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
