@@ -154,6 +154,67 @@ await page.waitForTimeout(200);
 s = await state();
 check('Ctrl+D deselecciona', s.active === false);
 
+console.log('\n— Límites en un lienzo grande, con regiones sin conectar —');
+// `commitSelectionCanvas` acota el escaneo a la zona realmente tocada en
+// vez de recorrer el documento entero (antes lo hacía siempre, en cada
+// gesto) — en un lienzo 4K con selecciones pequeñas y separadas es donde
+// más se nota, y es donde una unión de límites mal calculada se notaría.
+await page.evaluate(() => window.__trace.newProject(3840, 2160, 12, 24));
+await page.waitForTimeout(300);
+const largeCanvas = await page.evaluate(() => {
+  const e = window.__trace;
+  e.beginSelectionDrag();
+  e.applySelectionShape('rect', [{ x: 100, y: 100 }, { x: 300, y: 300 }], 'replace');
+  const afterReplace = { ...e.selection.bounds };
+
+  e.beginSelectionDrag();
+  e.applySelectionShape('rect', [{ x: 3000, y: 1800 }, { x: 3200, y: 2000 }], 'add');
+  const afterAdd = { ...e.selection.bounds };
+
+  e.beginSelectionDrag();
+  e.applySelectionShape('rect', [{ x: 3050, y: 1850 }, { x: 3150, y: 1950 }], 'subtract');
+  const afterSubtract = { ...e.selection.bounds };
+  // El punto que se restó no debe seguir en la máscara real, no sólo fuera
+  // del rectángulo envolvente.
+  const px = e.renderer.readRect(e.selectionMask, { x: 3090, y: 1890, x2: 3091, y2: 1891 });
+  const stillInMask = px[3] > 40;
+  // El primer rectángulo, intacto, sigue en la máscara.
+  const px2 = e.renderer.readRect(e.selectionMask, { x: 150, y: 150, x2: 151, y2: 151 });
+  const firstStillThere = px2[3] > 40;
+
+  return { afterReplace, afterAdd, afterSubtract, stillInMask, firstStillThere };
+});
+check(
+  '"replace" da los límites exactos del rectángulo',
+  largeCanvas.afterReplace.x === 100 &&
+    largeCanvas.afterReplace.y === 100 &&
+    largeCanvas.afterReplace.x2 === 300 &&
+    largeCanvas.afterReplace.y2 === 300,
+  JSON.stringify(largeCanvas.afterReplace),
+);
+check(
+  '"add" con una región sin conectar da la unión exacta',
+  largeCanvas.afterAdd.x === 100 &&
+    largeCanvas.afterAdd.y === 100 &&
+    largeCanvas.afterAdd.x2 === 3200 &&
+    largeCanvas.afterAdd.y2 === 2000,
+  JSON.stringify(largeCanvas.afterAdd),
+);
+check(
+  '"subtract" quita el punto de la máscara real',
+  !largeCanvas.stillInMask,
+);
+check('el primer rectángulo no se ve afectado por el subtract lejano', largeCanvas.firstStillThere);
+// El rectángulo envolvente tras restar un mordisco del medio no se encoge
+// (sigue siendo la unión de las dos piezas que sobreviven) — es la misma
+// aproximación que ya usaba el código antes de este cambio, documentada
+// en el propio comentario de `commitSelectionCanvas`.
+check(
+  'el rectángulo envolvente tras el subtract sigue cubriendo ambas piezas',
+  largeCanvas.afterSubtract.x === 100 && largeCanvas.afterSubtract.x2 === 3200,
+  JSON.stringify(largeCanvas.afterSubtract),
+);
+
 console.log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 

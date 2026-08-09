@@ -167,6 +167,10 @@ export interface PendingWand {
   sy: number;
   tolerance: number;
   mode: SelectionMode;
+  /** Límites de la última vista previa — para acotar el escaneo de
+   *  `commitSelectionCanvas` al soltar, en vez de recorrer todo el
+   *  documento otra vez. */
+  lastRect: Rect;
 }
 
 /** Píxeles levantados de UN cel dentro de una transformación flotante. */
@@ -244,6 +248,10 @@ export class Engine {
   pendingWand: PendingWand | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
+  /** Límites de `selectionBackup` en el momento de guardarlo — lo que hacía
+   *  falta para poder acotar `commitSelectionCanvas` a la zona realmente
+   *  tocada en vez de escanear el documento entero cada vez. */
+  private selectionBackupBounds: Rect = emptyRect();
   /** Arrastre de IK de 2 huesos en marcha — `bendSign` se fija al empezar y
    *  se mantiene todo el gesto, ver `bendSignFor` en `rig.ts`. */
   private ikDrag: {
@@ -2728,28 +2736,55 @@ export class Engine {
     return this.selectionCanvas;
   }
 
-  /** Sube la máscara rasterizada a GPU y recalcula sus límites reales. */
-  private commitSelectionCanvas() {
-    const canvas = this.selectionSurfaceCanvas();
+  /** Limpia la máscara de GPU y la resube desde el canvas 2D — el paso que
+   *  comparten `commitSelectionCanvas` y cualquier atajo que ya conozca los
+   *  límites de sobra y no necesite escanear nada. */
+  private uploadSelectionMask() {
     const mask = this.selectionMask;
     this.renderer.clear(mask);
-    this.renderer.uploadImage(mask, canvas);
+    this.renderer.uploadImage(mask, this.selectionSurfaceCanvas());
+  }
 
-    const data = canvas
-      .getContext('2d')!
-      .getImageData(0, 0, canvas.width, canvas.height).data;
+  /**
+   * Sube la máscara rasterizada a GPU y recalcula sus límites reales.
+   *
+   * `scanRect`, si se da, acota dónde puede haber cambiado algo: componer
+   * con replace/add/subtract sólo puede tocar píxeles dentro de la forma
+   * nueva o, como mucho, dentro de la unión con lo que ya hubiera
+   * seleccionado antes — nunca más allá. Escanear sólo esa caja en vez del
+   * documento entero es la diferencia entre recorrer unos cientos de miles
+   * de píxeles y varios millones en un lienzo grande, y no es una
+   * aproximación: da exactamente el mismo resultado porque fuera de esa
+   * caja no hay nada que pueda haber cambiado. Sin `scanRect` (invertir
+   * selección, que sí puede tocar cualquier píxel) se escanea todo.
+   */
+  private commitSelectionCanvas(scanRect?: Rect) {
+    const canvas = this.selectionSurfaceCanvas();
+    this.uploadSelectionMask();
+
+    const region = scanRect
+      ? clampRect(scanRect, canvas.width, canvas.height)
+      : { x: 0, y: 0, x2: canvas.width, y2: canvas.height };
+    const rw = region.x2 - region.x;
+    const rh = region.y2 - region.y;
+
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (let y = 0; y < canvas.height; y++) {
-      const row = y * canvas.width;
-      for (let x = 0; x < canvas.width; x++) {
-        if (data[(row + x) * 4 + 3] > 8) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
+    if (rw > 0 && rh > 0) {
+      const data = canvas.getContext('2d')!.getImageData(region.x, region.y, rw, rh).data;
+      for (let y = 0; y < rh; y++) {
+        const row = y * rw;
+        for (let x = 0; x < rw; x++) {
+          if (data[(row + x) * 4 + 3] > 8) {
+            const docX = region.x + x;
+            const docY = region.y + y;
+            if (docX < minX) minX = docX;
+            if (docX > maxX) maxX = docX;
+            if (docY < minY) minY = docY;
+            if (docY > maxY) maxY = docY;
+          }
         }
       }
     }
@@ -2787,6 +2822,7 @@ export class Engine {
     const ctx = this.selectionBackup.getContext('2d')!;
     ctx.clearRect(0, 0, src.width, src.height);
     ctx.drawImage(src, 0, 0);
+    this.selectionBackupBounds = this.selection.active ? this.selection.bounds : emptyRect();
   }
 
   private restoreSelectionBackup() {
@@ -2821,7 +2857,13 @@ export class Engine {
     if (points.length === 0) return;
     this.restoreSelectionBackup();
     rasterizeSelection(this.selectionSurfaceCanvas(), shape, points, mode);
-    this.commitSelectionCanvas();
+    const newBounds = shapeBounds(shape, points, this.doc.width, this.doc.height);
+    // "replace" empieza limpiando el canvas: todo lo de fuera de la forma
+    // nueva ya es transparente, así que no hace falta la unión con lo
+    // anterior. add/subtract sí pueden dejar contenido fuera de la forma
+    // nueva (lo que ya hubiera antes), de ahí la unión.
+    const scanRect = mode === 'replace' ? newBounds : unionRect(this.selectionBackupBounds, newBounds);
+    this.commitSelectionCanvas(scanRect);
   }
 
   /**
@@ -2872,7 +2914,9 @@ export class Engine {
     if (!this.pendingLasso) return;
     this.pendingLasso = null;
     this.restoreSelectionBackup();
-    this.commitSelectionCanvas();
+    // Tras restaurar, el contenido es exactamente el de antes del gesto:
+    // sus límites de entonces ya acotan dónde puede haber algo.
+    this.commitSelectionCanvas(this.selectionBackupBounds);
   }
 
   /**
@@ -2899,7 +2943,7 @@ export class Engine {
       }),
       { x: 0, y: 0, x2: w, y2: h },
     );
-    this.pendingWand = { reference, w, h, sx, sy, tolerance: clamp(tolerance, 0, 1), mode };
+    this.pendingWand = { reference, w, h, sx, sy, tolerance: clamp(tolerance, 0, 1), mode, lastRect: emptyRect() };
     this.previewSelectWand();
     return true;
   }
@@ -2928,18 +2972,22 @@ export class Engine {
     this.restoreSelectionBackup();
     const rect: Rect = minX <= maxX ? { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 } : emptyRect();
     rasterizeMask(this.selectionSurfaceCanvas(), filled, pending.w, rect, pending.mode);
-    const mask = this.selectionMask;
-    this.renderer.clear(mask);
-    this.renderer.uploadImage(mask, this.selectionSurfaceCanvas());
+    pending.lastRect = rect;
+    this.uploadSelectionMask();
     this.selection = { active: !rectIsEmpty(rect), bounds: rect };
     this.touch(false);
   }
 
   /** Cierra el gesto y calcula los límites reales de la máscara. */
   endSelectWand() {
-    if (!this.pendingWand) return;
+    const pending = this.pendingWand;
+    if (!pending) return;
     this.pendingWand = null;
-    this.commitSelectionCanvas();
+    const scanRect =
+      pending.mode === 'replace'
+        ? pending.lastRect
+        : unionRect(this.selectionBackupBounds, pending.lastRect);
+    this.commitSelectionCanvas(scanRect);
   }
 
   /** Descarta la selección en marcha y vuelve a la previa al gesto. */
@@ -2947,7 +2995,7 @@ export class Engine {
     if (!this.pendingWand) return;
     this.pendingWand = null;
     this.restoreSelectionBackup();
-    this.commitSelectionCanvas();
+    this.commitSelectionCanvas(this.selectionBackupBounds);
   }
 
   selectAll() {
@@ -2957,7 +3005,11 @@ export class Engine {
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    this.commitSelectionCanvas();
+    // Todo el lienzo queda seleccionado sin ambigüedad — no hace falta
+    // escanear nada para saber los límites, ya se conocen de sobra.
+    this.uploadSelectionMask();
+    this.selection = { active: true, bounds: { x: 0, y: 0, x2: this.doc.width, y2: this.doc.height } };
+    this.touch();
   }
 
   invertSelection() {
