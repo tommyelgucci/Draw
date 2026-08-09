@@ -1102,6 +1102,19 @@ button:focus-visible {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
+/** Rango marcado en la regla para la transformación por lote — mismo molde
+ *  que `.playhead`, pero como banda ancha en vez de una sola línea. */
+.frame-range-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-left: 1.5px solid var(--accent);
+  border-right: 1.5px solid var(--accent);
+}
+
 /* ------------------------------------------------------------------ *
  * Estados
  * ------------------------------------------------------------------ */
@@ -1515,6 +1528,40 @@ button:focus-visible {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/**
+ * Lazo estilo Procreate: mismo molde que `.sel-overlay`/`.sel-handle` — el
+ * contorno es sólo lectura (`polyline` en vez de `polygon` cerrado, porque
+ * el gesto no está cerrado todavía), y el nodo de origen es el único
+ * elemento que captura punteros aparte de la barra.
+ */
+.lasso-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+}
+
+.lasso-outline polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.lasso-origin {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 /**

@@ -80,6 +80,23 @@ export function CanvasView() {
     points: Vec2[];
     mode: SelectionMode;
   } | null>(null);
+  /** Hueso en creación por arrastre (modo rig): igual que `selectPath`,
+   *  vive fuera de React porque cambia en cada muestra de puntero. */
+  const boneDragId = useRef<number | null>(null);
+  const boneDrag = useRef<{
+    skeletonId: string;
+    boneId: string;
+    createdSkeleton: boolean;
+    startLocal: Vec2;
+    wasEmptyCanvas: boolean;
+  } | null>(null);
+  /** Lazo estilo Procreate: el gesto vive en `engine.pendingLasso` (sobrevive
+   *  a que este dedo se suelte); estos refs sólo distinguen, para EL TOQUE
+   *  ACTUAL, si terminó siendo un tap (vértice recto) o un arrastre (mano
+   *  alzada) — misma disyuntiva de `boneDrag`, mismo motivo. */
+  const lassoGestureId = useRef<number | null>(null);
+  const lassoGestureStart = useRef<{ sample: Vec2; local: Vec2 } | null>(null);
+  const lassoDragging = useRef(false);
 
   const setEngine = useUI((s) => s.setEngine);
   const brush = useActiveBrush();
@@ -412,6 +429,19 @@ export function CanvasView() {
         selectingId.current = null;
         selectPath.current = null;
       }
+      if (lassoGestureId.current !== null) {
+        // Un segundo dedo aterrizando es un gesto de vista, no el fin del
+        // lazo: sólo se suelta el seguimiento del toque actual.
+        // `engine.pendingLasso` se queda intacto, listo para retomar.
+        lassoGestureId.current = null;
+        lassoGestureStart.current = null;
+        lassoDragging.current = false;
+      }
+      if (boneDragId.current !== null) {
+        engine.cancelBoneDrag(boneDrag.current?.createdSkeleton ?? false);
+        boneDragId.current = null;
+        boneDrag.current = null;
+      }
       beginGesture();
       if (gesture.current) gesture.current.maxPointers = pointers.current.size;
       return;
@@ -423,14 +453,27 @@ export function CanvasView() {
 
     const sample = toSample(e);
 
-    if (tool === 'selectRect' || tool === 'selectLasso') {
+    if (tool === 'selectRect') {
       engine.beginSelectionDrag();
       selectPath.current = {
-        shape: tool === 'selectRect' ? 'rect' : 'lasso',
+        shape: 'rect',
         points: [{ x: sample.x, y: sample.y }],
         mode: uiRef.current.selectionMode,
       };
       selectingId.current = e.pointerId;
+      return;
+    }
+
+    if (tool === 'selectLasso') {
+      // El nodo de origen y la barra flotante (LassoOverlay) hacen
+      // stopPropagation y capturan su propio puntero, así que este bloque
+      // sólo ve toques en lienzo vacío — nunca el toque que cierra el lazo
+      // ahí. `beginLasso` es idempotente: si ya hay un lazo en marcha
+      // (retomado tras soltar el dedo), no lo reinicia.
+      engine.beginLasso(uiRef.current.selectionMode);
+      lassoGestureId.current = e.pointerId;
+      lassoGestureStart.current = { sample: { x: sample.x, y: sample.y }, local };
+      lassoDragging.current = false;
       return;
     }
 
@@ -453,12 +496,32 @@ export function CanvasView() {
     if (tool === 'rig') {
       // Los tiradores del gizmo (BoneGizmoOverlay) hacen stopPropagation y
       // capturan su propio puntero, así que este bloque sólo ve toques en
-      // lienzo vacío: hueso bajo el dedo si lo hay, si no, deseleccionar.
+      // lienzo vacío o sobre un hueso que no está seleccionado (sin
+      // tiradores propios encima que lo intercepten).
+      //
+      // La cola de un hueso se comprueba ANTES que el cuerpo a propósito:
+      // la cola es parte del segmento, así que un hit-test de cuerpo
+      // primero nunca dejaría llegar un toque ahí a "encadenar hijo" —
+      // siempre ganaría "seleccionar".
+      const point = { x: sample.x, y: sample.y };
       const skel = engine.doc.skeletons[0];
-      const hit = skel
-        ? engine.hitTestBone(skel.id, { x: sample.x, y: sample.y }, 14 / engine.view.zoom)
-        : null;
-      uiRef.current.setSelectedBoneId(hit ? hit.id : null);
+      const hitTail = skel ? engine.hitTestBoneTail(skel.id, point, 18 / engine.view.zoom) : null;
+      if (!hitTail) {
+        const hitBody = skel ? engine.hitTestBone(skel.id, point, 14 / engine.view.zoom) : null;
+        if (hitBody) {
+          uiRef.current.setSelectedBoneId(hitBody.id);
+          return;
+        }
+      }
+      // Ni cola ni cuerpo de ningún hueso: no se sabe todavía si esto va a
+      // ser un toque (deseleccionar) o un arrastre (crear hueso), así que
+      // el hueso se crea YA — con longitud mínima — y `finishPointer` lo
+      // deshace entero si al soltar quedó demasiado corto para ser un
+      // gesto de verdad. Tocar la cola de un hueso existente encadena un
+      // hijo ahí; lienzo vacío arranca uno nuevo (y un esqueleto si hace falta).
+      const created = engine.beginBoneDrag(point, hitTail?.id ?? null);
+      boneDragId.current = e.pointerId;
+      boneDrag.current = { ...created, startLocal: local, wasEmptyCanvas: !hitTail };
       return;
     }
 
@@ -482,6 +545,31 @@ export function CanvasView() {
 
     if (gesture.current || quickShapeGesture.current) {
       updateGesture();
+      return;
+    }
+
+    if (boneDragId.current === e.pointerId && boneDrag.current) {
+      const s = toSample(e);
+      engine.updateBoneDrag(boneDrag.current.skeletonId, boneDrag.current.boneId, { x: s.x, y: s.y });
+      return;
+    }
+
+    if (lassoGestureId.current === e.pointerId && lassoGestureStart.current) {
+      const start = lassoGestureStart.current;
+      const s = toSample(e);
+      if (!lassoDragging.current) {
+        // Por debajo del umbral todavía podría acabar siendo un toque
+        // suelto (vértice recto); no se añade ningún punto de mano alzada
+        // hasta que el gesto demuestra que es un arrastre de verdad.
+        const local = localPoint(e);
+        const movedLocal = Math.hypot(local.x - start.local.x, local.y - start.local.y);
+        if (movedLocal <= 3) return;
+        lassoDragging.current = true;
+        // El primer punto del tramo es de donde bajó el dedo, no de aquí —
+        // si no, se perdería el segmento inicial del arrastre.
+        engine.lassoAddPoint(start.sample);
+      }
+      engine.lassoAddPoint({ x: s.x, y: s.y });
       return;
     }
 
@@ -541,6 +629,17 @@ export function CanvasView() {
       else engine.endStroke();
       drawingId.current = null;
     }
+    if (lassoGestureId.current === e.pointerId && lassoGestureStart.current) {
+      const start = lassoGestureStart.current;
+      const wasDragging = lassoDragging.current;
+      lassoGestureId.current = null;
+      lassoGestureStart.current = null;
+      lassoDragging.current = false;
+      // Un toque suelto (sin arrastre) deja un vértice recto — así se
+      // combinan tramos poligonales y de mano alzada en el mismo lazo. El
+      // arrastre ya fue añadiendo sus propios puntos durante el move.
+      if (!wasDragging) engine.lassoAddVertex(start.sample);
+    }
     if (selectingId.current === e.pointerId) {
       const path = selectPath.current;
       selectingId.current = null;
@@ -558,6 +657,24 @@ export function CanvasView() {
         // es lo que espera cualquiera que venga de un editor de imagen.
         if (tooSmall) engine.clearSelection();
         else engine.applySelectionShape(path.shape, path.points, path.mode);
+      }
+    }
+    if (boneDragId.current === e.pointerId && boneDrag.current) {
+      const drag = boneDrag.current;
+      boneDragId.current = null;
+      boneDrag.current = null;
+      const local = localPoint(e);
+      const moved = Math.hypot(local.x - drag.startLocal.x, local.y - drag.startLocal.y);
+      // Mismo umbral en píxeles de pantalla que el resto de gestos de tap
+      // (p. ej. el atajo de deshacer a dos dedos): por debajo, fue un
+      // toque, no un arrastre para definir un hueso de verdad.
+      if (moved < 10) {
+        engine.cancelBoneDrag(drag.createdSkeleton);
+        // Tocar la cola de un hueso para engancharlo no debe deseleccionar
+        // lo que hubiera activo; tocar lienzo vacío sí, como antes.
+        if (drag.wasEmptyCanvas) uiRef.current.setSelectedBoneId(null);
+      } else {
+        uiRef.current.setSelectedBoneId(drag.boneId);
       }
     }
     if ((gesture.current || quickShapeGesture.current) && pointers.current.size < 2) {

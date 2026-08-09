@@ -18,6 +18,7 @@ import {
   IconPlay,
   IconPlus,
   IconPrev,
+  IconSelectRect,
   IconTrash,
 } from './icons';
 
@@ -29,9 +30,18 @@ export function Timeline({ engine }: { engine: Engine }) {
   // re-render, así que los datos derivados se calculan sin memoizar.
   const rev = useEngineRevision(engine);
   const showTimeline = useUI((s) => s.showTimeline);
+  const rangeSelectMode = useUI((s) => s.rangeSelectMode);
+  const setRangeSelectMode = useUI((s) => s.setRangeSelectMode);
+  const frameRangeStart = useUI((s) => s.frameRangeStart);
+  const frameRangeEnd = useUI((s) => s.frameRangeEnd);
+  const setFrameRange = useUI((s) => s.setFrameRange);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [onionOpen, setOnionOpen] = useState(false);
   const [dragCel, setDragCel] = useState<{ layerId: string; from: number } | null>(null);
+  /** Ancla del arrastre que marca el rango en la regla — vive fuera de React
+   *  porque cambia en cada muestra de puntero, igual que `boneDrag` en
+   *  `CanvasView`. */
+  const rangeAnchor = useRef<number | null>(null);
 
   const doc = engine.doc;
   const layers = doc.layers.slice().reverse();
@@ -55,6 +65,12 @@ export function Timeline({ engine }: { engine: Engine }) {
   const scrub = (clientX: number, target: HTMLElement) => {
     const rect = target.getBoundingClientRect();
     engine.setFrame(Math.floor((clientX - rect.left) / FRAME_W));
+  };
+
+  const frameAt = (clientX: number, target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    const f = Math.floor((clientX - rect.left) / FRAME_W);
+    return Math.max(0, Math.min(doc.frameCount - 1, f));
   };
 
   return (
@@ -117,6 +133,13 @@ export function Timeline({ engine }: { engine: Engine }) {
             onClick={() => setOnionOpen((v) => !v)}
           >
             <IconOnion size={18} />
+          </IconButton>
+          <IconButton
+            title="Marcar rango de cuadros (para transformar varios a la vez)"
+            active={rangeSelectMode}
+            onClick={() => setRangeSelectMode(!rangeSelectMode)}
+          >
+            <IconSelectRect size={18} />
           </IconButton>
         </div>
 
@@ -228,10 +251,25 @@ export function Timeline({ engine }: { engine: Engine }) {
               className="ruler"
               onPointerDown={(e) => {
                 e.currentTarget.setPointerCapture(e.pointerId);
+                if (rangeSelectMode) {
+                  const f = frameAt(e.clientX, e.currentTarget);
+                  rangeAnchor.current = f;
+                  setFrameRange(f, f);
+                  return;
+                }
                 scrub(e.clientX, e.currentTarget);
               }}
               onPointerMove={(e) => {
-                if (e.buttons) scrub(e.clientX, e.currentTarget);
+                if (!e.buttons) return;
+                if (rangeSelectMode && rangeAnchor.current !== null) {
+                  const f = frameAt(e.clientX, e.currentTarget);
+                  setFrameRange(Math.min(rangeAnchor.current, f), Math.max(rangeAnchor.current, f));
+                  return;
+                }
+                scrub(e.clientX, e.currentTarget);
+              }}
+              onPointerUp={() => {
+                rangeAnchor.current = null;
               }}
             >
               {frames.map((f) => (
@@ -244,6 +282,18 @@ export function Timeline({ engine }: { engine: Engine }) {
                 </div>
               ))}
             </div>
+
+            {/* Banda del rango marcado para la transformación por lote —
+             *  atraviesa la regla y todas las pistas, como el cabezal. */}
+            {frameRangeStart !== null && frameRangeEnd !== null && (
+              <div
+                className="frame-range-band"
+                style={{
+                  left: frameRangeStart * FRAME_W,
+                  width: (frameRangeEnd - frameRangeStart + 1) * FRAME_W,
+                }}
+              />
+            )}
 
             {layers.map((layer) => (
               <TrackRow

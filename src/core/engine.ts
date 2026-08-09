@@ -23,12 +23,16 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  boneRestFromDrag,
   boneRigidMatrix,
   createBone,
   evaluatePoseWorldMatrices,
+  evaluateRestWorldMatrices,
   evaluateSkinMatrices,
   findBone,
   hitTestBone as hitTestBoneInSkeleton,
+  hitTestBoneTail as hitTestBoneTailInSkeleton,
+  matRotation,
   newMesh,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
@@ -129,14 +133,42 @@ export interface SelectionState {
 }
 
 /**
- * Píxeles levantados de un cel que se están moviendo, escalando o girando.
- * Mientras existe, el cel tiene un hueco donde estaban.
+ * Lazo estilo Procreate: sobrevive entre subidas y bajadas del dedo, así que
+ * no puede vivir en un ref de React (muere en el primer pointerup). Cada
+ * arrastre añade puntos en mano alzada; cada toque suelto (sin arrastre)
+ * añade un único vértice recto — así se combinan tramos curvos y poligonales
+ * en el mismo lazo, igual que en Procreate. Se cierra tocando el nodo de
+ * origen o aceptando desde la barra flotante.
+ */
+export interface PendingLasso {
+  points: Vec2[];
+  mode: SelectionMode;
+}
+
+/** Píxeles levantados de UN cel dentro de una transformación flotante. */
+export interface FloatingCel {
+  /** Fotograma donde empieza este cel de origen. */
+  celFrame: number;
+  surface: Surface;
+  /** Píxeles originales de `sourceRect` en este cel, para cancelar o deshacer. */
+  before: Uint8Array;
+}
+
+/**
+ * Píxeles levantados de uno o varios cels que se están moviendo, escalando o
+ * girando a la vez. Mientras existe, cada cel de `cels` tiene un hueco donde
+ * estaban los suyos.
+ *
+ * El mismo rectángulo de origen y la misma transformación (tx/ty/scale/
+ * rotation/pivot) se aplican a todos los cels del lote: es un único gesto
+ * — mover un brazo en 8 cuadros a la vez — no ocho gestos independientes.
+ * Lo que varía por cel son sólo los píxeles: `liftSelection` produce un
+ * `cels` de un solo elemento; `liftSelectionRange` uno por cada cel
+ * distinto dentro del rango.
  */
 export interface FloatingSelection {
-  surface: Surface;
+  cels: FloatingCel[];
   layerId: string;
-  /** Fotograma donde empieza el cel de origen, no el fotograma actual. */
-  celFrame: number;
   tx: number;
   ty: number;
   scale: number;
@@ -144,8 +176,6 @@ export interface FloatingSelection {
   pivotX: number;
   pivotY: number;
   sourceRect: Rect;
-  /** Píxeles originales de `sourceRect`, para cancelar o deshacer. */
-  before: Uint8Array;
 }
 
 const MAX_ONION = 3;
@@ -173,6 +203,7 @@ export class Engine {
   selection: SelectionState = { active: false, bounds: emptyRect() };
   floating: FloatingSelection | null = null;
   pendingQuickShape: PendingQuickShape | null = null;
+  pendingLasso: PendingLasso | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
 
@@ -1087,6 +1118,91 @@ export class Engine {
     return hitTestBoneInSkeleton(skel, matrices, point, tolerance);
   }
 
+  /** Hueso cuya cola cae bajo `point` — la señal para encadenar un hijo en
+   *  vez de seleccionar (ver `beginBoneDrag`). Se mide en pose, no en
+   *  reposo, para que el punto de enganche sea el que se ve en pantalla en
+   *  el fotograma actual, no uno invisible si el hueso está animado. */
+  hitTestBoneTail(skeletonId: string, point: Vec2, tolerance = 16): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return hitTestBoneTailInSkeleton(skel, matrices, point, tolerance);
+  }
+
+  /**
+   * Arranca un hueso por arrastre: crea el esqueleto si el documento no
+   * tiene ninguno todavía, y el hueso con longitud mínima en `worldPoint`
+   * (o en la cola de `parentBoneId` si se está encadenando uno hijo).
+   * `updateBoneDrag` ajusta longitud y rotación en cada muestra del
+   * arrastre; `createSkeleton`/`addBone` ya son Commands, así que crear
+   * el hueso (y el esqueleto, si hizo falta) son los únicos pasos que
+   * entran en el historial — arrastrar no añade más. `createdSkeleton` le
+   * dice a `cancelBoneDrag` cuántos de esos pasos deshacer si el gesto
+   * queda en nada.
+   */
+  beginBoneDrag(
+    worldPoint: Vec2,
+    parentBoneId: string | null,
+  ): { skeletonId: string; boneId: string; createdSkeleton: boolean } {
+    const createdSkeleton = this.doc.skeletons.length === 0;
+    const skel = this.doc.skeletons[0] ?? this.createSkeleton('Esqueleto');
+    let restX = worldPoint.x;
+    let restY = worldPoint.y;
+    const parent = parentBoneId ? findBone(skel, parentBoneId) : null;
+    if (parent) {
+      // El hijo nace en la cola de reposo del padre, en SU espacio local
+      // — el mismo convenio que ya usan todos los esqueletos de prueba
+      // (restX = longitud del padre, restY = 0).
+      restX = parent.length;
+      restY = 0;
+    }
+    const bone = this.addBone(skel.id, `Hueso ${skel.bones.length + 1}`, parentBoneId, {
+      x: restX,
+      y: restY,
+      length: 1,
+    })!;
+    return { skeletonId: skel.id, boneId: bone.id, createdSkeleton };
+  }
+
+  /**
+   * Longitud y rotación de reposo del hueso en creación, siguiendo a
+   * `worldPoint`. Sin `history.run`: la creación en sí ya quedó registrada
+   * en `beginBoneDrag`, y esto es la misma muestra continua de arrastre
+   * que `setBonePose`, no un paso aparte que deshacer.
+   */
+  updateBoneDrag(skeletonId: string, boneId: string, worldPoint: Vec2) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone) return;
+    let parentWorldRotation = 0;
+    let worldHead: Vec2 = { x: bone.restX, y: bone.restY };
+    if (bone.parentId) {
+      const parent = findBone(skel, bone.parentId);
+      const parentM = evaluateRestWorldMatrices(skel).get(bone.parentId);
+      if (parent && parentM) {
+        parentWorldRotation = matRotation(parentM);
+        worldHead = { x: parentM[0] * parent.length + parentM[6], y: parentM[1] * parent.length + parentM[7] };
+      }
+    }
+    const { length, restRotation } = boneRestFromDrag(parentWorldRotation, worldHead, worldPoint);
+    bone.length = length;
+    bone.restRotation = restRotation;
+    this.touch();
+  }
+
+  /**
+   * Deshace un hueso creado por arrastre que quedó demasiado corto — un
+   * toque, no un gesto de verdad. Nada más ha pasado por el historial
+   * desde `beginBoneDrag`, así que uno o dos `undo()` (el hueso, y el
+   * esqueleto si `beginBoneDrag` tuvo que crear uno) lo revierten limpio,
+   * igual que `cancelStroke`/`cancelFloating` deshacen su propio gesto
+   * pendiente sin dejar rastro.
+   */
+  cancelBoneDrag(createdSkeleton: boolean) {
+    this.history.undo();
+    if (createdSkeleton) this.history.undo();
+  }
+
   getBoneValue(bone: Bone, prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'): number {
     return sampleChannel(bone.track[prop], this.currentFrame);
   }
@@ -1675,8 +1791,18 @@ export class Engine {
     // sólo cambia qué lo alimenta (ver `paintQuickShapeOutline`).
     const isQuickShapeTarget =
       includeWet && this.pendingQuickShape !== null && this.pendingQuickShape.layer.id === layer.id;
-    const hasFloating =
-      includeWet && this.floating !== null && this.floating.layerId === layer.id;
+    // Un flotante puede llevar varios cels a la vez (transformación por
+    // lote — `liftSelectionRange`): sólo se superpone el que corresponde al
+    // cel realmente visible en `frame`, no el primero de la lista, porque
+    // esta misma función se llama también para los fotogramas del papel
+    // cebolla, con `includeWet` en false.
+    const floatingCel =
+      includeWet && this.floating && this.floating.layerId === layer.id
+        ? (this.floating.cels.find(
+            (c) => c.celFrame === (layer.swap ? -1 : celStartFrame(layer, frame)),
+          ) ?? null)
+        : null;
+    const hasFloating = floatingCel !== null;
     if (!cel && !isStrokeTarget && !isQuickShapeTarget && !hasFloating) return null;
 
     let src = cel ? this.renderer.ensureResident(cel.surface) : null;
@@ -1722,13 +1848,13 @@ export class Engine {
       src = combined;
     }
 
-    if (hasFloating && this.floating) {
+    if (floatingCel && this.floating) {
       const combined = this.renderer.scratch('xf1');
       if (src && src !== combined) this.renderer.copy(combined, src, 1);
       else if (!src) this.renderer.clear(combined);
       this.renderer.drawOver(
         combined,
-        this.floating.surface,
+        floatingCel.surface,
         1,
         this.floatingMatrixFor(this.floating),
       );
@@ -2122,6 +2248,57 @@ export class Engine {
     this.commitSelectionCanvas();
   }
 
+  /**
+   * Arranca (o retoma) un lazo estilo Procreate: a diferencia de
+   * `beginSelectionDrag`, sobrevive a que el dedo se levante — el estado no
+   * puede vivir en un ref de React porque muere en el primer `pointerup`.
+   * Idempotente a propósito: `CanvasView` llama esto en cada toque nuevo del
+   * gesto sin comprobar antes si ya hay uno en marcha, igual que
+   * `beginBoneDrag`/`beginStroke` asumen su propio guardado de estado.
+   */
+  beginLasso(mode: SelectionMode) {
+    if (this.pendingLasso) return;
+    this.beginSelectionDrag();
+    this.pendingLasso = { points: [], mode };
+  }
+
+  /** Punto de un tramo en mano alzada — filtra por distancia, igual que el
+   *  lazo de un solo gesto de antes, para no rasterizar en cada píxel. */
+  lassoAddPoint(point: Vec2) {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    const last = pending.points[pending.points.length - 1];
+    if (last && Math.hypot(point.x - last.x, point.y - last.y) <= 1.5) return;
+    pending.points.push(point);
+    this.previewSelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Vértice de un toque suelto (modo polígono) — siempre se añade, sin
+   *  filtro de distancia: un toque quieto debe dejar esquina igualmente. */
+  lassoAddVertex(point: Vec2) {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    pending.points.push(point);
+    this.previewSelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Cierra el lazo — desde el nodo de origen o la barra flotante. */
+  commitLasso() {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    this.pendingLasso = null;
+    if (pending.points.length < 3) this.clearSelection();
+    else this.applySelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Descarta el lazo entero y vuelve a la selección previa al gesto. */
+  cancelLasso() {
+    if (!this.pendingLasso) return;
+    this.pendingLasso = null;
+    this.restoreSelectionBackup();
+    this.commitSelectionCanvas();
+  }
+
   selectAll() {
     if (this.floating) this.commitFloating();
     const canvas = this.selectionSurfaceCanvas();
@@ -2232,17 +2409,65 @@ export class Engine {
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
     if (rectIsEmpty(rect)) return false;
 
+    const lifted = this.liftCel(cel, celStartFrame(layer, this.currentFrame), rect);
+    if (!lifted) return false;
+    this.beginFloating(layer.id, rect, [lifted]);
+    return true;
+  }
+
+  /**
+   * Igual que `liftSelection`, pero levanta un cel distinto por cada dibujo
+   * que empiece dentro de `[fromFrame, toFrame]` en la capa activa — la
+   * transformación multi-fotograma: mover un brazo en varios cuadros a la
+   * vez en vez de repetir el gesto cuadro por cuadro.
+   *
+   * Sólo toca cels que YA EMPIEZAN en el rango (`sortedCelFrames`), no cada
+   * fotograma del rango uno por uno: un cel sostenido sobre 8 fotogramas es
+   * un único dibujo, y tocarlo una vez por fotograma visible lo procesaría
+   * ocho veces por nada (y con el mismo resultado, porque `liftCel` opera
+   * sobre el cel entero, no sobre el fotograma).
+   */
+  liftSelectionRange(fromFrame: number, toFrame: number): boolean {
+    if (this.floating) return true;
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference')
+      return false;
+
+    const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
+    if (rectIsEmpty(rect)) return false;
+
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    const cels: FloatingCel[] = [];
+    for (const celFrame of sortedCelFrames(layer)) {
+      if (celFrame < lo || celFrame > hi) continue;
+      const cel = layer.cels.get(celFrame)!;
+      const lifted = this.liftCel(cel, celFrame, rect);
+      if (lifted) cels.push(lifted);
+    }
+    if (cels.length === 0) return false;
+
+    this.beginFloating(layer.id, rect, cels);
+    return true;
+  }
+
+  /** Levanta los píxeles de `rect` de UN cel: la parte que `liftSelection` y
+   *  `liftSelectionRange` comparten por cada dibujo que tocan. */
+  private liftCel(cel: Cel, celFrame: number, rect: Rect): FloatingCel | null {
+    if (cel.surface.empty) return null;
     const surface = this.renderer.createSurface('floating');
     surface.pinned = true;
     this.renderer.copy(surface, cel.surface, 1, undefined, this.selectionMask);
 
     const before = this.renderer.readRect(cel.surface, rect);
     this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
+    return { celFrame, surface, before };
+  }
 
+  private beginFloating(layerId: string, rect: Rect, cels: FloatingCel[]) {
     this.floating = {
-      surface,
-      layerId: layer.id,
-      celFrame: celStartFrame(layer, this.currentFrame),
+      cels,
+      layerId,
       tx: 0,
       ty: 0,
       scale: 1,
@@ -2250,10 +2475,8 @@ export class Engine {
       pivotX: (rect.x + rect.x2) / 2,
       pivotY: (rect.y + rect.y2) / 2,
       sourceRect: rect,
-      before,
     };
     this.touch();
-    return true;
   }
 
   updateFloating(patch: Partial<Pick<FloatingSelection, 'tx' | 'ty' | 'scale' | 'rotation'>>) {
@@ -2305,18 +2528,18 @@ export class Engine {
     const f = this.floating;
     if (!f) return;
     const layer = this.doc.layers.find((l) => l.id === f.layerId);
-    const cel = layer ? layer.cels.get(f.celFrame) : null;
     this.floating = null;
 
-    if (!layer || !cel) {
-      this.renderer.release(f.surface);
+    if (!layer) {
+      for (const fc of f.cels) this.renderer.release(fc.surface);
       this.touch();
       return;
     }
 
     // La operación toca dos zonas: de donde se levantaron los píxeles y donde
     // acaban. Deshacer necesita ambas, así que el paso se guarda sobre su
-    // rectángulo unión en vez de sobre el documento entero.
+    // rectángulo unión en vez de sobre el documento entero. Es la misma
+    // región para todos los cels del lote: comparten `sourceRect` y matriz.
     const destRect = emptyRect();
     for (const p of this.floatingCornersFor(f)) expandRect(destRect, p.x, p.y, 1);
     const region = clampRect(
@@ -2324,25 +2547,44 @@ export class Engine {
       this.doc.width,
       this.doc.height,
     );
+    const matrix = this.floatingMatrixFor(f);
 
-    // Estado previo a levantar la selección: lo que hay ahora en el cel es el
-    // original menos los píxeles levantados, así que basta con reinsertarlos.
-    const beforeRegion = this.renderer.readRect(cel.surface, region);
-    spliceRect(beforeRegion, region, f.before, f.sourceRect);
+    // Un paso de deshacer por cel tocado — así un lote de N cuadros se
+    // deshace/rehace de una vez, no cuadro por cuadro.
+    const steps: { surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
+    for (const fc of f.cels) {
+      const cel = layer.cels.get(fc.celFrame);
+      if (!cel) {
+        this.renderer.release(fc.surface);
+        continue;
+      }
+      // Estado previo a levantar la selección: lo que hay ahora en el cel es
+      // el original menos los píxeles levantados, así que basta con
+      // reinsertarlos.
+      const beforeRegion = this.renderer.readRect(cel.surface, region);
+      spliceRect(beforeRegion, region, fc.before, f.sourceRect);
 
-    this.renderer.drawOver(cel.surface, f.surface, 1, this.floatingMatrixFor(f));
-    this.renderer.release(f.surface);
-    const afterRegion = this.renderer.readRect(cel.surface, region);
+      this.renderer.drawOver(cel.surface, fc.surface, 1, matrix);
+      this.renderer.release(fc.surface);
+      const afterRegion = this.renderer.readRect(cel.surface, region);
+      steps.push({ surface: cel.surface, before: beforeRegion, after: afterRegion });
+    }
+
+    if (steps.length === 0) {
+      this.touch();
+      return;
+    }
 
     this.history.push({
-      label: 'Transformar selección',
-      cost: beforeRegion.byteLength + afterRegion.byteLength,
+      label:
+        steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección',
+      cost: steps.reduce((n, s) => n + s.before.byteLength + s.after.byteLength, 0),
       redo: () => {
-        this.renderer.writeRect(cel.surface, region, afterRegion);
+        for (const s of steps) this.renderer.writeRect(s.surface, region, s.after);
         this.touch();
       },
       undo: () => {
-        this.renderer.writeRect(cel.surface, region, beforeRegion);
+        for (const s of steps) this.renderer.writeRect(s.surface, region, s.before);
         this.touch();
       },
     });
@@ -2353,9 +2595,11 @@ export class Engine {
     const f = this.floating;
     if (!f) return;
     const layer = this.doc.layers.find((l) => l.id === f.layerId);
-    const cel = layer ? layer.cels.get(f.celFrame) : null;
-    if (cel) this.renderer.writeRect(cel.surface, f.sourceRect, f.before);
-    this.renderer.release(f.surface);
+    for (const fc of f.cels) {
+      const cel = layer ? layer.cels.get(fc.celFrame) : null;
+      if (cel) this.renderer.writeRect(cel.surface, f.sourceRect, fc.before);
+      this.renderer.release(fc.surface);
+    }
     this.floating = null;
     this.touch();
   }
