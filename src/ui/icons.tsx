@@ -268,6 +268,14 @@ export const IconQuickShape = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconSymmetry = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 3v18" strokeDasharray="2.5 2" />
+    <path d="M12 5c-3 1.5-6 3-6 7s3 5.5 6 7" />
+    <path d="M12 5c3 1.5 6 3 6 7s-3 5.5-6 7" strokeOpacity="0.45" />
+  </svg>
+);
+
 export const IconChevronRight = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="m9 5 7 7-7 7" />

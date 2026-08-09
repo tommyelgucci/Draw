@@ -23,6 +23,7 @@
     "test:bone-onion": "node scripts/bone-onion.mjs",
     "test:layer-groups": "node scripts/layer-groups.mjs",
     "test:frame-range-ops": "node scripts/frame-range-ops.mjs",
+    "test:symmetry-draw": "node scripts/symmetry-draw.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",

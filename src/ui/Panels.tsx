@@ -44,6 +44,7 @@ import {
   IconMergeDown,
   IconPlus,
   IconResize,
+  IconSymmetry,
   IconTrash,
   IconVideo,
 } from './icons';
@@ -515,7 +516,8 @@ function TransformRow({
  * Pincel
  * ================================================================== */
 
-export function BrushPanel() {
+export function BrushPanel({ engine }: { engine: Engine | null }) {
+  useEngineRevision(engine);
   const setPanel = useUI((s) => s.setPanel);
   const { brushes, brushIndex, setBrushIndex, updateBrush } = useUI();
   const brush = useActiveBrush();
@@ -689,6 +691,40 @@ export function BrushPanel() {
           el pulso; al 100% casi nada encaja salvo algo ya perfecto. Se activa o desactiva
           del todo con el botón de la barra superior.
           {!quickShapeEnabled && ' (Ahora mismo está desactivado.)'}
+        </p>
+
+        <h3 className="panel__subtitle">Simetría</h3>
+        <div className="panel__actions">
+          <button
+            type="button"
+            className={`action ${engine?.symmetry.vertical ? 'is-active' : ''}`}
+            disabled={!engine}
+            onClick={() => {
+              if (!engine) return;
+              engine.symmetry = { ...engine.symmetry, vertical: !engine.symmetry.vertical };
+              engine.touch();
+            }}
+          >
+            <IconSymmetry size={18} />
+            <span>Vertical</span>
+          </button>
+          <button
+            type="button"
+            className={`action ${engine?.symmetry.horizontal ? 'is-active' : ''}`}
+            disabled={!engine}
+            onClick={() => {
+              if (!engine) return;
+              engine.symmetry = { ...engine.symmetry, horizontal: !engine.symmetry.horizontal };
+              engine.touch();
+            }}
+          >
+            <IconSymmetry size={18} className="icon-symmetry--h" />
+            <span>Horizontal</span>
+          </button>
+        </div>
+        <p className="hint">
+          Cada estampa del trazo se refleja también al otro lado del eje activo, en tiempo
+          real — como dibujar los dos lados de una cara a la vez.
         </p>
       </div>
     </Panel>

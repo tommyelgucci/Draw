@@ -202,6 +202,10 @@ export class Engine {
     opacity: 0.35,
     colored: true,
   };
+  /** Espejo en vivo: cada estampa del trazo se refleja también al otro lado
+   *  del eje (o de los dos) mientras se dibuja — no es un filtro que se
+   *  aplique después, es tinta real puesta en los dos sitios a la vez. */
+  symmetry: { vertical: boolean; horizontal: boolean } = { vertical: false, horizontal: false };
 
   playing = false;
   loop = true;
@@ -1704,21 +1708,43 @@ export class Engine {
       this.strokeRawPoints.push({ x: s.x, y: s.y });
     }
     this.commitStamps(stamps);
-    this.predictedStamps = predicted.length ? this.builder.speculate(predicted) : [];
+    const speculated = predicted.length ? this.builder.speculate(predicted) : [];
+    this.predictedStamps = [...speculated, ...this.mirrorStamps(speculated)];
     this.requestRender();
+  }
+
+  /**
+   * Copias reflejadas de `stamps` según `symmetry` — vertical (eje X en
+   * `doc.width/2`), horizontal (eje Y en `doc.height/2`), o las dos a la
+   * vez, que añade también la copia en diagonal (reflejada en ambos ejes),
+   * como la simetría de 4 vías de Procreate. El ángulo se refleja junto
+   * con la posición: sin eso, una estampa ovalada (pincel achatado)
+   * quedaría girada al revés de como se ve al otro lado del eje.
+   */
+  private mirrorStamps(stamps: Stamp[]): Stamp[] {
+    const { vertical, horizontal } = this.symmetry;
+    if (!vertical && !horizontal) return [];
+    const mirrorV = (s: Stamp): Stamp => ({ ...s, x: this.doc.width - s.x, angle: Math.PI - s.angle });
+    const mirrorH = (s: Stamp): Stamp => ({ ...s, y: this.doc.height - s.y, angle: -s.angle });
+    const out: Stamp[] = [];
+    if (vertical) out.push(...stamps.map(mirrorV));
+    if (horizontal) out.push(...stamps.map(mirrorH));
+    if (vertical && horizontal) out.push(...stamps.map((s) => mirrorH(mirrorV(s))));
+    return out;
   }
 
   private commitStamps(stamps: Stamp[]) {
     if (stamps.length === 0 || !this.strokeCtx) return;
     const wet = this.renderer.scratch('wet');
     const texId = this.strokeCtx.brush.textureId;
+    const allStamps = [...stamps, ...this.mirrorStamps(stamps)];
     this.renderer.drawStamps(
       wet,
-      stamps,
+      allStamps,
       this.strokeCtx.color,
       texId ? this.renderer.getBrushTexture(texId) : undefined,
     );
-    for (const s of stamps) {
+    for (const s of allStamps) {
       expandRect(this.strokeRect, s.x, s.y, s.size * 0.75 + 2);
     }
   }

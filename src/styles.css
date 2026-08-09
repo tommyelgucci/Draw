@@ -1481,6 +1481,23 @@ button:focus-visible {
   color: #fff;
 }
 
+/** Eje(s) del espejo en vivo — puramente informativa, nunca captura toques. */
+.symmetry-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.symmetry-overlay line {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
+}
+
 .sel-overlay {
   position: absolute;
   inset: 0;
@@ -1811,6 +1828,18 @@ button:focus-visible {
 .action:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.action.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+/** Rota el icono de simetría 90° para el botón "Horizontal" — mismo SVG
+ *  que "Vertical", sin duplicar el dibujo. */
+.icon-symmetry--h {
+  transform: rotate(90deg);
 }
 
 .action--danger:hover:not(:disabled) {
