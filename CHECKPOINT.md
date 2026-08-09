@@ -3,7 +3,7 @@
 Estado real del proyecto. Se actualiza al cerrar cada tanda de trabajo.
 
 **Fecha:** 9 de agosto de 2026
-**Rama:** `claude/trace-app-development-2o45w2`
+**Rama:** `claude/trace-drawing-animation-app-ov7j6d`
 **Fase:** 0 cerrada, 1 en curso (ver `RUMBO.md`)
 
 ## Verificación de este checkpoint
@@ -18,8 +18,10 @@ npm run test:reference    TODO EN VERDE   (14 comprobaciones, imagen + vídeo re
 npm run test:brush-texture TODO EN VERDE  (8 comprobaciones)
 npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borran de verdad)
 npm run test:video        TODO EN VERDE   (13 comprobaciones; el vídeo se decodifica y se le ven los trazos)
+npm run test:canvas-size  TODO EN VERDE   (redimensionar sin perder tinta, controles legibles en tablet)
+npm run test:quickshape   TODO EN VERDE   (24 comprobaciones: línea, elipse, rectángulo, triángulo, polígono)
 npx oxlint                sin warnings
-npm run build             323 kB / 101 kB gzip
+npm run build             408 kB / 124 kB gzip
 ```
 
 ## Funciona
@@ -39,6 +41,21 @@ npm run build             323 kB / 101 kB gzip
 - Bote de relleno que respeta líneas de otras capas, con crecimiento
   configurable contra la orla del antialias.
 - Cuentagotas sobre la imagen compuesta.
+- **QuickShape**: mantener el lápiz quieto al final de un trazo lo reconoce
+  como línea, elipse/círculo, rectángulo, triángulo o polígono regular, al
+  estilo Procreate. `core/quickshape.ts` ajusta cada primitiva por separado
+  (no hay reconocedor de gestos genérico: hacía falta el centro, el radio o
+  las esquinas exactas para poder dibujar y editar la forma, no sólo
+  reconocerla) y compara el error de la hipótesis curva contra la del
+  polígono en vez de decidir en cascada, para que afinar un umbral no voltee
+  en silencio la clasificación del otro. Los umbrales tienen un extremo laxo
+  y uno estricto calibrados con dedo real en pantalla táctil, no con ratón:
+  un círculo dibujado a mano casi nunca cierra el lazo justo donde empezó.
+  Precisión ajustable por quien dibuja. Mientras el lápiz sigue apoyado se
+  puede seguir arrastrando para ajustar la forma, y un segundo dedo fuerza
+  proporción exacta más rotación en incrementos de 15°; al soltar entra en
+  un modo de edición con nodos arrastrables antes de confirmar o cancelar
+  —el mismo ciclo lift/edit/commit que ya usaba la selección flotante—.
 - Texturas de punta: cuatro máscaras integradas (grano, tiza, lienzo,
   salpicadura) además de la punta lisa de siempre, seleccionables por pincel.
   El generador de píxeles (`core/brushTexture.ts`) es puro cálculo sin DOM:
@@ -103,11 +120,22 @@ npm run build             323 kB / 101 kB gzip
   graba con `MediaRecorder` en tiempo real. La interfaz avisa cuál toca antes
   de empezar, porque la última tarda lo que dure la animación.
 
+### Lienzo
+- El tamaño se cambia cuando se quiera desde *Proyecto → Tamaño del lienzo*,
+  con seis medidas predefinidas o a medida y anclaje de nueve posiciones. Los
+  cels se sacan a memoria de CPU antes de tocar el tamaño del documento —en
+  cuanto cambia, las texturas se reservan con las medidas nuevas y lo de
+  dentro se pierde— y se recolocan según el anclaje. Al encoger se recorta lo
+  que sobresalga; deshacer lo devuelve entero.
+
 ### Interfaz
 - Gestos de Procreate: dos dedos navegan, toque de dos o tres dedos deshace o
   rehace, rechazo de palma tras usar el lápiz.
 - Maquetación en rejilla para móvil: lienzo, botonera y línea de tiempo
   apilados en flujo real, sin posiciones absolutas adivinadas.
+- Acciones de capa (nueva, duplicar, combinar, eliminar, ocultar, bloquear)
+  con su nombre a la vista, no sólo en `title`: en una tablet no hay puntero,
+  así que un tooltip nunca llega a mostrarse.
 - PWA instalable con service worker.
 
 ## Rendimiento resuelto en esta tanda
@@ -162,21 +190,55 @@ Todos salieron de mirar capturas, no del compilador:
    Encontrado por `test:brushes`, que dejó de fiarse del compilador y miró
    los píxeles resultantes. Ahora `drawStamps` siempre fija la unidad 0,
    incluso a `null` cuando no hay textura.
+10. **Duplicar, ocultar y bloquear eran indescifrables en un iPad.** Existían,
+    pero como iconos mudos cuyo único texto vivía en `title`, que no se
+    muestra nunca sin puntero. Encontrado dibujando en un iPad real, no con
+    ningún test.
+11. **El tamaño del lienzo no se podía cambiar.** Estaba fijo desde la
+    creación del documento; el panel sólo lo mostraba como dato. Mismo origen
+    que el anterior: sólo aparece al usar la app de verdad.
+12. **QuickShape calibrado con ratón fallaba con dedo real**: un círculo
+    dibujado con el dedo casi nunca cierra el lazo justo donde empezó, y una
+    "línea recta" tiembla bastante más del 6 % de su longitud que asumía la
+    primera pasada. Los umbrales de aceptación se recalibraron con touch real
+    en pantalla, no con trazos de ratón en mesa.
+13. **Un rectángulo con lados algo planos y un pequeño cruce al cerrar el
+    lazo no se reconocía.** El ajuste de elipse y de polígono usaba el error
+    *máximo* entre todos los puntos: un solo punto raro (el cruce al cerrar)
+    bastaba para tumbar un ajuste que era bueno en el resto. Reportado con
+    una captura de pantalla real, no encontrado por un test.
+14. **Dos sesiones construyeron QuickShape en paralelo**, sin saber una de la
+    otra. La de esta rama era más simple (línea, rectángulo, elipse, sin
+    edición); la otra reconocía también triángulo y polígono, con edición de
+    nodos, modificador de dos dedos y cinco commits de pulido sobre reportes
+    reales. Se descartó la más simple y se adoptó la más completa; las nueve
+    suites de test pasan igual sobre el resultado fusionado.
+15. **Los commits de esa otra sesión volvían a ir a nombre de `Claude
+    <noreply@anthropic.com>`**, pese a la regla explícita en `CLAUDE.md`. Ya
+    había pasado una vez con un lote anterior de PRs (ver el historial de
+    `RUMBO.md`/commits de esta rama). Se reescribió la autoría de los 14
+    commits nuevos por segunda vez, con el mismo procedimiento verificado
+    (`merge-base --is-ancestor`, `diff --stat` vacío antes de forzar el
+    push). La regla en `CLAUDE.md` sigue siendo la salvaguarda correcta; el
+    fallo está en que la sesión de turno no la aplicó, no en la regla misma.
 
 ## Lo siguiente
 
-Con el vídeo exportando, la Fase 1 sólo tiene pendiente lo que no se puede
-hacer desde aquí:
+Con QuickShape (línea, elipse, rectángulo, triángulo, polígono, con edición
+de nodos) y el tamaño de lienzo resueltos, la Fase 1 sólo tiene pendiente lo
+que no se puede hacer desde aquí:
 
-1. **Probarlo en un iPad de verdad.** Todo está verificado con tests y
-   capturas, nunca dibujando. Es además la única forma de saber si la latencia
-   molesta, que es la decisión que gobierna el resto del rumbo.
+1. **Seguir usándolo en un iPad de verdad** y reportando lo que no se
+   encuentra o no funciona como se espera — así salieron los bugs de
+   interfaz y de calibración táctil de esta tanda, y ningún test los habría
+   visto antes que un dedo real.
 2. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
    memoria en el dispositivo, no en el emulador.
 3. **Verificar la ruta MP4.** El Chromium de las pruebas no codifica H.264, así
    que sólo se ha ejercitado la ruta VP9/WebM. El código de MP4 compila y usa
    un muxer probado, pero no se ha visto producir un archivo aquí; en Safari,
    que sí trae H.264, debería tomar esa rama.
+4. **Historial persistente y capas en disco (OPFS)**, según `RUMBO.md`.
 
 ## Deuda conocida
 

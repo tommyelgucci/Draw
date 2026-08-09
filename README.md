@@ -35,6 +35,12 @@ probar un cambio abriendo una URL.
 - Bote de relleno que respeta las líneas dibujadas en otras capas, con
   crecimiento configurable para que no quede orla blanca.
 - Cuentagotas sobre la imagen compuesta.
+- QuickShape: mantén el lápiz quieto al final de un trazo y se reconoce como
+  línea, elipse, rectángulo, triángulo o polígono regular. Mientras el lápiz
+  sigue apoyado se puede seguir ajustando, y un segundo dedo fuerza
+  proporción exacta más rotación en pasos de 15°; al soltar entra en un modo
+  de edición con nodos arrastrables antes de confirmar. Se activa o desactiva
+  desde la barra superior.
 
 **Selección y transformación**
 
@@ -186,6 +192,7 @@ npm run test:smoke        # dibujo, deshacer, sostenido, onion, capas, export
 npm run test:selection    # selección, recorte, transformación libre
 npm run test:video        # exportación de vídeo, decodificada y comprobada
 npm run test:canvas-size  # redimensionado, anclaje y controles de capa
+npm run test:quickshape   # reconocimiento de forma y edición de nodos
 npm run test:responsive   # maquetación en iPhone e iPad
 ```
 
@@ -201,6 +208,7 @@ src/
     types.ts      tipos compartidos, rectángulos, modos de fusión
     math.ts       matrices 3x3, color, filtro One Euro
     brush.ts      presets y generación de estampas
+    quickshape.ts reconocimiento geométrico y ajuste de línea/elipse/polígono
     document.ts   capas, cels, canales animados, grupos de recorte
     selection.ts  rasterizado de máscaras de selección
     history.ts    pila de deshacer con presupuesto de memoria
