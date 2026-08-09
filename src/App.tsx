@@ -7,6 +7,7 @@ import { PoseLibraryPanel } from './ui/PoseLibraryPanel';
 import { SelectionOverlay } from './ui/SelectionOverlay';
 import { QuickShapeOverlay } from './ui/QuickShapeOverlay';
 import { BoneGizmoOverlay } from './ui/BoneGizmoOverlay';
+import { LassoOverlay } from './ui/LassoOverlay';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -99,9 +100,11 @@ export default function App() {
       switch (e.key) {
         case 'Enter':
           if (engine.floating) engine.commitFloating();
+          else if (engine.pendingLasso) engine.commitLasso();
           break;
         case 'Escape':
           if (engine.floating) engine.cancelFloating();
+          else if (engine.pendingLasso) engine.cancelLasso();
           else if (engine.selection.active) engine.clearSelection();
           break;
         case 'Delete':
@@ -192,6 +195,7 @@ export default function App() {
       {engine && <SelectionOverlay engine={engine} />}
       {engine && <QuickShapeOverlay engine={engine} />}
       {engine && <BoneGizmoOverlay engine={engine} />}
+      {engine && <LassoOverlay engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 

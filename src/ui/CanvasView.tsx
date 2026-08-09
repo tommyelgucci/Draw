@@ -90,6 +90,13 @@ export function CanvasView() {
     startLocal: Vec2;
     wasEmptyCanvas: boolean;
   } | null>(null);
+  /** Lazo estilo Procreate: el gesto vive en `engine.pendingLasso` (sobrevive
+   *  a que este dedo se suelte); estos refs sólo distinguen, para EL TOQUE
+   *  ACTUAL, si terminó siendo un tap (vértice recto) o un arrastre (mano
+   *  alzada) — misma disyuntiva de `boneDrag`, mismo motivo. */
+  const lassoGestureId = useRef<number | null>(null);
+  const lassoGestureStart = useRef<{ sample: Vec2; local: Vec2 } | null>(null);
+  const lassoDragging = useRef(false);
 
   const setEngine = useUI((s) => s.setEngine);
   const brush = useActiveBrush();
@@ -422,6 +429,14 @@ export function CanvasView() {
         selectingId.current = null;
         selectPath.current = null;
       }
+      if (lassoGestureId.current !== null) {
+        // Un segundo dedo aterrizando es un gesto de vista, no el fin del
+        // lazo: sólo se suelta el seguimiento del toque actual.
+        // `engine.pendingLasso` se queda intacto, listo para retomar.
+        lassoGestureId.current = null;
+        lassoGestureStart.current = null;
+        lassoDragging.current = false;
+      }
       if (boneDragId.current !== null) {
         engine.cancelBoneDrag(boneDrag.current?.createdSkeleton ?? false);
         boneDragId.current = null;
@@ -438,14 +453,27 @@ export function CanvasView() {
 
     const sample = toSample(e);
 
-    if (tool === 'selectRect' || tool === 'selectLasso') {
+    if (tool === 'selectRect') {
       engine.beginSelectionDrag();
       selectPath.current = {
-        shape: tool === 'selectRect' ? 'rect' : 'lasso',
+        shape: 'rect',
         points: [{ x: sample.x, y: sample.y }],
         mode: uiRef.current.selectionMode,
       };
       selectingId.current = e.pointerId;
+      return;
+    }
+
+    if (tool === 'selectLasso') {
+      // El nodo de origen y la barra flotante (LassoOverlay) hacen
+      // stopPropagation y capturan su propio puntero, así que este bloque
+      // sólo ve toques en lienzo vacío — nunca el toque que cierra el lazo
+      // ahí. `beginLasso` es idempotente: si ya hay un lazo en marcha
+      // (retomado tras soltar el dedo), no lo reinicia.
+      engine.beginLasso(uiRef.current.selectionMode);
+      lassoGestureId.current = e.pointerId;
+      lassoGestureStart.current = { sample: { x: sample.x, y: sample.y }, local };
+      lassoDragging.current = false;
       return;
     }
 
@@ -526,6 +554,25 @@ export function CanvasView() {
       return;
     }
 
+    if (lassoGestureId.current === e.pointerId && lassoGestureStart.current) {
+      const start = lassoGestureStart.current;
+      const s = toSample(e);
+      if (!lassoDragging.current) {
+        // Por debajo del umbral todavía podría acabar siendo un toque
+        // suelto (vértice recto); no se añade ningún punto de mano alzada
+        // hasta que el gesto demuestra que es un arrastre de verdad.
+        const local = localPoint(e);
+        const movedLocal = Math.hypot(local.x - start.local.x, local.y - start.local.y);
+        if (movedLocal <= 3) return;
+        lassoDragging.current = true;
+        // El primer punto del tramo es de donde bajó el dedo, no de aquí —
+        // si no, se perdería el segmento inicial del arrastre.
+        engine.lassoAddPoint(start.sample);
+      }
+      engine.lassoAddPoint({ x: s.x, y: s.y });
+      return;
+    }
+
     if (selectingId.current === e.pointerId && selectPath.current) {
       const path = selectPath.current;
       const s = toSample(e);
@@ -581,6 +628,17 @@ export function CanvasView() {
       if (engine.pendingQuickShape) engine.finishQuickShapeHold();
       else engine.endStroke();
       drawingId.current = null;
+    }
+    if (lassoGestureId.current === e.pointerId && lassoGestureStart.current) {
+      const start = lassoGestureStart.current;
+      const wasDragging = lassoDragging.current;
+      lassoGestureId.current = null;
+      lassoGestureStart.current = null;
+      lassoDragging.current = false;
+      // Un toque suelto (sin arrastre) deja un vértice recto — así se
+      // combinan tramos poligonales y de mano alzada en el mismo lazo. El
+      // arrastre ya fue añadiendo sus propios puntos durante el move.
+      if (!wasDragging) engine.lassoAddVertex(start.sample);
     }
     if (selectingId.current === e.pointerId) {
       const path = selectPath.current;

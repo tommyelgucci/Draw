@@ -1518,6 +1518,40 @@ button:focus-visible {
 }
 
 /**
+ * Lazo estilo Procreate: mismo molde que `.sel-overlay`/`.sel-handle` — el
+ * contorno es sólo lectura (`polyline` en vez de `polygon` cerrado, porque
+ * el gesto no está cerrado todavía), y el nodo de origen es el único
+ * elemento que captura punteros aparte de la barra.
+ */
+.lasso-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+}
+
+.lasso-outline polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.lasso-origin {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/**
  * Gizmo del modo Viewport (rig): mismo molde que `.sel-overlay`/`.sel-handle`
  * — contenedor que deja pasar los eventos, tiradores que los capturan.
  */

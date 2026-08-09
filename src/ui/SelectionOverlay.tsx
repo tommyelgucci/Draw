@@ -33,6 +33,11 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
   const floating = engine.floating;
   const hasSelection = engine.selection.active;
 
+  // Mientras el lazo de Procreate está en marcha, `engine.selection` ya
+  // refleja la vista previa del polígono a medio cerrar (para que se vea
+  // rellena mientras se dibuja) pero todavía no es una selección de verdad
+  // — su barra de acciones (Transformar/Rellenar/…) la pinta `LassoOverlay`.
+  if (engine.pendingLasso) return null;
   if (!hasSelection && !floating) return null;
 
   /* ---------------- barra de acciones sobre la selección ---------------- */

@@ -133,6 +133,19 @@ export interface SelectionState {
 }
 
 /**
+ * Lazo estilo Procreate: sobrevive entre subidas y bajadas del dedo, así que
+ * no puede vivir en un ref de React (muere en el primer pointerup). Cada
+ * arrastre añade puntos en mano alzada; cada toque suelto (sin arrastre)
+ * añade un único vértice recto — así se combinan tramos curvos y poligonales
+ * en el mismo lazo, igual que en Procreate. Se cierra tocando el nodo de
+ * origen o aceptando desde la barra flotante.
+ */
+export interface PendingLasso {
+  points: Vec2[];
+  mode: SelectionMode;
+}
+
+/**
  * Píxeles levantados de un cel que se están moviendo, escalando o girando.
  * Mientras existe, el cel tiene un hueco donde estaban.
  */
@@ -177,6 +190,7 @@ export class Engine {
   selection: SelectionState = { active: false, bounds: emptyRect() };
   floating: FloatingSelection | null = null;
   pendingQuickShape: PendingQuickShape | null = null;
+  pendingLasso: PendingLasso | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
 
@@ -2208,6 +2222,57 @@ export class Engine {
     if (points.length === 0) return;
     this.restoreSelectionBackup();
     rasterizeSelection(this.selectionSurfaceCanvas(), shape, points, mode);
+    this.commitSelectionCanvas();
+  }
+
+  /**
+   * Arranca (o retoma) un lazo estilo Procreate: a diferencia de
+   * `beginSelectionDrag`, sobrevive a que el dedo se levante — el estado no
+   * puede vivir en un ref de React porque muere en el primer `pointerup`.
+   * Idempotente a propósito: `CanvasView` llama esto en cada toque nuevo del
+   * gesto sin comprobar antes si ya hay uno en marcha, igual que
+   * `beginBoneDrag`/`beginStroke` asumen su propio guardado de estado.
+   */
+  beginLasso(mode: SelectionMode) {
+    if (this.pendingLasso) return;
+    this.beginSelectionDrag();
+    this.pendingLasso = { points: [], mode };
+  }
+
+  /** Punto de un tramo en mano alzada — filtra por distancia, igual que el
+   *  lazo de un solo gesto de antes, para no rasterizar en cada píxel. */
+  lassoAddPoint(point: Vec2) {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    const last = pending.points[pending.points.length - 1];
+    if (last && Math.hypot(point.x - last.x, point.y - last.y) <= 1.5) return;
+    pending.points.push(point);
+    this.previewSelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Vértice de un toque suelto (modo polígono) — siempre se añade, sin
+   *  filtro de distancia: un toque quieto debe dejar esquina igualmente. */
+  lassoAddVertex(point: Vec2) {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    pending.points.push(point);
+    this.previewSelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Cierra el lazo — desde el nodo de origen o la barra flotante. */
+  commitLasso() {
+    const pending = this.pendingLasso;
+    if (!pending) return;
+    this.pendingLasso = null;
+    if (pending.points.length < 3) this.clearSelection();
+    else this.applySelectionShape('lasso', pending.points, pending.mode);
+  }
+
+  /** Descarta el lazo entero y vuelve a la selección previa al gesto. */
+  cancelLasso() {
+    if (!this.pendingLasso) return;
+    this.pendingLasso = null;
+    this.restoreSelectionBackup();
     this.commitSelectionCanvas();
   }
 
