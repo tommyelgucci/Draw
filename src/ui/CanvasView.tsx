@@ -450,6 +450,18 @@ export function CanvasView() {
     }
     if (tool === 'transform') return;
 
+    if (tool === 'rig') {
+      // Los tiradores del gizmo (BoneGizmoOverlay) hacen stopPropagation y
+      // capturan su propio puntero, así que este bloque sólo ve toques en
+      // lienzo vacío: hueso bajo el dedo si lo hay, si no, deseleccionar.
+      const skel = engine.doc.skeletons[0];
+      const hit = skel
+        ? engine.hitTestBone(skel.id, { x: sample.x, y: sample.y }, 14 / engine.view.zoom)
+        : null;
+      uiRef.current.setSelectedBoneId(hit ? hit.id : null);
+      return;
+    }
+
     if (engine.beginStroke(sample, { brush: brushRef.current, color: uiRef.current.color })) {
       drawingId.current = e.pointerId;
       updateDwell(e.pointerId, local, sample.time);

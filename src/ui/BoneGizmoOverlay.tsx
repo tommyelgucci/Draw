@@ -1,0 +1,165 @@
+import { useRef } from 'react';
+import type { Engine } from '../core/engine';
+import { clamp } from '../core/math';
+import type { Bone } from '../core/rig';
+import type { Vec2 } from '../core/types';
+import { useEngineRevision, useUI } from '../state/store';
+
+type DragKind = 'move' | 'rotate' | 'scale';
+
+interface DragState {
+  kind: DragKind;
+  boneId: string;
+  headScreen: Vec2;
+  startDistance: number;
+  startScaleX: number;
+  startScaleY: number;
+}
+
+/**
+ * Tiradores del modo Viewport: mover, rotar y escalar huesos, en DOM sobre
+ * el lienzo — mismo patrón que `SelectionOverlay`. Cada tirador hace
+ * `stopPropagation` y captura su propio puntero, así que `CanvasView` nunca
+ * ve esos toques: el pipeline de dibujo y el de rig son mutuamente
+ * excluyentes por z-order y captura, no por un flag de modo que sincronizar.
+ */
+export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
+  useEngineRevision(engine);
+  const tool = useUI((s) => s.tool);
+  const selectedBoneId = useUI((s) => s.selectedBoneId);
+  const setSelectedBoneId = useUI((s) => s.setSelectedBoneId);
+  const drag = useRef<DragState | null>(null);
+
+  if (tool !== 'rig') return null;
+  // Sólo se soporta interactuar con un esqueleto activo por documento —
+  // varios personajes en el mismo lienzo llegarán cuando haga falta.
+  const skeleton = engine.doc.skeletons[0];
+  if (!skeleton) return null;
+
+  const endpoints = engine.boneEndpoints(skeleton.id);
+  const selected = endpoints.find((ep) => ep.bone.id === selectedBoneId) ?? null;
+
+  const localPoint = (e: React.PointerEvent): Vec2 => {
+    const rect = engine.renderer.canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const begin = (kind: DragKind, bone: Bone, headScreen: Vec2) => (e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setSelectedBoneId(bone.id);
+    const local = localPoint(e);
+    drag.current = {
+      kind,
+      boneId: bone.id,
+      headScreen,
+      startDistance: Math.hypot(local.x - headScreen.x, local.y - headScreen.y) || 1,
+      startScaleX: engine.getBoneValue(bone, 'scaleX'),
+      startScaleY: engine.getBoneValue(bone, 'scaleY'),
+    };
+  };
+
+  const move = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    e.stopPropagation();
+    const bone = skeleton.bones.find((b) => b.id === d.boneId);
+    if (!bone) return;
+    const local = localPoint(e);
+
+    if (d.kind === 'move') {
+      const offset = engine.boneOffsetForWorldPoint(skeleton.id, bone, engine.screenToDoc(local));
+      engine.setBonePose(skeleton.id, bone.id, offset);
+      return;
+    }
+    if (d.kind === 'rotate') {
+      const next = engine.boneRotationForWorldPoint(skeleton.id, bone, engine.screenToDoc(local));
+      const current = engine.getBoneValue(bone, 'rotation');
+      let delta = next - current;
+      // Normaliza el salto de ±π al cruzar el eje, igual que el gesto de dos dedos.
+      if (delta > Math.PI) delta -= Math.PI * 2;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      engine.setBonePose(skeleton.id, bone.id, { rotation: current + delta });
+      return;
+    }
+    const dist = Math.hypot(local.x - d.headScreen.x, local.y - d.headScreen.y);
+    const ratio = clamp(dist / d.startDistance, 0.05, 20);
+    engine.setBonePose(skeleton.id, bone.id, {
+      scaleX: d.startScaleX * ratio,
+      scaleY: d.startScaleY * ratio,
+    });
+  };
+
+  const end = (e: React.PointerEvent) => {
+    drag.current = null;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+  };
+
+  let handles: React.ReactNode = null;
+  if (selected) {
+    const headScreen = engine.docToScreen(selected.head);
+    const tailScreen = engine.docToScreen(selected.tail);
+    const dx = tailScreen.x - headScreen.x;
+    const dy = tailScreen.y - headScreen.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Perpendicular a la cola, como el tirador de giro de SelectionOverlay
+    // sale perpendicular al borde superior: evita que se solape con "rotar".
+    const scaleHandle = {
+      x: tailScreen.x + (-dy / len) * 18,
+      y: tailScreen.y + (dx / len) * 18,
+    };
+    handles = (
+      <>
+        <button
+          type="button"
+          className="bone-handle bone-handle--move"
+          style={{ left: headScreen.x, top: headScreen.y }}
+          onPointerDown={begin('move', selected.bone, headScreen)}
+          onPointerMove={move}
+          onPointerUp={end}
+          aria-label={`Mover ${selected.bone.name}`}
+        />
+        <button
+          type="button"
+          className="bone-handle bone-handle--rotate"
+          style={{ left: tailScreen.x, top: tailScreen.y }}
+          onPointerDown={begin('rotate', selected.bone, headScreen)}
+          onPointerMove={move}
+          onPointerUp={end}
+          aria-label={`Rotar ${selected.bone.name}`}
+        />
+        <button
+          type="button"
+          className="bone-handle bone-handle--scale"
+          style={{ left: scaleHandle.x, top: scaleHandle.y }}
+          onPointerDown={begin('scale', selected.bone, headScreen)}
+          onPointerMove={move}
+          onPointerUp={end}
+          aria-label={`Escalar ${selected.bone.name}`}
+        />
+      </>
+    );
+  }
+
+  return (
+    <div className="bone-overlay">
+      <svg className="bone-outline" aria-hidden="true">
+        {endpoints.map(({ bone, head, tail }) => {
+          const a = engine.docToScreen(head);
+          const b = engine.docToScreen(tail);
+          return (
+            <line
+              key={bone.id}
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              className={bone.id === selectedBoneId ? 'is-selected' : undefined}
+            />
+          );
+        })}
+      </svg>
+      {handles}
+    </div>
+  );
+}

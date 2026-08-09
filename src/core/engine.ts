@@ -19,9 +19,15 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  boneRigidMatrix,
   createBone,
+  evaluatePoseWorldMatrices,
+  findBone,
+  hitTestBone as hitTestBoneInSkeleton,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
+  worldPointToBoneOffset,
+  worldPointToBoneRotation,
   type Bone,
   type LayerRig,
   type Skeleton,
@@ -34,7 +40,16 @@ import {
   type SelectionMode,
   type SelectionShape,
 } from './selection';
-import { clamp, mat3Identity, mat3Invert, mat3Multiply, snapAngle, type Mat3 } from './math';
+import {
+  clamp,
+  mat3Apply,
+  mat3FromTRS,
+  mat3Identity,
+  mat3Invert,
+  mat3Multiply,
+  snapAngle,
+  type Mat3,
+} from './math';
 import {
   BLEND_INDEX,
   clampRect,
@@ -834,6 +849,110 @@ export class Engine {
     });
   }
 
+  /** Cabeza y cola de cada hueso en `frame`, en espacio documento — lo que
+   *  necesita el gizmo del modo Viewport para dibujarse y para convertir
+   *  arrastres de pantalla en valores de `track`. */
+  boneEndpoints(skeletonId: string): { bone: Bone; head: Vec2; tail: Vec2 }[] {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return [];
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return skel.bones.map((bone) => {
+      const m = matrices.get(bone.id) ?? mat3Identity();
+      return { bone, head: mat3Apply(m, { x: 0, y: 0 }), tail: mat3Apply(m, { x: bone.length, y: 0 }) };
+    });
+  }
+
+  /** Mundo del padre de un hueso en `frame`, o identidad si es raíz — lo
+   *  que necesita `worldPointToBoneOffset`/`worldPointToBoneRotation` para
+   *  traducir un punto de pantalla a valores de `track`. */
+  boneParentWorldMatrix(skeletonId: string, boneId: string): Mat3 {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone || !bone.parentId) return mat3Identity();
+    return evaluatePoseWorldMatrices(skel, this.currentFrame).get(bone.parentId) ?? mat3Identity();
+  }
+
+  hitTestBone(skeletonId: string, point: Vec2, tolerance = 12): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return hitTestBoneInSkeleton(skel, matrices, point, tolerance);
+  }
+
+  getBoneValue(bone: Bone, prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'): number {
+    return sampleChannel(bone.track[prop], this.currentFrame);
+  }
+
+  /**
+   * Mueve/rota/escala un hueso. Sin `history.run`, a propósito: igual que
+   * `setTransformValue`, se llama en cada muestra de un arrastre continuo, y
+   * envolver cada una en un Command inundaría la pila de deshacer con pasos
+   * intermedios que nadie quiere deshacer uno a uno.
+   */
+  setBonePose(
+    skeletonId: string,
+    boneId: string,
+    patch: Partial<{ x: number; y: number; rotation: number; scaleX: number; scaleY: number }>,
+  ) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!bone) return;
+    for (const prop of Object.keys(patch) as (keyof typeof patch)[]) {
+      const value = patch[prop];
+      if (value === undefined) continue;
+      const ch = bone.track[prop];
+      if (ch.keys.length > 0) setKeyframe(ch, this.currentFrame, value);
+      else ch.base = value;
+    }
+    this.touch();
+  }
+
+  toggleBoneKeyframe(
+    skeletonId: string,
+    boneId: string,
+    prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY',
+  ) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!bone) return;
+    const ch = bone.track[prop];
+    const frame = this.currentFrame;
+    const existing = ch.keys.find((k) => k.frame === frame);
+    const before = ch.keys.slice();
+    const value = sampleChannel(ch, frame);
+    this.history.run({
+      label: existing ? 'Quitar keyframe de hueso' : 'Añadir keyframe de hueso',
+      redo: () => {
+        if (existing) ch.keys = ch.keys.filter((k) => k.frame !== frame);
+        else setKeyframe(ch, frame, value);
+        this.touch();
+      },
+      undo: () => {
+        ch.keys = before.slice();
+        this.touch();
+      },
+    });
+  }
+
+  /** Punto de `worldPoint` traducido a los valores (x,y) de `track` que
+   *  pondrían la cabeza del hueso ahí — envuelve `worldPointToBoneOffset`
+   *  con el mundo del padre resuelto en `frame`. */
+  boneOffsetForWorldPoint(skeletonId: string, bone: Bone, worldPoint: Vec2): Vec2 {
+    return worldPointToBoneOffset(bone, this.boneParentWorldMatrix(skeletonId, bone.id), worldPoint);
+  }
+
+  /** Rotación de `track` que apuntaría la cola del hueso hacia `worldPoint`,
+   *  dada su posición de cabeza actual. */
+  boneRotationForWorldPoint(skeletonId: string, bone: Bone, worldPoint: Vec2): number {
+    const offset = { x: this.getBoneValue(bone, 'x'), y: this.getBoneValue(bone, 'y') };
+    return worldPointToBoneRotation(
+      bone,
+      this.boneParentWorldMatrix(skeletonId, bone.id),
+      offset,
+      worldPoint,
+    );
+  }
+
   /* ---------------------------------------------------------------- *
    * Trazo
    * ---------------------------------------------------------------- */
@@ -1360,6 +1479,26 @@ export class Engine {
     }
 
     if (!src) return null;
+
+    // Una capa riggeada sigue a su hueso en vez de su propio TransformTrack:
+    // son dos formas de mover la misma capa que no tiene sentido combinar.
+    if (layer.rig?.boneId) {
+      const skel = this.doc.skeletons.find((s) => s.id === layer.rig!.skeletonId);
+      if (skel) {
+        // `drawOver` espera una matriz "quad unidad -> destino" (por eso el
+        // resto del motor multiplica por doc.width/doc.height antes de
+        // pasarla) — la matriz de piel opera en píxeles de documento, así
+        // que hay que anteponerle ese mismo paso quad->documento.
+        const skin = boneRigidMatrix(skel, layer.rig.boneId, frame);
+        const unitToDoc = mat3FromTRS(0, 0, 0, this.doc.width, this.doc.height);
+        const m = mat3Multiply(skin, unitToDoc);
+        const out = this.renderer.scratch('xf2');
+        this.renderer.clear(out);
+        this.renderer.drawOver(out, src, 1, m);
+        return out;
+      }
+    }
+
     if (transformIsIdentity(layer.transform, frame)) return src;
 
     const tx = sampleChannel(layer.transform.x, frame);

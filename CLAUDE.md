@@ -135,6 +135,18 @@ Cada capa lleva las dos cosas a la vez, y hay que respetarlo:
   ya repartió el espacio. Por eso existe `syncViewport()`.
 - Las pruebas usan un Chromium con SwiftShader; el render es correcto pero
   lento. No midas rendimiento absoluto ahí, sólo comparativas.
+- **`page.screenshot()` y `canvas.toDataURL()` del lienzo interactivo pueden
+  quedarse con el fotograma anterior.** El contexto WebGL usa
+  `preserveDrawingBuffer: false`; tras un cambio que sólo dispara un
+  `render()` (p. ej. posar un hueso) y no una animación continua, ni el
+  compositor de Chromium ni `toDataURL()` recogen ese fotograma de forma
+  fiable en este entorno — devuelven el último que sí llegó a
+  "presentarse". `gl.readPixels()` sí lee el búfer real en el momento y
+  coincide con `engine.renderFrameToImageData()` (el mismo camino
+  determinista que usa la exportación). Para verificar o capturar un
+  cambio visual tras una mutación puntual, usa uno de esos dos caminos,
+  no una captura de pantalla del lienzo en vivo — ver
+  `scripts/rig-viewport.mjs` (`inkCountInRect`, `documentSnapshot`).
 
 ## Git
 

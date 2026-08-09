@@ -5,6 +5,7 @@ import { Timeline } from './ui/Timeline';
 import { BrushPanel, ColorPanel, ExportPanel, LayersPanel } from './ui/Panels';
 import { SelectionOverlay } from './ui/SelectionOverlay';
 import { QuickShapeOverlay } from './ui/QuickShapeOverlay';
+import { BoneGizmoOverlay } from './ui/BoneGizmoOverlay';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -189,6 +190,7 @@ export default function App() {
       <CanvasView />
       {engine && <SelectionOverlay engine={engine} />}
       {engine && <QuickShapeOverlay engine={engine} />}
+      {engine && <BoneGizmoOverlay engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 

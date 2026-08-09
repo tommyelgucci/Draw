@@ -1,5 +1,5 @@
 import { channel, sampleChannel, uid, type Channel } from './document';
-import { mat3FromTRS, mat3Identity, mat3Invert, mat3Multiply, type Mat3 } from './math';
+import { mat3Apply, mat3FromTRS, mat3Identity, mat3Invert, mat3Multiply, type Mat3 } from './math';
 import type { Vec2 } from './types';
 
 /**
@@ -169,6 +169,43 @@ export function evaluateSkinMatrices(skel: Skeleton, frame: number): Map<string,
  */
 export function boneRigidMatrix(skel: Skeleton, boneId: string, frame: number): Mat3 {
   return evaluateSkinMatrices(skel, frame).get(boneId) ?? mat3Identity();
+}
+
+/**
+ * Traduce un punto en espacio documento a los valores (x,y) de `track` que
+ * pondrían la cabeza del hueso exactamente ahí, dado el mundo actual de su
+ * padre (`parentWorld`, ya en `frame`). Es la inversa de `poseLocalMatrix`
+ * aplicada al origen: primero pasa el punto al espacio local del padre,
+ * luego deshace la rotación de reposo, porque la traslación de `track` se
+ * aplica ANTES de esa rotación — ver `poseLocalMatrix`. Con esto el gizmo
+ * de "mover" puede colocar la cabeza exactamente bajo el dedo sin tener que
+ * arrastrar por delta acumulado.
+ */
+export function worldPointToBoneOffset(bone: Bone, parentWorld: Mat3, worldPoint: Vec2): Vec2 {
+  const local = mat3Apply(mat3Invert(parentWorld), worldPoint);
+  const restRot = mat3FromTRS(0, 0, bone.restRotation, 1, 1);
+  return mat3Apply(mat3Invert(restRot), { x: local.x - bone.restX, y: local.y - bone.restY });
+}
+
+/**
+ * Rotación de `track` que apuntaría la cola del hueso hacia `worldPoint`,
+ * dada su posición de cabeza actual (`currentOffset` = track.x/y ya
+ * muestreados). No normaliza el salto de ±π al cruzar el eje — eso es
+ * responsabilidad de quien arrastra el gizmo frame a frame, comparando
+ * contra la rotación anterior, igual que ya hace el gesto de dos dedos.
+ */
+export function worldPointToBoneRotation(
+  bone: Bone,
+  parentWorld: Mat3,
+  currentOffset: Vec2,
+  worldPoint: Vec2,
+): number {
+  const local = mat3Apply(mat3Invert(parentWorld), worldPoint);
+  const restRot = mat3FromTRS(0, 0, bone.restRotation, 1, 1);
+  const head = mat3Apply(restRot, currentOffset);
+  const headX = head.x + bone.restX;
+  const headY = head.y + bone.restY;
+  return Math.atan2(local.y - headY, local.x - headX) - bone.restRotation;
 }
 
 function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {

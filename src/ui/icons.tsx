@@ -54,6 +54,16 @@ export const IconTransform = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconBone = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="5" cy="19" r="2" />
+    <circle cx="12" cy="12" r="1.8" />
+    <circle cx="19" cy="5" r="2" />
+    <path d="M6.4 17.6 10.6 13.4" />
+    <path d="M13.4 10.6 17.6 6.4" />
+  </svg>
+);
+
 export const IconHand = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M8 12V5.5a1.5 1.5 0 0 1 3 0V11" />

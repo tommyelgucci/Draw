@@ -14,6 +14,7 @@ export type Tool =
   | 'selectRect'
   | 'selectLasso'
   | 'transform'
+  | 'rig'
   | 'pan';
 
 /** Herramientas que construyen una máscara de selección. */
@@ -54,9 +55,14 @@ interface UIState {
   quickShapePrecision: number;
   showTimeline: boolean;
   busy: string | null;
+  /** Hueso activo del gizmo en modo Viewport. Sólo se admite un esqueleto
+   *  interactivo a la vez por ahora (`doc.skeletons[0]`), así que no hace
+   *  falta guardar también a qué esqueleto pertenece. */
+  selectedBoneId: string | null;
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
+  setSelectedBoneId: (id: string | null) => void;
   setBrushIndex: (i: number) => void;
   updateBrush: (patch: Partial<BrushPreset>) => void;
   setSize: (v: number | null) => void;
@@ -127,8 +133,10 @@ export const useUI = create<UIState>((set, get) => ({
   quickShapePrecision: 0.6,
   showTimeline: true,
   busy: null,
+  selectedBoneId: null,
 
   setEngine: (engine) => set({ engine }),
+  setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
   setTool: (tool) => {
     // El borrador es un preset, no un modo aparte: cambiar de herramienta
     // sólo cambia qué pincel está activo.
