@@ -1,9 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { Engine } from '../core/engine';
 import { clamp } from '../core/math';
+import { shapeRotation } from '../core/quickshape';
 import type { SelectionMode, SelectionShape } from '../core/selection';
 import type { InputSample, Vec2 } from '../core/types';
 import { useActiveBrush, useUI } from '../state/store';
+
+/** Cuánto tarda el lápiz en considerarse "quieto" para disparar QuickShape,
+ * y qué radio de pantalla se tolera como temblor antes de eso. */
+const DWELL_MS = 380;
+const DWELL_RADIUS = 3;
 
 interface TrackedPointer {
   id: number;
@@ -42,6 +48,12 @@ export function CanvasView() {
   const drawingId = useRef<number | null>(null);
   const gesture = useRef<GestureState | null>(null);
   const lastPenAt = useRef(0);
+  const dwellTimer = useRef<number | null>(null);
+  const dwellAnchor = useRef<Vec2 | null>(null);
+  /** Gesto de segundo dedo mientras se sostiene una forma QuickShape recién
+   * reconocida: rotación en incrementos de 15°, independiente del gesto de
+   * vista/capa de `GestureState` (ver `beginGesture`). */
+  const quickShapeGesture = useRef<{ startAngle: number; startRotation: number } | null>(null);
   const selectingId = useRef<number | null>(null);
   const selectPath = useRef<{
     shape: SelectionShape;
@@ -144,6 +156,43 @@ export function CanvasView() {
   };
 
   /* ---------------------------------------------------------------- *
+   * QuickShape: detección de "lápiz quieto"
+   * ---------------------------------------------------------------- */
+
+  const clearDwell = () => {
+    if (dwellTimer.current !== null) {
+      window.clearTimeout(dwellTimer.current);
+      dwellTimer.current = null;
+    }
+    dwellAnchor.current = null;
+  };
+
+  /**
+   * Reinicia el temporizador cada vez que el puntero se mueve más allá del
+   * radio de temblor. Si nunca se reinicia, `fireDwell` dispara sola tras
+   * `DWELL_MS` — no hace falta guardar cuánto tiempo lleva quieto, sólo no
+   * tocar el timer mientras siga dentro del radio.
+   */
+  const updateDwell = (pointerId: number, local: Vec2) => {
+    if (!uiRef.current.quickShapeEnabled) return;
+    const anchor = dwellAnchor.current;
+    if (anchor && Math.hypot(local.x - anchor.x, local.y - anchor.y) <= DWELL_RADIUS) return;
+    dwellAnchor.current = local;
+    if (dwellTimer.current !== null) window.clearTimeout(dwellTimer.current);
+    dwellTimer.current = window.setTimeout(() => fireDwell(pointerId), DWELL_MS);
+  };
+
+  const fireDwell = (pointerId: number) => {
+    dwellTimer.current = null;
+    dwellAnchor.current = null;
+    const engine = engineRef.current;
+    // El trazo pudo terminar mientras esperábamos: sin efecto si ya no es
+    // el puntero que sigue dibujando.
+    if (!engine || drawingId.current !== pointerId) return;
+    engine.tryQuickShape();
+  };
+
+  /* ---------------------------------------------------------------- *
    * Gestos
    * ---------------------------------------------------------------- */
 
@@ -176,11 +225,23 @@ export function CanvasView() {
 
   const updateGesture = () => {
     const engine = engineRef.current!;
-    const g = gesture.current;
-    if (!g) return;
     const pts = [...pointers.current.values()];
     if (pts.length < 2) return;
     const [a, b] = pts;
+
+    if (quickShapeGesture.current) {
+      const qg = quickShapeGesture.current;
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      let rotationDelta = angle - qg.startAngle;
+      // Normaliza el salto de ±π al cruzar el eje, igual que el gesto normal.
+      if (rotationDelta > Math.PI) rotationDelta -= Math.PI * 2;
+      if (rotationDelta < -Math.PI) rotationDelta += Math.PI * 2;
+      engine.rotateQuickShapeSnapped(qg.startRotation + rotationDelta);
+      return;
+    }
+
+    const g = gesture.current;
+    if (!g) return;
     const distance = Math.hypot(b.x - a.x, b.y - a.y);
     const angle = Math.atan2(b.y - a.y, b.x - a.x);
     const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -228,6 +289,7 @@ export function CanvasView() {
     const engine = engineRef.current!;
     const g = gesture.current;
     gesture.current = null;
+    quickShapeGesture.current = null;
     if (!g) return;
     const duration = performance.now() - g.startedAt;
     // Toque rápido con varios dedos: los atajos de Procreate.
@@ -257,8 +319,26 @@ export function CanvasView() {
     });
 
     if (pointers.current.size >= 2) {
+      // Segundo dedo con una forma QuickShape pendiente — recién reconocida
+      // y todavía sostenida, o ya soltada y en modo de edición de nodos:
+      // fuerza proporción exacta, como en Procreate, y arma el gesto de
+      // rotación en incrementos de 15° en vez de mover la vista o la capa.
+      // (Los tiradores y la barra de `QuickShapeOverlay` hacen
+      // `stopPropagation`, así que este bloque sólo ve dedos que tocan
+      // lienzo vacío, no los que arrastran un nodo.)
+      if (engine.pendingQuickShape) {
+        engine.forceQuickShapeProportion();
+        const [pa, pb] = [...pointers.current.values()];
+        quickShapeGesture.current = {
+          startAngle: Math.atan2(pb.y - pa.y, pb.x - pa.x),
+          startRotation: shapeRotation(engine.pendingQuickShape.shape),
+        };
+        return;
+      }
+
       if (drawingId.current !== null) {
         engine.cancelStroke();
+        clearDwell();
         drawingId.current = null;
       }
       if (selectingId.current !== null) {
@@ -305,6 +385,7 @@ export function CanvasView() {
 
     if (engine.beginStroke(sample, { brush: brushRef.current, color: uiRef.current.color })) {
       drawingId.current = e.pointerId;
+      updateDwell(e.pointerId, local);
     }
   };
 
@@ -320,7 +401,7 @@ export function CanvasView() {
       tracked.y = local.y;
     }
 
-    if (gesture.current) {
+    if (gesture.current || quickShapeGesture.current) {
       updateGesture();
       return;
     }
@@ -342,6 +423,15 @@ export function CanvasView() {
 
     if (drawingId.current !== e.pointerId) return;
 
+    // Puntero sosteniendo una forma ya reconocida (aún sin soltar): sigue
+    // ajustando el nodo más cercano en vez de alimentar el trazo libre, que
+    // ya está apagado (`tryQuickShape` puso `builder` a null).
+    if (engine.pendingQuickShape && !engine.pendingQuickShape.editing) {
+      const s = toSample(e);
+      engine.adjustQuickShape({ x: s.x, y: s.y });
+      return;
+    }
+
     // Los eventos fusionados traen todas las muestras que el navegador agrupó
     // en este frame: en un iPad a 120 Hz son varias, y perderlas se nota.
     const native = e.nativeEvent as PointerEvent & {
@@ -354,6 +444,7 @@ export function CanvasView() {
     const predicted = (native.getPredictedEvents?.() ?? []).map((ev) => toSample(ev));
 
     engine.moveStroke(samples, predicted);
+    updateDwell(e.pointerId, localPoint(e));
   };
 
   const finishPointer = (e: React.PointerEvent) => {
@@ -363,7 +454,12 @@ export function CanvasView() {
     canvasRef.current?.releasePointerCapture?.(e.pointerId);
 
     if (drawingId.current === e.pointerId) {
-      engine.endStroke();
+      clearDwell();
+      // Si hay una forma reconocida pendiente, soltar el puntero no la
+      // hornea: pasa al modo de edición de nodos (`QuickShapeOverlay`),
+      // igual que el "Edit Shape" de Procreate.
+      if (engine.pendingQuickShape) engine.finishQuickShapeHold();
+      else engine.endStroke();
       drawingId.current = null;
     }
     if (selectingId.current === e.pointerId) {
@@ -385,7 +481,7 @@ export function CanvasView() {
         else engine.applySelectionShape(path.shape, path.points, path.mode);
       }
     }
-    if (gesture.current && pointers.current.size < 2) {
+    if ((gesture.current || quickShapeGesture.current) && pointers.current.size < 2) {
       endGesture();
     }
   };

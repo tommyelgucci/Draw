@@ -239,3 +239,12 @@ export const IconFit = ({ size = 20, className }: IconProps) => (
     <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />
   </svg>
 );
+
+/** Un trazo suelto a la izquierda que "cristaliza" en un círculo perfecto:
+ * el propio icono resume lo que hace QuickShape. */
+export const IconQuickShape = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M3 15c1-3 2.5-5 3.5-4.5S7 13 8 12" strokeDasharray="2.5 2" />
+    <circle cx="15.5" cy="12" r="5.5" />
+  </svg>
+);

@@ -14,6 +14,7 @@ import {
   IconLayers,
   IconMenu,
   IconLasso,
+  IconQuickShape,
   IconRedo,
   IconSelectRect,
   IconTransform,
@@ -52,6 +53,8 @@ export function Toolbar({ engine }: { engine: Engine }) {
     setOpacity,
     selectionMode,
     setSelectionMode,
+    quickShapeEnabled,
+    setQuickShapeEnabled,
   } = useUI();
   const selecting = tool === 'selectRect' || tool === 'selectLasso';
   const brush = useActiveBrush();
@@ -142,6 +145,14 @@ export function Toolbar({ engine }: { engine: Engine }) {
           <IconFit />
         </IconButton>
         <span className="zoom-readout">{Math.round(engine.view.zoom * 100)}%</span>
+        <span className="rail__divider" />
+        <IconButton
+          title={quickShapeEnabled ? 'QuickShape activado' : 'QuickShape desactivado'}
+          active={quickShapeEnabled}
+          onClick={() => setQuickShapeEnabled(!quickShapeEnabled)}
+        >
+          <IconQuickShape />
+        </IconButton>
         <span className="rail__divider" />
         <IconButton
           title="Pincel"
