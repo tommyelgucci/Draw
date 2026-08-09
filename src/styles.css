@@ -1292,6 +1292,11 @@ button:focus-visible {
   cursor: pointer;
 }
 
+.sel-bar button.is-key {
+  background: var(--accent);
+  color: #10131a;
+}
+
 .sel-bar button:hover {
   background: var(--surface-2);
 }
@@ -1306,6 +1311,83 @@ button:focus-visible {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/**
+ * Gizmo del modo Viewport (rig): mismo molde que `.sel-overlay`/`.sel-handle`
+ * — contenedor que deja pasar los eventos, tiradores que los capturan.
+ */
+.bone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+}
+
+.bone-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bone-outline line {
+  stroke: color-mix(in srgb, var(--accent) 45%, var(--text-dim));
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.bone-outline line.is-selected {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+/** Wireframe de la malla deformable, encima del contorno de huesos. */
+.bone-mesh-wire {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bone-mesh-wire line {
+  stroke: color-mix(in srgb, var(--accent) 30%, transparent);
+  stroke-width: 1;
+}
+
+.bone-handle {
+  position: absolute;
+  padding: 0;
+  border: 2px solid var(--accent);
+  background: var(--surface);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.bone-handle--move {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.bone-handle--rotate {
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 4px;
+}
+
+.bone-handle--scale {
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  border-style: dashed;
 }
 
 /* ------------------------------------------------------------------ *

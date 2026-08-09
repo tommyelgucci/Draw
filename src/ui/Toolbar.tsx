@@ -5,6 +5,7 @@ import { useActiveBrush, useEngineRevision, useUI, type Tool } from '../state/st
 import { IconButton, Slider } from './controls';
 import { useCompact } from './useCompact';
 import {
+  IconBone,
   IconBrush,
   IconDropper,
   IconEraser,
@@ -30,6 +31,7 @@ const TOOLS: { id: Tool; label: string; icon: React.ReactNode }[] = [
   { id: 'selectRect', label: 'Seleccionar rectángulo', icon: <IconSelectRect /> },
   { id: 'selectLasso', label: 'Lazo', icon: <IconLasso /> },
   { id: 'transform', label: 'Transformar capa', icon: <IconTransform /> },
+  { id: 'rig', label: 'Viewport (huesos)', icon: <IconBone /> },
   { id: 'pan', label: 'Mover lienzo', icon: <IconHand /> },
 ];
 

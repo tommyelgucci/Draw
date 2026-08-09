@@ -19,6 +19,24 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  boneRigidMatrix,
+  createBone,
+  evaluatePoseWorldMatrices,
+  evaluateSkinMatrices,
+  findBone,
+  hitTestBone as hitTestBoneInSkeleton,
+  newMesh,
+  newSkeleton,
+  removeBone as removeBoneFromSkeleton,
+  worldPointToBoneOffset,
+  worldPointToBoneRotation,
+  type Bone,
+  type BoneTrack,
+  type LayerRig,
+  type Mesh,
+  type Skeleton,
+} from './rig';
+import {
   rasterizeSelection,
   rectCorners,
   shapeBounds,
@@ -26,7 +44,16 @@ import {
   type SelectionMode,
   type SelectionShape,
 } from './selection';
-import { clamp, mat3Identity, mat3Invert, mat3Multiply, snapAngle, type Mat3 } from './math';
+import {
+  clamp,
+  mat3Apply,
+  mat3FromTRS,
+  mat3Identity,
+  mat3Invert,
+  mat3Multiply,
+  snapAngle,
+  type Mat3,
+} from './math';
 import {
   BLEND_INDEX,
   clampRect,
@@ -745,6 +772,279 @@ export class Engine {
     return sampleChannel(layer.transform[prop], this.currentFrame);
   }
 
+  /* --- rig: esqueletos, huesos y su vínculo con las capas --- */
+
+  createSkeleton(name = 'Esqueleto'): Skeleton {
+    const skel = newSkeleton(name);
+    this.history.run({
+      label: 'Crear esqueleto',
+      redo: () => {
+        this.doc.skeletons.push(skel);
+        this.touch();
+      },
+      undo: () => {
+        this.doc.skeletons = this.doc.skeletons.filter((s) => s.id !== skel.id);
+        this.touch();
+      },
+    });
+    return skel;
+  }
+
+  addBone(
+    skeletonId: string,
+    name: string,
+    parentId: string | null,
+    rest: { x: number; y: number; rotation?: number; length?: number },
+  ): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    // Se construye fuera de redo() para que el mismo objeto Bone sea el que
+    // entra y sale del array en cada redo/undo — igual que `createSkeleton`.
+    const bone = createBone(name, parentId, rest);
+    this.history.run({
+      label: 'Añadir hueso',
+      redo: () => {
+        skel.bones.push(bone);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = skel.bones.filter((b) => b.id !== bone.id);
+        this.touch();
+      },
+    });
+    return bone;
+  }
+
+  removeBone(skeletonId: string, boneId: string) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return;
+    // `removeBoneFromSkeleton` reengancha a los hijos del hueso borrado a su
+    // padre, mutando `parentId` en sitio — clonamos antes para poder
+    // restaurar exactamente ese árbol al deshacer.
+    const before = skel.bones.map((b) => ({ ...b }));
+    this.history.run({
+      label: 'Quitar hueso',
+      redo: () => {
+        removeBoneFromSkeleton(skel, boneId);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = before;
+        this.touch();
+      },
+    });
+  }
+
+  attachLayerToBone(layerId: string, skeletonId: string, boneId: string | null) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const before = layer.rig;
+    const after: LayerRig = { skeletonId, boneId, meshId: before?.meshId ?? null };
+    this.history.run({
+      label: 'Vincular capa a hueso',
+      redo: () => {
+        layer.rig = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.rig = before;
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Crea una malla de rejilla con auto-peso para `skeletonId` (cubre todo
+   * el documento — ver `newGridMesh`). No la vincula a ninguna capa por sí
+   * sola: eso lo hace `attachLayerToMesh`, como dos pasos separados igual
+   * que `createSkeleton`/`addBone` lo son de `attachLayerToBone`.
+   */
+  createMesh(skeletonId: string, cols?: number, rows?: number): Mesh | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    const mesh = newMesh(skel, this.doc.width, this.doc.height, cols, rows);
+    this.history.run({
+      label: 'Crear malla',
+      redo: () => {
+        this.doc.meshes.push(mesh);
+        this.touch();
+      },
+      undo: () => {
+        this.doc.meshes = this.doc.meshes.filter((m) => m.id !== mesh.id);
+        this.touch();
+      },
+    });
+    return mesh;
+  }
+
+  /** Vincula una capa a una malla — sustituye al transform rígido por hueso
+   *  en la composición (ver `rasterizeLayer`), sin perder a qué hueso
+   *  estaba pegada por si se quita la malla más adelante. */
+  attachLayerToMesh(layerId: string, skeletonId: string, meshId: string) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const before = layer.rig;
+    const after: LayerRig = { skeletonId, boneId: before?.boneId ?? null, meshId };
+    this.history.run({
+      label: 'Vincular capa a malla',
+      redo: () => {
+        layer.rig = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.rig = before;
+        this.touch();
+      },
+    });
+  }
+
+  /** Cabeza y cola de cada hueso en `frame`, en espacio documento — lo que
+   *  necesita el gizmo del modo Viewport para dibujarse y para convertir
+   *  arrastres de pantalla en valores de `track`. */
+  boneEndpoints(skeletonId: string): { bone: Bone; head: Vec2; tail: Vec2 }[] {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return [];
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return skel.bones.map((bone) => {
+      const m = matrices.get(bone.id) ?? mat3Identity();
+      return { bone, head: mat3Apply(m, { x: 0, y: 0 }), tail: mat3Apply(m, { x: bone.length, y: 0 }) };
+    });
+  }
+
+  /** Mundo del padre de un hueso en `frame`, o identidad si es raíz — lo
+   *  que necesita `worldPointToBoneOffset`/`worldPointToBoneRotation` para
+   *  traducir un punto de pantalla a valores de `track`. */
+  boneParentWorldMatrix(skeletonId: string, boneId: string): Mat3 {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone || !bone.parentId) return mat3Identity();
+    return evaluatePoseWorldMatrices(skel, this.currentFrame).get(bone.parentId) ?? mat3Identity();
+  }
+
+  hitTestBone(skeletonId: string, point: Vec2, tolerance = 12): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return hitTestBoneInSkeleton(skel, matrices, point, tolerance);
+  }
+
+  getBoneValue(bone: Bone, prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'): number {
+    return sampleChannel(bone.track[prop], this.currentFrame);
+  }
+
+  /**
+   * Mueve/rota/escala un hueso. Sin `history.run`, a propósito: igual que
+   * `setTransformValue`, se llama en cada muestra de un arrastre continuo, y
+   * envolver cada una en un Command inundaría la pila de deshacer con pasos
+   * intermedios que nadie quiere deshacer uno a uno.
+   */
+  setBonePose(
+    skeletonId: string,
+    boneId: string,
+    patch: Partial<{ x: number; y: number; rotation: number; scaleX: number; scaleY: number }>,
+  ) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!bone) return;
+    for (const prop of Object.keys(patch) as (keyof typeof patch)[]) {
+      const value = patch[prop];
+      if (value === undefined) continue;
+      const ch = bone.track[prop];
+      if (ch.keys.length > 0) setKeyframe(ch, this.currentFrame, value);
+      else ch.base = value;
+    }
+    this.touch();
+  }
+
+  toggleBoneKeyframe(
+    skeletonId: string,
+    boneId: string,
+    prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY',
+  ) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!bone) return;
+    const ch = bone.track[prop];
+    const frame = this.currentFrame;
+    const existing = ch.keys.find((k) => k.frame === frame);
+    const before = ch.keys.slice();
+    const value = sampleChannel(ch, frame);
+    this.history.run({
+      label: existing ? 'Quitar keyframe de hueso' : 'Añadir keyframe de hueso',
+      redo: () => {
+        if (existing) ch.keys = ch.keys.filter((k) => k.frame !== frame);
+        else setKeyframe(ch, frame, value);
+        this.touch();
+      },
+      undo: () => {
+        ch.keys = before.slice();
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Añade (o quita) un fotograma clave con la pose entera del hueso — los
+   * cinco canales de `BoneTrack` a la vez, en un solo paso de deshacer. Es
+   * lo que dispara el botón de rombo del gizmo: grabar "así está posado
+   * ahora" es lo que se espera, no tener que armar cinco keyframes sueltos.
+   * Si los cinco ya están marcados en este fotograma, los quita todos; si
+   * falta alguno, los añade todos (los que ya estaban, sin cambiar de valor).
+   */
+  toggleBonePoseKeyframe(skeletonId: string, boneId: string) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!bone) return;
+    const props: (keyof BoneTrack)[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+    const frame = this.currentFrame;
+    const allKeyed = props.every((p) => bone.track[p].keys.some((k) => k.frame === frame));
+    const before = props.map((p) => bone.track[p].keys.slice());
+    const values = props.map((p) => sampleChannel(bone.track[p], frame));
+    this.history.run({
+      label: allKeyed ? 'Quitar fotograma clave del hueso' : 'Fotograma clave del hueso',
+      redo: () => {
+        props.forEach((p, i) => {
+          const ch = bone.track[p];
+          if (allKeyed) ch.keys = ch.keys.filter((k) => k.frame !== frame);
+          else setKeyframe(ch, frame, values[i]);
+        });
+        this.touch();
+      },
+      undo: () => {
+        props.forEach((p, i) => {
+          bone.track[p].keys = before[i].slice();
+        });
+        this.touch();
+      },
+    });
+  }
+
+  /** Si los cinco canales del hueso llevan keyframe en el fotograma actual. */
+  boneHasKeyframeHere(bone: Bone): boolean {
+    const frame = this.currentFrame;
+    const props: (keyof BoneTrack)[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+    return props.every((p) => bone.track[p].keys.some((k) => k.frame === frame));
+  }
+
+  /** Punto de `worldPoint` traducido a los valores (x,y) de `track` que
+   *  pondrían la cabeza del hueso ahí — envuelve `worldPointToBoneOffset`
+   *  con el mundo del padre resuelto en `frame`. */
+  boneOffsetForWorldPoint(skeletonId: string, bone: Bone, worldPoint: Vec2): Vec2 {
+    return worldPointToBoneOffset(bone, this.boneParentWorldMatrix(skeletonId, bone.id), worldPoint);
+  }
+
+  /** Rotación de `track` que apuntaría la cola del hueso hacia `worldPoint`,
+   *  dada su posición de cabeza actual. */
+  boneRotationForWorldPoint(skeletonId: string, bone: Bone, worldPoint: Vec2): number {
+    const offset = { x: this.getBoneValue(bone, 'x'), y: this.getBoneValue(bone, 'y') };
+    return worldPointToBoneRotation(
+      bone,
+      this.boneParentWorldMatrix(skeletonId, bone.id),
+      offset,
+      worldPoint,
+    );
+  }
+
   /* ---------------------------------------------------------------- *
    * Trazo
    * ---------------------------------------------------------------- */
@@ -1271,6 +1571,43 @@ export class Engine {
     }
 
     if (!src) return null;
+
+    // Una capa riggeada sigue a su rig en vez de su propio TransformTrack:
+    // son dos formas de mover la misma capa que no tiene sentido combinar.
+    // La malla (si la hay) sustituye al transform rígido por hueso — no se
+    // combinan los dos caminos para una misma capa.
+    if (layer.rig?.meshId) {
+      const skel = this.doc.skeletons.find((s) => s.id === layer.rig!.skeletonId);
+      const mesh = this.doc.meshes.find((m) => m.id === layer.rig!.meshId);
+      if (skel && mesh) {
+        const skin = evaluateSkinMatrices(skel, frame);
+        // MeshVertex.boneIndices son posiciones en skel.bones, no ids: hay
+        // que subir las matrices en ese mismo orden para poder indexarlas
+        // con un entero en el shader.
+        const boneMats = skel.bones.map((b) => skin.get(b.id) ?? mat3Identity());
+        const out = this.renderer.scratch('xf2');
+        this.renderer.clear(out);
+        this.renderer.drawSkinned(out, src, mesh, boneMats);
+        return out;
+      }
+    }
+    if (layer.rig?.boneId) {
+      const skel = this.doc.skeletons.find((s) => s.id === layer.rig!.skeletonId);
+      if (skel) {
+        // `drawOver` espera una matriz "quad unidad -> destino" (por eso el
+        // resto del motor multiplica por doc.width/doc.height antes de
+        // pasarla) — la matriz de piel opera en píxeles de documento, así
+        // que hay que anteponerle ese mismo paso quad->documento.
+        const skin = boneRigidMatrix(skel, layer.rig.boneId, frame);
+        const unitToDoc = mat3FromTRS(0, 0, 0, this.doc.width, this.doc.height);
+        const m = mat3Multiply(skin, unitToDoc);
+        const out = this.renderer.scratch('xf2');
+        this.renderer.clear(out);
+        this.renderer.drawOver(out, src, 1, m);
+        return out;
+      }
+    }
+
     if (transformIsIdentity(layer.transform, frame)) return src;
 
     const tx = sampleChannel(layer.transform.x, frame);

@@ -1,5 +1,6 @@
 import type { Surface } from '../gl/renderer';
 import { clamp, lerp } from './math';
+import type { LayerRig, Mesh, Skeleton } from './rig';
 import type { BlendMode, RGB } from './types';
 
 export type Easing = 'hold' | 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
@@ -123,6 +124,33 @@ export interface Cel {
   label?: string;
 }
 
+/** Una variante dentro de un catálogo de intercambio de sprites (ojo abierto/cerrado, visema...). */
+export interface SpriteSwapVariant {
+  id: string;
+  label: string;
+  /** Mismo tamaño que el documento, igual que `Cel.surface`. */
+  surface: Surface;
+}
+
+/**
+ * Catálogo de variantes de un nodo de intercambio de sprites (ojos, cejas,
+ * boca). `selected` reutiliza `Channel` como índice discreto: `sampleChannel`
+ * con easing `'hold'` ya produce un escalón exacto entre keyframes en vez de
+ * interpolar, que es la semántica correcta para "qué variante se ve" — la
+ * disciplina de forzar `'hold'` la impone el setter en `engine.ts`, no el tipo.
+ */
+export interface SpriteSwapCatalog {
+  variants: SpriteSwapVariant[];
+  selected: Channel;
+}
+
+/** Variante visible en `frame` — análogo a `celAt` pero para sprite-swap. */
+export function pickVariant(layer: Layer, frame: number): SpriteSwapVariant | null {
+  if (!layer.swap || layer.swap.variants.length === 0) return null;
+  const idx = Math.round(sampleChannel(layer.swap.selected, frame));
+  return layer.swap.variants[idx] ?? layer.swap.variants[0];
+}
+
 /**
  * `draw`: capa normal, se dibuja y se exporta. `reference`: imagen o vídeo
  * importado para calcar (rotoscopia) — no admite trazo, bote ni selección, y
@@ -148,6 +176,14 @@ export interface Layer {
   /** Clave = fotograma en que aparece el cel. */
   cels: Map<number, Cel>;
   transform: TransformTrack;
+  /** Presente si un esqueleto de `TraceDocument.skeletons` controla esta capa. */
+  rig?: LayerRig;
+  /**
+   * Presente si esta capa es un nodo de intercambio de sprites: sustituye a
+   * `cels` como fuente del fotograma (ver `pickVariant`). `cels` queda vacío
+   * por construcción en una capa con `swap`.
+   */
+  swap?: SpriteSwapCatalog;
 }
 
 export interface TraceDocument {
@@ -164,6 +200,13 @@ export interface TraceDocument {
   paperAlpha: number;
   createdAt: number;
   modifiedAt: number;
+  /**
+   * Esqueletos del documento. Viven aquí y no dentro de una `Layer` porque
+   * un rig suele gobernar varias capas a la vez (torso, brazo, antebrazo).
+   */
+  skeletons: Skeleton[];
+  /** Mallas deformables, referenciadas por id desde `Layer.rig.meshId`. */
+  meshes: Mesh[];
 }
 
 let idCounter = 0;
@@ -206,6 +249,8 @@ export function newDocument(
     paperAlpha: 1,
     createdAt: Date.now(),
     modifiedAt: Date.now(),
+    skeletons: [],
+    meshes: [],
   };
 }
 

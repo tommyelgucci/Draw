@@ -174,6 +174,50 @@ void main() {
 `;
 
 /**
+ * Cota de huesos por esqueleto que puede subir un solo `uniform mat3[]` sin
+ * pasar a texturas — de sobra para un rig de personaje 2D. Si algún rig la
+ * excede, la alternativa es un UBO o una textura de matrices; no merece la
+ * pena antes de tener un caso real (ver plan de diseño del módulo de rig).
+ */
+export const MAX_SKIN_BONES = 64;
+
+/**
+ * Deformación de malla por huesos (GPU skinning). Cada vértice mezcla hasta
+ * 4 matrices de piel según `aBoneWeights` — la misma matriz "pose *
+ * inverso(reposo)" que ya usa el transform rígido del hueso individual
+ * (`boneRigidMatrix`), sólo que aquí hay una por vértice en vez de una para
+ * la capa entera. El fragment shader es `COPY_FS`: sólo cambia de dónde
+ * sale la posición, no cómo se colorea.
+ */
+export const SKIN_VS = /* glsl */ `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 aRestPos;     // px de documento, posición de reposo
+layout(location = 1) in vec2 aUV;          // 0..1 dentro del cel de origen
+layout(location = 2) in vec4 aBoneIndices; // hasta 4 huesos, índices en Skeleton.bones
+layout(location = 3) in vec4 aBoneWeights; // deberían sumar 1
+
+uniform mat3 uBoneMatrices[${MAX_SKIN_BONES}];
+uniform vec2 uResolution;
+uniform float uFlipY;
+
+out vec2 vUV;
+
+void main() {
+  vec2 skinned = vec2(0.0);
+  for (int i = 0; i < 4; i++) {
+    mat3 m = uBoneMatrices[int(aBoneIndices[i])];
+    vec3 p = m * vec3(aRestPos, 1.0);
+    skinned += p.xy * aBoneWeights[i];
+  }
+  vec2 ndc = (skinned / uResolution) * 2.0 - 1.0;
+  if (uFlipY > 0.5) ndc.y = -ndc.y;
+  gl_Position = vec4(ndc, 0.0, 1.0);
+  vUV = aUV;
+}
+`;
+
+/**
  * Copia directa premultiplicada, con opacidad y máscara opcionales.
  *
  * La máscara es lo que hace que un trazo respete la selección: como todo va
