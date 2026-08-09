@@ -596,6 +596,14 @@ button:focus-visible {
  * Pincel y color
  * ------------------------------------------------------------------ */
 
+.brush-category {
+  margin-bottom: 14px;
+}
+
+.brush-category .panel__subtitle {
+  margin-top: 0;
+}
+
 .brush-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { DEFAULT_BRUSHES, type BrushPreset } from '../core/brush';
 import type { Engine } from '../core/engine';
+import { hsvToRgb } from '../core/math';
 import type { SelectionMode } from '../core/selection';
 import type { RGB } from '../core/types';
 
@@ -20,6 +21,11 @@ export const SELECT_TOOLS: Tool[] = ['selectRect', 'selectLasso'];
 
 export type PanelId = 'layers' | 'brush' | 'color' | 'export' | 'settings' | null;
 
+export interface PaletteGroup {
+  name: string;
+  colors: RGB[];
+}
+
 interface UIState {
   engine: Engine | null;
   tool: Tool;
@@ -30,7 +36,7 @@ interface UIState {
   sizeOverride: number | null;
   opacityOverride: number | null;
   color: RGB;
-  palette: RGB[];
+  paletteGroups: PaletteGroup[];
   recentColors: RGB[];
   panel: PanelId;
   /** Cómo combina el siguiente gesto de selección con la máscara actual. */
@@ -55,17 +61,42 @@ interface UIState {
   setBusy: (v: string | null) => void;
 }
 
-const DEFAULT_PALETTE: RGB[] = [
-  { r: 0.07, g: 0.07, b: 0.09 },
+/** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
+function hueWheel(count: number, s: number, v: number, offset = 0): RGB[] {
+  return Array.from({ length: count }, (_, i) => hsvToRgb((i / count + offset) % 1, s, v));
+}
+
+/** Rampa de grises de negro a blanco, con más pasos en el medio que en los extremos. */
+const NEUTRALS: RGB[] = [
+  { r: 0.05, g: 0.05, b: 0.06 },
+  { r: 0.22, g: 0.22, b: 0.24 },
+  { r: 0.42, g: 0.42, b: 0.44 },
+  { r: 0.62, g: 0.62, b: 0.64 },
+  { r: 0.82, g: 0.82, b: 0.84 },
   { r: 1, g: 1, b: 1 },
-  { r: 0.85, g: 0.22, b: 0.25 },
-  { r: 0.95, g: 0.55, b: 0.15 },
-  { r: 0.96, g: 0.83, b: 0.25 },
-  { r: 0.35, g: 0.72, b: 0.4 },
-  { r: 0.2, g: 0.55, b: 0.85 },
-  { r: 0.45, g: 0.35, b: 0.75 },
-  { r: 0.9, g: 0.6, b: 0.7 },
-  { r: 0.55, g: 0.4, b: 0.3 },
+];
+
+/**
+ * Tonos tierra y piel: no salen de la rueda de tonos porque necesitan su
+ * propia combinación de saturación y brillo, no un desplazamiento uniforme.
+ */
+const EARTH_SKIN: RGB[] = [
+  { r: 0.8, g: 0.6, b: 0.28 }, // ocre
+  { r: 0.7, g: 0.4, b: 0.22 }, // siena tostada
+  { r: 0.78, g: 0.35, b: 0.28 }, // terracota
+  { r: 0.38, g: 0.25, b: 0.18 }, // sombra tostada
+  { r: 0.9, g: 0.78, b: 0.58 }, // arena
+  { r: 0.96, g: 0.8, b: 0.68 }, // melocotón
+  { r: 0.92, g: 0.78, b: 0.68 }, // beige rosado
+  { r: 0.28, g: 0.16, b: 0.11 }, // chocolate
+];
+
+const DEFAULT_PALETTE_GROUPS: PaletteGroup[] = [
+  { name: 'Neutros', colors: NEUTRALS },
+  { name: 'Espectro', colors: hueWheel(12, 0.8, 0.92) },
+  // Desplazada respecto al espectro para no repetir los mismos tonos aclarados.
+  { name: 'Pasteles', colors: hueWheel(6, 0.35, 0.98, 0.04) },
+  { name: 'Tierras y piel', colors: EARTH_SKIN },
 ];
 
 export const useUI = create<UIState>((set, get) => ({
@@ -76,7 +107,7 @@ export const useUI = create<UIState>((set, get) => ({
   sizeOverride: null,
   opacityOverride: null,
   color: { r: 0.07, g: 0.07, b: 0.09 },
-  palette: DEFAULT_PALETTE,
+  paletteGroups: DEFAULT_PALETTE_GROUPS,
   recentColors: [],
   panel: null,
   selectionMode: 'replace',

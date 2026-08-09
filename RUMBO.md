@@ -60,7 +60,8 @@ ni se vuelva lento. Lo que falta:
   un iPad de verdad, no en un emulador.
 
 Ya resuelto en esta fase (ver `CHECKPOINT.md`): importar imágenes y vídeo
-como referencia para rotoscopia; texturas de punta de pincel.
+como referencia para rotoscopia; texturas de punta de pincel; kit completo
+de 18 pinceles categorizados y paleta de colores en cuatro grupos.
 
 ### Fase 2 — Instalable de verdad
 
