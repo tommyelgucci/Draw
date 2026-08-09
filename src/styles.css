@@ -1102,6 +1102,19 @@ button:focus-visible {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
+/** Rango marcado en la regla para la transformación por lote — mismo molde
+ *  que `.playhead`, pero como banda ancha en vez de una sola línea. */
+.frame-range-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-left: 1.5px solid var(--accent);
+  border-right: 1.5px solid var(--accent);
+}
+
 /* ------------------------------------------------------------------ *
  * Estados
  * ------------------------------------------------------------------ */

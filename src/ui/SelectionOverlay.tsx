@@ -29,9 +29,17 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const drag = useRef<DragState | null>(null);
   const color = useUI((s) => s.color);
+  const frameRangeStart = useUI((s) => s.frameRangeStart);
+  const frameRangeEnd = useUI((s) => s.frameRangeEnd);
+  const setFrameRange = useUI((s) => s.setFrameRange);
+  const setRangeSelectMode = useUI((s) => s.setRangeSelectMode);
 
   const floating = engine.floating;
   const hasSelection = engine.selection.active;
+  // Un rango de un solo cuadro no es un lote — sería lo mismo que
+  // "Transformar", así que sólo cuenta como rango de verdad por encima de 1.
+  const hasFrameRange =
+    frameRangeStart !== null && frameRangeEnd !== null && frameRangeEnd > frameRangeStart;
 
   // Mientras el lazo de Procreate está en marcha, `engine.selection` ya
   // refleja la vista previa del polígono a medio cerrar (para que se vea
@@ -54,6 +62,24 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
         <button type="button" onClick={() => engine.liftSelection()} title="Transformar">
           <IconTransform size={16} /> Transformar
         </button>
+        {hasFrameRange && (
+          <button
+            type="button"
+            onClick={() => {
+              // El lote marcado en la línea de tiempo se consume al usarlo:
+              // dejarlo puesto invitaría a pulsar el botón otra vez sobre un
+              // rango que ya no tiene sentido (la transformación anterior ya
+              // se está editando).
+              if (engine.liftSelectionRange(frameRangeStart!, frameRangeEnd!)) {
+                setFrameRange(null, null);
+                setRangeSelectMode(false);
+              }
+            }}
+            title="Transformar el rango marcado en la línea de tiempo"
+          >
+            <IconTransform size={16} /> Transformar rango ({frameRangeEnd! - frameRangeStart! + 1})
+          </button>
+        )}
         <button type="button" onClick={() => engine.fillSelection(color)} title="Rellenar">
           Rellenar
         </button>

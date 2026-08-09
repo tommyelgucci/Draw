@@ -145,15 +145,30 @@ export interface PendingLasso {
   mode: SelectionMode;
 }
 
+/** Píxeles levantados de UN cel dentro de una transformación flotante. */
+export interface FloatingCel {
+  /** Fotograma donde empieza este cel de origen. */
+  celFrame: number;
+  surface: Surface;
+  /** Píxeles originales de `sourceRect` en este cel, para cancelar o deshacer. */
+  before: Uint8Array;
+}
+
 /**
- * Píxeles levantados de un cel que se están moviendo, escalando o girando.
- * Mientras existe, el cel tiene un hueco donde estaban.
+ * Píxeles levantados de uno o varios cels que se están moviendo, escalando o
+ * girando a la vez. Mientras existe, cada cel de `cels` tiene un hueco donde
+ * estaban los suyos.
+ *
+ * El mismo rectángulo de origen y la misma transformación (tx/ty/scale/
+ * rotation/pivot) se aplican a todos los cels del lote: es un único gesto
+ * — mover un brazo en 8 cuadros a la vez — no ocho gestos independientes.
+ * Lo que varía por cel son sólo los píxeles: `liftSelection` produce un
+ * `cels` de un solo elemento; `liftSelectionRange` uno por cada cel
+ * distinto dentro del rango.
  */
 export interface FloatingSelection {
-  surface: Surface;
+  cels: FloatingCel[];
   layerId: string;
-  /** Fotograma donde empieza el cel de origen, no el fotograma actual. */
-  celFrame: number;
   tx: number;
   ty: number;
   scale: number;
@@ -161,8 +176,6 @@ export interface FloatingSelection {
   pivotX: number;
   pivotY: number;
   sourceRect: Rect;
-  /** Píxeles originales de `sourceRect`, para cancelar o deshacer. */
-  before: Uint8Array;
 }
 
 const MAX_ONION = 3;
@@ -1778,8 +1791,18 @@ export class Engine {
     // sólo cambia qué lo alimenta (ver `paintQuickShapeOutline`).
     const isQuickShapeTarget =
       includeWet && this.pendingQuickShape !== null && this.pendingQuickShape.layer.id === layer.id;
-    const hasFloating =
-      includeWet && this.floating !== null && this.floating.layerId === layer.id;
+    // Un flotante puede llevar varios cels a la vez (transformación por
+    // lote — `liftSelectionRange`): sólo se superpone el que corresponde al
+    // cel realmente visible en `frame`, no el primero de la lista, porque
+    // esta misma función se llama también para los fotogramas del papel
+    // cebolla, con `includeWet` en false.
+    const floatingCel =
+      includeWet && this.floating && this.floating.layerId === layer.id
+        ? (this.floating.cels.find(
+            (c) => c.celFrame === (layer.swap ? -1 : celStartFrame(layer, frame)),
+          ) ?? null)
+        : null;
+    const hasFloating = floatingCel !== null;
     if (!cel && !isStrokeTarget && !isQuickShapeTarget && !hasFloating) return null;
 
     let src = cel ? this.renderer.ensureResident(cel.surface) : null;
@@ -1825,13 +1848,13 @@ export class Engine {
       src = combined;
     }
 
-    if (hasFloating && this.floating) {
+    if (floatingCel && this.floating) {
       const combined = this.renderer.scratch('xf1');
       if (src && src !== combined) this.renderer.copy(combined, src, 1);
       else if (!src) this.renderer.clear(combined);
       this.renderer.drawOver(
         combined,
-        this.floating.surface,
+        floatingCel.surface,
         1,
         this.floatingMatrixFor(this.floating),
       );
@@ -2386,17 +2409,65 @@ export class Engine {
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
     if (rectIsEmpty(rect)) return false;
 
+    const lifted = this.liftCel(cel, celStartFrame(layer, this.currentFrame), rect);
+    if (!lifted) return false;
+    this.beginFloating(layer.id, rect, [lifted]);
+    return true;
+  }
+
+  /**
+   * Igual que `liftSelection`, pero levanta un cel distinto por cada dibujo
+   * que empiece dentro de `[fromFrame, toFrame]` en la capa activa — la
+   * transformación multi-fotograma: mover un brazo en varios cuadros a la
+   * vez en vez de repetir el gesto cuadro por cuadro.
+   *
+   * Sólo toca cels que YA EMPIEZAN en el rango (`sortedCelFrames`), no cada
+   * fotograma del rango uno por uno: un cel sostenido sobre 8 fotogramas es
+   * un único dibujo, y tocarlo una vez por fotograma visible lo procesaría
+   * ocho veces por nada (y con el mismo resultado, porque `liftCel` opera
+   * sobre el cel entero, no sobre el fotograma).
+   */
+  liftSelectionRange(fromFrame: number, toFrame: number): boolean {
+    if (this.floating) return true;
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference')
+      return false;
+
+    const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
+    if (rectIsEmpty(rect)) return false;
+
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    const cels: FloatingCel[] = [];
+    for (const celFrame of sortedCelFrames(layer)) {
+      if (celFrame < lo || celFrame > hi) continue;
+      const cel = layer.cels.get(celFrame)!;
+      const lifted = this.liftCel(cel, celFrame, rect);
+      if (lifted) cels.push(lifted);
+    }
+    if (cels.length === 0) return false;
+
+    this.beginFloating(layer.id, rect, cels);
+    return true;
+  }
+
+  /** Levanta los píxeles de `rect` de UN cel: la parte que `liftSelection` y
+   *  `liftSelectionRange` comparten por cada dibujo que tocan. */
+  private liftCel(cel: Cel, celFrame: number, rect: Rect): FloatingCel | null {
+    if (cel.surface.empty) return null;
     const surface = this.renderer.createSurface('floating');
     surface.pinned = true;
     this.renderer.copy(surface, cel.surface, 1, undefined, this.selectionMask);
 
     const before = this.renderer.readRect(cel.surface, rect);
     this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
+    return { celFrame, surface, before };
+  }
 
+  private beginFloating(layerId: string, rect: Rect, cels: FloatingCel[]) {
     this.floating = {
-      surface,
-      layerId: layer.id,
-      celFrame: celStartFrame(layer, this.currentFrame),
+      cels,
+      layerId,
       tx: 0,
       ty: 0,
       scale: 1,
@@ -2404,10 +2475,8 @@ export class Engine {
       pivotX: (rect.x + rect.x2) / 2,
       pivotY: (rect.y + rect.y2) / 2,
       sourceRect: rect,
-      before,
     };
     this.touch();
-    return true;
   }
 
   updateFloating(patch: Partial<Pick<FloatingSelection, 'tx' | 'ty' | 'scale' | 'rotation'>>) {
@@ -2459,18 +2528,18 @@ export class Engine {
     const f = this.floating;
     if (!f) return;
     const layer = this.doc.layers.find((l) => l.id === f.layerId);
-    const cel = layer ? layer.cels.get(f.celFrame) : null;
     this.floating = null;
 
-    if (!layer || !cel) {
-      this.renderer.release(f.surface);
+    if (!layer) {
+      for (const fc of f.cels) this.renderer.release(fc.surface);
       this.touch();
       return;
     }
 
     // La operación toca dos zonas: de donde se levantaron los píxeles y donde
     // acaban. Deshacer necesita ambas, así que el paso se guarda sobre su
-    // rectángulo unión en vez de sobre el documento entero.
+    // rectángulo unión en vez de sobre el documento entero. Es la misma
+    // región para todos los cels del lote: comparten `sourceRect` y matriz.
     const destRect = emptyRect();
     for (const p of this.floatingCornersFor(f)) expandRect(destRect, p.x, p.y, 1);
     const region = clampRect(
@@ -2478,25 +2547,44 @@ export class Engine {
       this.doc.width,
       this.doc.height,
     );
+    const matrix = this.floatingMatrixFor(f);
 
-    // Estado previo a levantar la selección: lo que hay ahora en el cel es el
-    // original menos los píxeles levantados, así que basta con reinsertarlos.
-    const beforeRegion = this.renderer.readRect(cel.surface, region);
-    spliceRect(beforeRegion, region, f.before, f.sourceRect);
+    // Un paso de deshacer por cel tocado — así un lote de N cuadros se
+    // deshace/rehace de una vez, no cuadro por cuadro.
+    const steps: { surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
+    for (const fc of f.cels) {
+      const cel = layer.cels.get(fc.celFrame);
+      if (!cel) {
+        this.renderer.release(fc.surface);
+        continue;
+      }
+      // Estado previo a levantar la selección: lo que hay ahora en el cel es
+      // el original menos los píxeles levantados, así que basta con
+      // reinsertarlos.
+      const beforeRegion = this.renderer.readRect(cel.surface, region);
+      spliceRect(beforeRegion, region, fc.before, f.sourceRect);
 
-    this.renderer.drawOver(cel.surface, f.surface, 1, this.floatingMatrixFor(f));
-    this.renderer.release(f.surface);
-    const afterRegion = this.renderer.readRect(cel.surface, region);
+      this.renderer.drawOver(cel.surface, fc.surface, 1, matrix);
+      this.renderer.release(fc.surface);
+      const afterRegion = this.renderer.readRect(cel.surface, region);
+      steps.push({ surface: cel.surface, before: beforeRegion, after: afterRegion });
+    }
+
+    if (steps.length === 0) {
+      this.touch();
+      return;
+    }
 
     this.history.push({
-      label: 'Transformar selección',
-      cost: beforeRegion.byteLength + afterRegion.byteLength,
+      label:
+        steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección',
+      cost: steps.reduce((n, s) => n + s.before.byteLength + s.after.byteLength, 0),
       redo: () => {
-        this.renderer.writeRect(cel.surface, region, afterRegion);
+        for (const s of steps) this.renderer.writeRect(s.surface, region, s.after);
         this.touch();
       },
       undo: () => {
-        this.renderer.writeRect(cel.surface, region, beforeRegion);
+        for (const s of steps) this.renderer.writeRect(s.surface, region, s.before);
         this.touch();
       },
     });
@@ -2507,9 +2595,11 @@ export class Engine {
     const f = this.floating;
     if (!f) return;
     const layer = this.doc.layers.find((l) => l.id === f.layerId);
-    const cel = layer ? layer.cels.get(f.celFrame) : null;
-    if (cel) this.renderer.writeRect(cel.surface, f.sourceRect, f.before);
-    this.renderer.release(f.surface);
+    for (const fc of f.cels) {
+      const cel = layer ? layer.cels.get(fc.celFrame) : null;
+      if (cel) this.renderer.writeRect(cel.surface, f.sourceRect, fc.before);
+      this.renderer.release(fc.surface);
+    }
     this.floating = null;
     this.touch();
   }

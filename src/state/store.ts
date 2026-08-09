@@ -91,6 +91,12 @@ interface UIState {
    *  interactivo a la vez por ahora (`doc.skeletons[0]`), así que no hace
    *  falta guardar también a qué esqueleto pertenece. */
   selectedBoneId: string | null;
+  /** Arrastrar en la regla de la línea de tiempo marca un rango en vez de
+   *  sólo mover el cabezal — lo que necesita `engine.liftSelectionRange`
+   *  para saber qué cuadros incluir en la transformación por lote. */
+  rangeSelectMode: boolean;
+  frameRangeStart: number | null;
+  frameRangeEnd: number | null;
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
@@ -113,6 +119,8 @@ interface UIState {
   setQuickShapePrecision: (v: number) => void;
   setShowTimeline: (v: boolean) => void;
   setBusy: (v: string | null) => void;
+  setRangeSelectMode: (v: boolean) => void;
+  setFrameRange: (start: number | null, end: number | null) => void;
 }
 
 /** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
@@ -172,6 +180,9 @@ export const useUI = create<UIState>((set, get) => ({
   showTimeline: true,
   busy: null,
   selectedBoneId: null,
+  rangeSelectMode: false,
+  frameRangeStart: null,
+  frameRangeEnd: null,
 
   setEngine: (engine) => set({ engine }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
@@ -246,6 +257,9 @@ export const useUI = create<UIState>((set, get) => ({
   setQuickShapePrecision: (quickShapePrecision) => set({ quickShapePrecision: clamp(quickShapePrecision, 0, 1) }),
   setShowTimeline: (showTimeline) => set({ showTimeline }),
   setBusy: (busy) => set({ busy }),
+  setRangeSelectMode: (rangeSelectMode) =>
+    set(rangeSelectMode ? { rangeSelectMode } : { rangeSelectMode, frameRangeStart: null, frameRangeEnd: null }),
+  setFrameRange: (frameRangeStart, frameRangeEnd) => set({ frameRangeStart, frameRangeEnd }),
 }));
 
 if (import.meta.env.DEV) {
