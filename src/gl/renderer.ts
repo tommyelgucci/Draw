@@ -463,11 +463,17 @@ export class Renderer {
     gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
     gl.uniform3f(p.uniforms.uColor, color.r, color.g, color.b);
     gl.uniform1f(p.uniforms.uUseTexture, brushTexture ? 1 : 0);
-    if (brushTexture) {
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, brushTexture);
-      gl.uniform1i(p.uniforms.uTexture, 0);
-    }
+    // Siempre se toca la unidad 0, incluso sin textura: si se deja lo que
+    // hubiera antes, puede ser justo la textura de este mismo `target` (por
+    // ejemplo, la de `drawOver` al volcar el trazo anterior sobre el cel), y
+    // WebGL2 rechaza el draw call entero como feedback loop entre el
+    // framebuffer activo y una textura enlazada, aunque el shader nunca la
+    // lea. En el uso interactivo normal el siguiente fotograma de render ya
+    // pisa esa unidad con otra cosa, así que no se notaba; en dos trazos
+    // seguidos sin que se dibuje un fotograma de por medio, sí.
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, brushTexture ?? null);
+    if (brushTexture) gl.uniform1i(p.uniforms.uTexture, 0);
 
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, stamps.length);
 

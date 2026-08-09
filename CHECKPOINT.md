@@ -16,8 +16,9 @@ npm run test:selection    TODO EN VERDE   (14 comprobaciones)
 npm run test:responsive   iPhone y iPad sin desbordes ni controles fuera de pantalla
 npm run test:reference    TODO EN VERDE   (14 comprobaciones, imagen + vídeo real vía MediaRecorder)
 npm run test:brush-texture TODO EN VERDE  (8 comprobaciones)
+npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borran de verdad)
 npx oxlint                sin warnings
-npm run build             319 kB / 101 kB gzip
+npm run build             323 kB / 101 kB gzip
 ```
 
 ## Funciona
@@ -29,8 +30,11 @@ npm run build             319 kB / 101 kB gzip
   dispersión y variación de tamaño.
 - Estabilización con filtro One Euro; muestras predichas del navegador para
   recortar latencia.
-- Seis pinceles editables: lápiz, entintado, marcador, aerógrafo, pintura,
-  borrador.
+- **Kit de 18 pinceles** en cinco categorías (Boceto, Entintado, Pintura,
+  Texturas, Borradores), agrupadas en el panel: lápiz, lápiz blando, grafito,
+  carboncillo · entintado, rotulador fino, caligráfico, marcador · pintura,
+  acuarela, gouache, acrílico · aerógrafo, aerógrafo salpicado, pastel,
+  textura de lienzo · borrador, borrador suave. Cada uno editable.
 - Bote de relleno que respeta líneas de otras capas, con crecimiento
   configurable contra la orla del antialias.
 - Cuentagotas sobre la imagen compuesta.
@@ -39,6 +43,10 @@ npm run build             319 kB / 101 kB gzip
   El generador de píxeles (`core/brushTexture.ts`) es puro cálculo sin DOM:
   el mismo buffer sube como textura a la GPU y pinta la miniatura del
   selector en la interfaz, sin duplicar el algoritmo en dos sitios.
+- **Paleta de colores en cuatro grupos**: neutros (rampa de grises), espectro
+  (12 tonos vivos), pasteles (6 tonos claros) y tierras y piel (8 tonos
+  cálidos), además de los colores recientes. El espectro y los pasteles se
+  generan con `hsvToRgb`, no están escritos a mano uno a uno.
 
 ### Capas
 - Los 13 modos de fusión separables de la especificación de compositing,
@@ -127,6 +135,19 @@ Todos salieron de mirar capturas, no del compilador:
    de origen y destino.
 7. **Presupuesto de texturas por número en vez de por memoria**: 40 texturas
    son 13 MB en un lienzo de 512² y 670 MB en uno de 4K.
+8. **`drawStamps` podía formar un feedback loop de WebGL y fallar en
+   silencio.** Si un trazo anterior dejaba la textura del scratch `wet`
+   enlazada en la unidad 0 (lo que hace `drawOver` al volcarlo sobre el cel)
+   y el siguiente trazo no pedía textura de pincel, esa unidad seguía
+   apuntando a `wet` justo cuando `wet` era también el destino del
+   framebuffer: WebGL rechaza el draw call entero, sin excepción en JS, y la
+   estampa no pintaba nada. En el uso normal el siguiente fotograma de render
+   ya pisaba esa unidad con otra textura, así que no se notaba; en dos trazos
+   seguidos sin que se dibuje un fotograma de por medio (como al probar los
+   18 pinceles del kit uno detrás de otro, sin ratón de por medio), sí.
+   Encontrado por `test:brushes`, que dejó de fiarse del compilador y miró
+   los píxeles resultantes. Ahora `drawStamps` siempre fija la unidad 0,
+   incluso a `null` cuando no hay textura.
 
 ## Lo siguiente
 
@@ -161,8 +182,9 @@ Por orden, según `RUMBO.md` (Fase 1):
   en vez de colgar la importación entera.
 - **Las texturas de punta se ven mal en pinceles muy pequeños.** El patrón de
   128×128 se muestrea en todo el UV de la estampa sin importar cuántos
-  píxeles ocupe en pantalla: en un lápiz de pocos píxeles el resultado es una
-  línea casi invisible en vez de grano (por eso ningún pincel por defecto
-  lleva textura salvo "Pintura", que es lo bastante grande). Sólo se nota al
-  bajar mucho el tamaño; se arreglaría atenuando la textura por debajo de
-  cierto diámetro de estampa.
+  píxeles ocupe en pantalla: por debajo de ~12 px el resultado es una línea
+  casi invisible en vez de grano. Los pinceles del kit que llevan textura
+  (lápiz blando, grafito, carboncillo, pintura, acuarela, acrílico, aerógrafo
+  salpicado, pastel, textura de lienzo) están todos por encima de ese
+  tamaño; se arreglaría de raíz atenuando la textura por debajo de cierto
+  diámetro de estampa.

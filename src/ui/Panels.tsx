@@ -7,6 +7,7 @@ import {
   type RGB,
 } from '../core/types';
 import { BUILTIN_TEXTURES, generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
+import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS } from '../core/brush';
 import {
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
@@ -352,19 +353,30 @@ export function BrushPanel() {
 
   return (
     <Panel title="Pincel" onClose={() => setPanel(null)} width={310}>
-      <div className="brush-grid">
-        {brushes.map((b, i) => (
-          <button
-            key={b.id}
-            type="button"
-            className={`brush-chip ${i === brushIndex ? 'is-active' : ''}`}
-            onClick={() => setBrushIndex(i)}
-          >
-            <BrushPreview brush={b} />
-            <span>{b.name}</span>
-          </button>
-        ))}
-      </div>
+      {BRUSH_CATEGORIES.map((cat) => {
+        const items = brushes
+          .map((b, i) => ({ b, i }))
+          .filter(({ b }) => b.category === cat);
+        if (items.length === 0) return null;
+        return (
+          <div key={cat} className="brush-category">
+            <h3 className="panel__subtitle">{BRUSH_CATEGORY_LABELS[cat]}</h3>
+            <div className="brush-grid">
+              {items.map(({ b, i }) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className={`brush-chip ${i === brushIndex ? 'is-active' : ''}`}
+                  onClick={() => setBrushIndex(i)}
+                >
+                  <BrushPreview brush={b} />
+                  <span>{b.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
 
       <div className="panel__section">
         <Slider
@@ -562,7 +574,7 @@ function BrushPreview({ brush }: { brush: { hardness: number; aspect: number } }
 
 export function ColorPanel() {
   const setPanel = useUI((s) => s.setPanel);
-  const { color, setColor, palette, recentColors } = useUI();
+  const { color, setColor, paletteGroups, recentColors } = useUI();
   const hsv = useMemo(() => rgbToHsv(color), [color]);
   const [hue, setHue] = useState(hsv.h);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -636,8 +648,12 @@ export function ColorPanel() {
         </>
       )}
 
-      <h3 className="panel__subtitle">Paleta</h3>
-      <Swatches colors={palette} onPick={(c) => setColor(c, true)} />
+      {paletteGroups.map((group) => (
+        <div key={group.name}>
+          <h3 className="panel__subtitle">{group.name}</h3>
+          <Swatches colors={group.colors} onPick={(c) => setColor(c, true)} />
+        </div>
+      ))}
     </Panel>
   );
 }
