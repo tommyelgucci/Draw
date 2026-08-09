@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 shots/
+
+# Worktrees y estado local de agentes de Claude Code, no es parte del proyecto.
+.claude/
