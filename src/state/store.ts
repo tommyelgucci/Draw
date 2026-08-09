@@ -13,12 +13,13 @@ export type Tool =
   | 'eyedropper'
   | 'selectRect'
   | 'selectLasso'
+  | 'selectWand'
   | 'transform'
   | 'rig'
   | 'pan';
 
 /** Herramientas que construyen una máscara de selección. */
-export const SELECT_TOOLS: Tool[] = ['selectRect', 'selectLasso'];
+export const SELECT_TOOLS: Tool[] = ['selectRect', 'selectLasso', 'selectWand'];
 
 export type PanelId = 'layers' | 'brush' | 'color' | 'export' | 'settings' | 'poses' | null;
 
@@ -85,6 +86,10 @@ interface UIState {
    * casi perfección — igual que el ajuste equivalente de Procreate, cuyo
    * punto dulce ronda 0.5-0.8, no el máximo. */
   quickShapePrecision: number;
+  /** 0..1, tolerancia de color de la varita mágica — se reajusta arrastrando
+   *  en horizontal durante el gesto, pero el valor de salida de cada toque
+   *  nuevo es el que dejó el anterior, como en Procreate. */
+  wandTolerance: number;
   showTimeline: boolean;
   busy: string | null;
   /** Hueso activo del gizmo en modo Viewport. Sólo se admite un esqueleto
@@ -136,6 +141,7 @@ interface UIState {
   setFingerDraws: (v: boolean) => void;
   setQuickShapeEnabled: (v: boolean) => void;
   setQuickShapePrecision: (v: number) => void;
+  setWandTolerance: (v: number) => void;
   setShowTimeline: (v: boolean) => void;
   setBusy: (v: string | null) => void;
   setRangeSelectMode: (v: boolean) => void;
@@ -202,6 +208,7 @@ export const useUI = create<UIState>((set, get) => ({
   fingerDraws: true,
   quickShapeEnabled: true,
   quickShapePrecision: 0.6,
+  wandTolerance: 0.15,
   showTimeline: true,
   busy: null,
   selectedBoneId: null,
@@ -285,6 +292,7 @@ export const useUI = create<UIState>((set, get) => ({
   setFingerDraws: (fingerDraws) => set({ fingerDraws }),
   setQuickShapeEnabled: (quickShapeEnabled) => set({ quickShapeEnabled }),
   setQuickShapePrecision: (quickShapePrecision) => set({ quickShapePrecision: clamp(quickShapePrecision, 0, 1) }),
+  setWandTolerance: (wandTolerance) => set({ wandTolerance: clamp(wandTolerance, 0, 1) }),
   setShowTimeline: (showTimeline) => set({ showTimeline }),
   setBusy: (busy) => set({ busy }),
   setRangeSelectMode: (rangeSelectMode) =>

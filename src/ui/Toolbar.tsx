@@ -21,6 +21,7 @@ import {
   IconSelectRect,
   IconTransform,
   IconUndo,
+  IconWand,
 } from './icons';
 import type { SelectionMode } from '../core/selection';
 
@@ -31,6 +32,7 @@ const TOOLS: { id: Tool; label: string; icon: React.ReactNode }[] = [
   { id: 'eyedropper', label: 'Cuentagotas', icon: <IconDropper /> },
   { id: 'selectRect', label: 'Seleccionar rectángulo', icon: <IconSelectRect /> },
   { id: 'selectLasso', label: 'Lazo', icon: <IconLasso /> },
+  { id: 'selectWand', label: 'Varita mágica', icon: <IconWand /> },
   { id: 'transform', label: 'Transformar capa', icon: <IconTransform /> },
   { id: 'rig', label: 'Viewport (huesos)', icon: <IconBone /> },
   { id: 'pan', label: 'Mover lienzo', icon: <IconHand /> },
@@ -59,7 +61,7 @@ export function Toolbar({ engine }: { engine: Engine }) {
     quickShapeEnabled,
     setQuickShapeEnabled,
   } = useUI();
-  const selecting = tool === 'selectRect' || tool === 'selectLasso';
+  const selecting = tool === 'selectRect' || tool === 'selectLasso' || tool === 'selectWand';
   const brush = useActiveBrush();
   const compact = useCompact();
   const [, force] = useState(0);
