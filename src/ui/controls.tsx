@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { IconClose } from './icons';
+import { useDraggable } from './useDraggable';
 
 interface SliderProps {
   value: number;
@@ -136,13 +137,27 @@ export function Panel({ title, onClose, children, side = 'right', width }: Panel
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // La clave de posición es el propio título: cada panel tiene uno fijo y
+  // único ("Capas", "Pincel"…), así que sirve de id sin añadir una prop más
+  // a los cinco sitios que ya llaman a `Panel`.
+  const { position, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp } = useDraggable(title);
+
   return (
     <div
-      className={`panel panel--${side}`}
-      style={width ? { width } : undefined}
+      className={`panel panel--${side} ${position ? 'is-dragged' : ''}`}
+      style={{
+        ...(width ? { width } : undefined),
+        ...(position ? { left: position.left, top: position.top } : undefined),
+      }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <header className="panel__head">
+      <header
+        className="panel__head"
+        onPointerDown={onHeaderPointerDown}
+        onPointerMove={onHeaderPointerMove}
+        onPointerUp={onHeaderPointerUp}
+        onPointerCancel={onHeaderPointerUp}
+      >
         <h2>{title}</h2>
         <IconButton title="Cerrar" onClick={onClose} className="icon-btn--ghost">
           <IconClose size={18} />
