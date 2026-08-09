@@ -163,7 +163,14 @@ export function Timeline({ engine }: { engine: Engine }) {
           <input
             type="number"
             min={1}
-            max={2000}
+            // El motor no tiene techo propio — los cels viven en un Map
+            // disperso, así que un cuadro vacío no cuesta memoria. El techo
+            // real es esta franja: sin virtualizar, pinta una celda de DOM
+            // por cuadro y por capa. Medido en navegador (no adivinado):
+            // con 10 capas, subir a 6000 tarda ~2s en pintar la primera vez;
+            // pasado eso ya se nota. 6000 cuadros son 8:20 min a 12 fps o
+            // 4:10 a 24 fps — de sobra para lo que pide cualquier corto.
+            max={6000}
             value={doc.frameCount}
             onChange={(e) => engine.setFrameCount(Number(e.target.value) || 1)}
           />
