@@ -88,6 +88,32 @@ function shakyLinePoints(x0, y0, x1, y1, jitter, rand, n = 16) {
   });
 }
 
+/**
+ * Cierra un círculo sin parar en seco: los últimos pasos siguen la curva
+ * despacio, con un hueco real de tiempo entre cada uno (no todos pegados
+ * como en `drawAndHold`). Esto es lo que de verdad pasa al cerrar una
+ * curva a mano — la mano decelera, no se congela de golpe — y era
+ * justo el caso que el dwell por radio fijo nunca detectaba: la posición
+ * sigue alejándose del ancla aunque la velocidad ya casi sea cero.
+ */
+async function drawAndCloseSlowly(cx, cy, r, gapFraction = 0.08) {
+  const mainSteps = 24;
+  const mainEndT = (1 - gapFraction) * Math.PI * 2;
+  await page.mouse.move(cx + r, cy);
+  await page.mouse.down();
+  for (let i = 1; i <= mainSteps; i++) {
+    const t = (i / mainSteps) * mainEndT;
+    await page.mouse.move(cx + Math.cos(t) * r, cy + Math.sin(t) * r, { steps: 3 });
+  }
+  const tailSteps = 18;
+  for (let i = 1; i <= tailSteps; i++) {
+    const t = mainEndT + (Math.PI * 2 - mainEndT) * (i / tailSteps);
+    await page.mouse.move(cx + Math.cos(t) * r, cy + Math.sin(t) * r);
+    await page.waitForTimeout(28);
+  }
+  await page.waitForTimeout(450);
+}
+
 const pendingShape = () =>
   page.evaluate(() => {
     const p = window.__trace.pendingQuickShape;
@@ -232,6 +258,22 @@ check(
 await release();
 if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
 await page.screenshot({ path: `${out}/qs-07-circulo-tembloroso.png` });
+
+console.log('\n— Cierre lento, sin parar en seco —');
+// El bug real reportado más de una vez: los círculos no se detectaban
+// nunca aunque las líneas sí. La causa era el dwell por radio fijo —
+// cerrar una curva implica movimiento continuo que nunca se detiene
+// dentro de un radio, así que el temporizador se reiniciaba sin parar.
+await drawAndCloseSlowly(cx - 200, cy - 100, 90);
+s = await pendingShape();
+check(
+  'un círculo cerrado despacio (sin parar en seco) se reconoce',
+  s?.kind === 'ellipse',
+  JSON.stringify(s),
+);
+await release();
+if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
+await page.screenshot({ path: `${out}/qs-10-cierre-lento.png` });
 
 let lineHits = 0;
 const angles = [0, 18, -22, 40, -55, 70, -80, 100, -130, 160];
