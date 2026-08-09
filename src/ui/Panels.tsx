@@ -37,7 +37,9 @@ import {
   IconImage,
   IconKey,
   IconLock,
+  IconMergeDown,
   IconPlus,
+  IconResize,
   IconTrash,
   IconVideo,
 } from './icons';
@@ -76,31 +78,50 @@ export function LayersPanel({ engine }: { engine: Engine }) {
 
   return (
     <Panel title="Capas" onClose={() => setPanel(null)} width={310}>
+      {/*
+        Con etiqueta debajo del icono, y no sólo en `title`: en una tablet no
+        hay puntero, así que un tooltip no llega a mostrarse nunca.
+      */}
       <div className="panel__actions">
-        <IconButton title="Nueva capa" onClick={() => engine.addLayer()}>
+        <button
+          type="button"
+          className="action"
+          aria-label="Nueva capa"
+          onClick={() => engine.addLayer()}
+        >
           <IconPlus size={18} />
-        </IconButton>
-        <IconButton
-          title="Duplicar capa"
+          <span>Nueva</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          aria-label="Duplicar capa"
           onClick={() => active && engine.duplicateLayer(active.id)}
           disabled={!active}
         >
           <IconCopy size={18} />
-        </IconButton>
-        <IconButton
-          title="Combinar hacia abajo"
+          <span>Duplicar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          aria-label="Nueva capa"
           onClick={() => active && engine.mergeDown(active.id)}
           disabled={!active || engine.activeLayerIndex <= 0}
         >
-          <span className="glyph">⌄</span>
-        </IconButton>
-        <IconButton
-          title="Eliminar capa"
+          <IconMergeDown size={18} />
+          <span>Combinar</span>
+        </button>
+        <button
+          type="button"
+          className="action action--danger"
+          aria-label="Eliminar capa"
           onClick={() => active && engine.deleteLayer(active.id)}
           disabled={!active || engine.doc.layers.length <= 1}
         >
           <IconTrash size={18} />
-        </IconButton>
+          <span>Eliminar</span>
+        </button>
       </div>
 
       <ul className="layer-list">
@@ -130,24 +151,32 @@ export function LayersPanel({ engine }: { engine: Engine }) {
                 </div>
               </div>
               <div className="layer__buttons">
-                <IconButton
-                  title={layer.visible ? 'Ocultar' : 'Mostrar'}
-                  className="icon-btn--ghost icon-btn--sm"
-                  onClick={() =>
-                    engine.setLayerProp(layer.id, 'visible', !layer.visible, 'Visibilidad')
-                  }
+                <button
+                  type="button"
+                  className={`layer__toggle ${layer.visible ? '' : 'is-off'}`}
+                  title={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
+                  aria-label={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
+                  aria-pressed={!layer.visible}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    engine.setLayerProp(layer.id, 'visible', !layer.visible, 'Visibilidad');
+                  }}
                 >
-                  {layer.visible ? <IconEye size={16} /> : <IconEyeOff size={16} />}
-                </IconButton>
-                <IconButton
-                  title={layer.locked ? 'Desbloquear' : 'Bloquear'}
-                  className={`icon-btn--ghost icon-btn--sm ${layer.locked ? 'is-active' : ''}`}
-                  onClick={() =>
-                    engine.setLayerProp(layer.id, 'locked', !layer.locked, 'Bloqueo')
-                  }
+                  {layer.visible ? <IconEye size={17} /> : <IconEyeOff size={17} />}
+                </button>
+                <button
+                  type="button"
+                  className={`layer__toggle ${layer.locked ? 'is-on' : ''}`}
+                  title={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
+                  aria-label={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
+                  aria-pressed={layer.locked}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    engine.setLayerProp(layer.id, 'locked', !layer.locked, 'Bloqueo');
+                  }}
                 >
-                  <IconLock size={16} />
-                </IconButton>
+                  <IconLock size={17} />
+                </button>
               </div>
             </li>
           );
@@ -678,6 +707,148 @@ function Swatches({ colors, onPick }: { colors: RGB[]; onPick: (c: RGB) => void 
 }
 
 /* ================================================================== *
+ * Tamaño del lienzo
+ * ================================================================== */
+
+const SIZE_PRESETS: { label: string; w: number; h: number }[] = [
+  { label: 'HD 16:9', w: 1920, h: 1080 },
+  { label: 'Cuadrado', w: 1500, h: 1500 },
+  { label: 'Vertical 9:16', w: 1080, h: 1920 },
+  { label: '4K 16:9', w: 3840, h: 2160 },
+  { label: 'A4 300 ppp', w: 2480, h: 3508 },
+  { label: 'Cómic', w: 1988, h: 3056 },
+];
+
+/** Las nueve posiciones del contenido antiguo dentro del lienzo nuevo. */
+const ANCHORS: { x: number; y: number }[] = [
+  { x: 0, y: 0 },
+  { x: 0.5, y: 0 },
+  { x: 1, y: 0 },
+  { x: 0, y: 0.5 },
+  { x: 0.5, y: 0.5 },
+  { x: 1, y: 0.5 },
+  { x: 0, y: 1 },
+  { x: 0.5, y: 1 },
+  { x: 1, y: 1 },
+];
+
+function CanvasSizeControls({ engine }: { engine: Engine }) {
+  useEngineRevision(engine);
+  const [width, setWidth] = useState(String(engine.doc.width));
+  const [height, setHeight] = useState(String(engine.doc.height));
+  const [anchor, setAnchor] = useState(4);
+  const [linked, setLinked] = useState(false);
+
+  // Si el documento cambia por otra vía (abrir, deshacer), los campos siguen.
+  useEffect(() => {
+    setWidth(String(engine.doc.width));
+    setHeight(String(engine.doc.height));
+  }, [engine.doc.width, engine.doc.height]);
+
+  const w = Number(width);
+  const h = Number(height);
+  const valid = Number.isFinite(w) && Number.isFinite(h) && w >= 16 && h >= 16;
+  const changed = valid && (w !== engine.doc.width || h !== engine.doc.height);
+  const shrinking = changed && (w < engine.doc.width || h < engine.doc.height);
+  const ratio = engine.doc.width / engine.doc.height;
+
+  const apply = () => {
+    if (!changed) return;
+    const a = ANCHORS[anchor];
+    engine.resizeCanvas(w, h, a.x, a.y);
+  };
+
+  return (
+    <>
+      <div className="preset-grid">
+        {SIZE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className={
+              p.w === engine.doc.width && p.h === engine.doc.height ? 'is-active' : ''
+            }
+            onClick={() => {
+              setWidth(String(p.w));
+              setHeight(String(p.h));
+            }}
+          >
+            <strong>{p.label}</strong>
+            <span>
+              {p.w} × {p.h}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="field-row">
+        <Field label="Ancho (px)">
+          <input
+            type="number"
+            min={16}
+            max={8192}
+            value={width}
+            onChange={(e) => {
+              setWidth(e.target.value);
+              if (linked) setHeight(String(Math.round(Number(e.target.value) / ratio)));
+            }}
+          />
+        </Field>
+        <Field label="Alto (px)">
+          <input
+            type="number"
+            min={16}
+            max={8192}
+            value={height}
+            onChange={(e) => {
+              setHeight(e.target.value);
+              if (linked) setWidth(String(Math.round(Number(e.target.value) * ratio)));
+            }}
+          />
+        </Field>
+      </div>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={linked}
+          onChange={(e) => setLinked(e.target.checked)}
+        />
+        <span>Mantener la proporción actual</span>
+      </label>
+
+      <span className="field__label">Dónde queda el dibujo</span>
+      <div className="anchor-grid" role="group" aria-label="Anclaje del contenido">
+        {ANCHORS.map((a, i) => (
+          <button
+            key={i}
+            type="button"
+            className={i === anchor ? 'is-active' : ''}
+            onClick={() => setAnchor(i)}
+            aria-label={`Anclar en ${a.x === 0 ? 'izquierda' : a.x === 1 ? 'derecha' : 'centro'}, ${a.y === 0 ? 'arriba' : a.y === 1 ? 'abajo' : 'medio'}`}
+            aria-pressed={i === anchor}
+          />
+        ))}
+      </div>
+
+      <button className="btn" disabled={!changed} onClick={apply}>
+        <IconResize size={16} /> Aplicar {valid ? `${w} × ${h}` : 'tamaño'}
+      </button>
+      {shrinking && (
+        <p className="hint">
+          El lienzo se hace más pequeño en algún eje: lo que quede fuera se recorta.
+          Deshacer lo devuelve.
+        </p>
+      )}
+      <p className="hint">
+        Puedes cambiarlo cuando quieras; los dibujos de todas las capas y fotogramas se
+        conservan y se recolocan según el anclaje.
+      </p>
+    </>
+  );
+}
+
+/* ================================================================== *
  * Exportar / proyecto
  * ================================================================== */
 
@@ -774,6 +945,9 @@ export function ExportPanel({ engine }: { engine: Engine }) {
           />
         </Field>
       </div>
+
+      <h3 className="panel__subtitle">Tamaño del lienzo</h3>
+      <CanvasSizeControls engine={engine} />
 
       <h3 className="panel__subtitle">Guardar</h3>
       <button

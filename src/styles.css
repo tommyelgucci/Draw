@@ -1271,3 +1271,150 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
+
+/* ------------------------------------------------------------------ *
+ * Acciones con etiqueta
+ *
+ * En una tablet no hay puntero y los `title` nunca llegan a mostrarse, así
+ * que los controles importantes llevan su nombre a la vista.
+ * ------------------------------------------------------------------ */
+
+.panel__actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.action:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.action--danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.layer__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layer__toggle {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.layer__toggle:active {
+  transform: scale(0.94);
+}
+
+/* Ocultada: se marca en rojo para que no parezca que el dibujo se perdió. */
+.layer__toggle.is-off {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.layer__toggle.is-on {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent-dim);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tamaño del lienzo
+ * ------------------------------------------------------------------ */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.preset-grid button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset-grid button.is-active {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.preset-grid strong {
+  font-size: 12px;
+}
+
+.preset-grid span {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  width: 108px;
+  margin: 6px 0 14px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.anchor-grid button {
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.anchor-grid button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}

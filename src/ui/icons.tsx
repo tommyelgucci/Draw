@@ -218,6 +218,22 @@ export const IconVideo = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconMergeDown = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4" y="3.5" width="16" height="6" rx="1" />
+    <path d="M12 11.5v5m0 0 2.5-2.5M12 16.5 9.5 14" />
+    <rect x="4" y="18" width="16" height="3" rx="1" fill="currentColor" />
+  </svg>
+);
+
+export const IconResize = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3" y="6" width="12" height="9" rx="1" strokeDasharray="3 2.5" />
+    <path d="M9 21h12V9" />
+    <path d="m16 14 5-5m0 0h-4m4 0v4" />
+  </svg>
+);
+
 export const IconFit = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" />

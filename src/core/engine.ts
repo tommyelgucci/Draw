@@ -1743,6 +1743,103 @@ export class Engine {
   }
 
   /** Composición limpia de un fotograma arbitrario, para exportar. */
+  /* ---------------------------------------------------------------- *
+   * Tamaño del lienzo
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Copia el contenido de todos los cels a lienzos de CPU.
+   *
+   * Hay que sacarlos antes de tocar el tamaño del documento: en cuanto
+   * `setDocumentSize` cambia, las texturas se reservan con las medidas nuevas
+   * y lo que hubiera dentro se pierde.
+   */
+  private snapshotCels(): Map<string, HTMLCanvasElement> {
+    const shots = new Map<string, HTMLCanvasElement>();
+    for (const layer of this.doc.layers) {
+      for (const cel of layer.cels.values()) {
+        if (cel.surface.empty) continue;
+        const data = this.renderer.toImageData(this.renderer.ensureResident(cel.surface));
+        const canvas = document.createElement('canvas');
+        canvas.width = data.width;
+        canvas.height = data.height;
+        canvas.getContext('2d')!.putImageData(data, 0, 0);
+        shots.set(cel.id, canvas);
+      }
+    }
+    return shots;
+  }
+
+  /** Reconstruye todos los cels al tamaño dado, colocando cada copia en `dx, dy`. */
+  private applyCanvasSize(
+    width: number,
+    height: number,
+    shots: Map<string, HTMLCanvasElement>,
+    dx: number,
+    dy: number,
+  ) {
+    this.doc.width = width;
+    this.doc.height = height;
+    this.renderer.setDocumentSize(width, height);
+    this.thumbCache.clear();
+    // La máscara de selección tenía las medidas viejas; ya no vale.
+    this.selection = { active: false, bounds: emptyRect() };
+    this.selectionCanvas = null;
+    this.selectionBackup = null;
+
+    for (const layer of this.doc.layers) {
+      for (const cel of layer.cels.values()) {
+        this.renderer.release(cel.surface);
+        cel.surface.empty = true;
+        const shot = shots.get(cel.id);
+        if (!shot) continue;
+
+        const placed = document.createElement('canvas');
+        placed.width = width;
+        placed.height = height;
+        placed.getContext('2d')!.drawImage(shot, dx, dy);
+        this.renderer.uploadImage(cel.surface, placed);
+      }
+    }
+    this.resetView();
+    this.touch();
+  }
+
+  /**
+   * Cambia el tamaño del lienzo conservando los dibujos.
+   *
+   * `anchor` va de 0 a 1 en cada eje y decide dónde queda el contenido
+   * anterior: 0.5 lo centra, 0 lo pega arriba-izquierda. Al reducir se
+   * recorta lo que sobresalga, y por eso deshacer guarda una copia de todos
+   * los cels en vez de intentar recalcularlos.
+   */
+  resizeCanvas(width: number, height: number, anchorX = 0.5, anchorY = 0.5) {
+    const w = Math.round(clamp(width, 16, 8192));
+    const h = Math.round(clamp(height, 16, 8192));
+    if (w === this.doc.width && h === this.doc.height) return;
+
+    if (this.floating) this.commitFloating();
+    if (this.builder) this.endStroke();
+
+    const oldW = this.doc.width;
+    const oldH = this.doc.height;
+    const shots = this.snapshotCels();
+    const dx = Math.round((w - oldW) * anchorX);
+    const dy = Math.round((h - oldH) * anchorY);
+
+    let cost = 0;
+    for (const c of shots.values()) cost += c.width * c.height * 4;
+
+    this.history.run({
+      label: 'Tamaño del lienzo',
+      cost,
+      redo: () => this.applyCanvasSize(w, h, shots, dx, dy),
+      // Volver atrás reinserta las copias en su sitio original, porque al
+      // encoger se perdieron píxeles que no se pueden deducir.
+      undo: () => this.applyCanvasSize(oldW, oldH, shots, 0, 0),
+    });
+  }
+
   renderFrameToImageData(frame: number): ImageData {
     const surface = this.compositeGroups({
       frame,
