@@ -11,6 +11,7 @@ import {
 import { useEngineRevision, useUI } from '../state/store';
 import { IconButton, Slider } from './controls';
 import {
+  IconClose,
   IconCopy,
   IconNext,
   IconOnion,
@@ -167,6 +168,37 @@ export function Timeline({ engine }: { engine: Engine }) {
           />
         </label>
       </header>
+
+      {frameRangeStart !== null && frameRangeEnd !== null && frameRangeEnd > frameRangeStart && (
+        <div className="frame-range-actions">
+          <span className="frame-range-actions__label">
+            {frameRangeEnd - frameRangeStart + 1} cuadros marcados
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              engine.duplicateFrameRange(frameRangeStart, frameRangeEnd);
+              setFrameRange(null, null);
+            }}
+            title="Duplicar el rango justo después"
+          >
+            <IconCopy size={16} /> Duplicar
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              engine.reverseFrameRange(frameRangeStart, frameRangeEnd);
+              setFrameRange(null, null);
+            }}
+            title="Invertir el orden de los dibujos del rango"
+          >
+            Invertir
+          </button>
+          <button type="button" onClick={() => setFrameRange(null, null)} aria-label="Quitar la marca de rango">
+            <IconClose size={16} />
+          </button>
+        </div>
+      )}
 
       {onionOpen && (
         <div className="onion-popover">

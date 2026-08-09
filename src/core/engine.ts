@@ -1016,6 +1016,95 @@ export class Engine {
     });
   }
 
+  /**
+   * Copia los dibujos que EMPIEZAN dentro de `[fromFrame, toFrame]` justo
+   * después del rango, desplazados por su misma longitud — para repetir un
+   * ciclo (una caminata, un parpadeo) sin volver a dibujarlo. Mismo
+   * criterio que `liftSelectionRange`: sólo los cels que empiezan ahí, no
+   * cada fotograma sostenido, porque tocar el mismo dibujo una vez por
+   * fotograma lo procesaría de más para el mismo resultado. Amplía
+   * `frameCount` si el destino no cabe todavía.
+   */
+  duplicateFrameRange(fromFrame: number, toFrame: number) {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || layer.kind === 'reference' || !layer.animated) return;
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    const span = hi - lo + 1;
+    const sourceFrames = sortedCelFrames(layer).filter((f) => f >= lo && f <= hi);
+    if (sourceFrames.length === 0) return;
+
+    const copies = sourceFrames.map((f) => {
+      const src = layer.cels.get(f)!;
+      const cel = this.makeCel();
+      this.renderer.copy(cel.surface, this.renderer.ensureResident(src.surface), 1);
+      return { frame: f + span, cel };
+    });
+
+    const destEnd = hi + span;
+    const before = layer.cels;
+    const prevFrameCount = this.doc.frameCount;
+    const growsDoc = destEnd >= this.doc.frameCount;
+
+    this.history.run({
+      label: 'Duplicar rango de cuadros',
+      redo: () => {
+        if (growsDoc) this.doc.frameCount = destEnd + 1;
+        const after = new Map(before);
+        for (const c of copies) after.set(c.frame, c.cel);
+        layer.cels = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.cels = before;
+        if (growsDoc) this.doc.frameCount = prevFrameCount;
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Invierte el orden temporal de los dibujos dentro de `[fromFrame,
+   * toFrame]` en la capa activa — para recorrer un ciclo hacia atrás sin
+   * redibujarlo. No copia superficies: reubica los mismos `Cel` que ya
+   * existían en los fotogramas espejados, así que lo único que cambia es
+   * en qué fotograma EMPIEZA a sostenerse cada uno.
+   */
+  reverseFrameRange(fromFrame: number, toFrame: number) {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || layer.kind === 'reference' || !layer.animated) return;
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    if (lo >= hi) return;
+
+    const before = layer.cels;
+    const after = new Map(before);
+    for (const f of [...after.keys()]) if (f >= lo && f <= hi) after.delete(f);
+
+    // `celAt` lee `layer.cels`, que sigue siendo `before` hasta el redo():
+    // el bucle de abajo calcula sobre el estado ORIGINAL, no sobre `after`.
+    let prevCel = lo > 0 ? celAt(layer, lo - 1) : null;
+    for (let f = lo; f <= hi; f++) {
+      const cel = celAt(layer, lo + hi - f);
+      if (cel !== prevCel) {
+        if (cel) after.set(f, cel);
+        prevCel = cel;
+      }
+    }
+
+    this.history.run({
+      label: 'Invertir rango de cuadros',
+      redo: () => {
+        layer.cels = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.cels = before;
+        this.touch();
+      },
+    });
+  }
+
   clearCel(layerId: string, frame: number) {
     const layer = this.doc.layers.find((l) => l.id === layerId);
     if (!layer) return;
