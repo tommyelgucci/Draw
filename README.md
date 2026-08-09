@@ -120,11 +120,13 @@ codificador de vídeo.
 ### Opción recomendada: GitHub Pages
 
 Cada empujón a la rama principal publica la app automáticamente
-(`.github/workflows/deploy.yml`). Sólo hay que activarlo una vez:
+(`.github/workflows/deploy.yml`). Hay que activarlo una vez a mano, porque
+crear el sitio de Pages pide permisos de administración del repositorio y el
+token del flujo no los tiene:
 
 1. En GitHub, **Settings → Pages**.
 2. En *Source*, elige **GitHub Actions**.
-3. Espera a que termine el flujo en la pestaña *Actions*.
+3. Vuelve a *Actions* y relanza el último flujo con **Re-run all jobs**.
 
 La app queda en `https://<usuario>.github.io/Draw/`. Ábrela en Safari,
 **Compartir → Añadir a pantalla de inicio**, y arranca a pantalla completa como
