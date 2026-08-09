@@ -1043,6 +1043,15 @@ button:focus-visible {
   background: var(--surface-2);
 }
 
+.onion-popover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /** Barra de acciones del rango marcado en la regla — duplicarlo o
  *  invertirlo, para ciclos que se repiten o se recorren al revés sin
  *  redibujar nada. Fila propia bajo la cabecera en vez de flotar sobre la

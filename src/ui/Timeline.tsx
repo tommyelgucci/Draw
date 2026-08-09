@@ -52,6 +52,19 @@ export function Timeline({ engine }: { engine: Engine }) {
     [doc.frameCount],
   );
 
+  // Mismo atajo que el resto de paneles flotantes de la app (`Panel` en
+  // controls.tsx): éste no es uno de ésos — es un popover suelto propio de
+  // la línea de tiempo — así que repite el mismo `useEffect` en vez de
+  // heredarlo.
+  useEffect(() => {
+    if (!onionOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOnionOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onionOpen]);
+
   // Mantiene el cabezal a la vista durante la reproducción.
   useEffect(() => {
     const el = scrollRef.current;
@@ -163,7 +176,14 @@ export function Timeline({ engine }: { engine: Engine }) {
           <input
             type="number"
             min={1}
-            max={2000}
+            // El motor no tiene techo propio — los cels viven en un Map
+            // disperso, así que un cuadro vacío no cuesta memoria. El techo
+            // real es esta franja: sin virtualizar, pinta una celda de DOM
+            // por cuadro y por capa. Medido en navegador (no adivinado):
+            // con 10 capas, subir a 6000 tarda ~2s en pintar la primera vez;
+            // pasado eso ya se nota. 6000 cuadros son 8:20 min a 12 fps o
+            // 4:10 a 24 fps — de sobra para lo que pide cualquier corto.
+            max={6000}
             value={doc.frameCount}
             onChange={(e) => engine.setFrameCount(Number(e.target.value) || 1)}
           />
@@ -203,6 +223,12 @@ export function Timeline({ engine }: { engine: Engine }) {
 
       {onionOpen && (
         <div className="onion-popover">
+          <div className="onion-popover__head">
+            <span>Papel cebolla</span>
+            <IconButton title="Cerrar" onClick={() => setOnionOpen(false)} className="icon-btn--ghost">
+              <IconClose size={16} />
+            </IconButton>
+          </div>
           <label className="check">
             <input
               type="checkbox"

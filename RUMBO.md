@@ -134,10 +134,15 @@ las oportunidades están donde su arquitectura no le deja llegar.
    color suelto y borrar la paleta entera (con confirmación, a diferencia de
    quitar un color). Vive en `localStorage`, no en el `.trace`: es preferencia
    de la persona, no del dibujo — por eso sobrevive a abrir otro proyecto.
-7. **Taper de extremo + rotación de estampa según dirección del trazo**, en el
-   estudio de pincel. Encajan en el modelo de estampas instanciadas que ya
-   existe, sin arquitectura nueva — de las mejoras con más impacto visual por
-   el esfuerzo más bajo revisadas hasta ahora.
+7. **Taper de extremo + rotación de estampa según dirección del trazo.** `hecho`.
+   La rotación ya existía (`followDirection`); lo nuevo es el afinado. El de
+   arranque se resuelve en caliente dentro de `StrokeBuilder` porque se sabe
+   al instante (distancia recorrida desde el primer punto); el de cierre no
+   se puede saber hasta soltar el lápiz, así que `Engine` mantiene una cola
+   corta con las últimas estampas del trazo (acotada por la longitud de
+   afinado, no por el trazo entero) y las reescala en vivo cada fotograma
+   contra la punta actual — mismo mecanismo que ya existía para las estampas
+   especulativas de predicción. Slider "Afinado de extremos" por pincel.
 
 Los tres últimos salieron de un repaso más amplio (no sólo Procreate: también
 Artstudio Pro y una app de dibujo vectorial sin identificar con certeza,
