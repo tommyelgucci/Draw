@@ -9,9 +9,11 @@ import {
   type Channel,
   type Layer,
   type LayerKind,
+  type SpriteSwapCatalog,
   type TraceDocument,
   type TransformTrack,
 } from './document';
+import { newBoneTrack, type Bone, type BoneTrack, type LayerRig, type Mesh, type MeshVertex, type Skeleton } from './rig';
 import type { BlendMode, RGB } from './types';
 
 const FORMAT_VERSION = 1;
@@ -28,6 +30,43 @@ interface SerializedLayer {
   animated: boolean;
   cels: { frame: number; celId: string; label?: string }[];
   transform: TransformTrack;
+  /** Ausente en capas sin rig — ver `normalizeLayerRig`. */
+  rig?: LayerRig;
+  /** El PNG de cada variante va aparte, bajo `swap/<layerId>/<variantId>.png`. */
+  swap?: { variants: { id: string; label: string }[]; selected: Channel };
+}
+
+interface SerializedBone {
+  id: string;
+  name: string;
+  parentId: string | null;
+  length: number;
+  restX: number;
+  restY: number;
+  restRotation: number;
+  track: BoneTrack;
+}
+
+interface SerializedSkeleton {
+  id: string;
+  name: string;
+  bones: SerializedBone[];
+}
+
+interface SerializedMeshVertex {
+  x: number;
+  y: number;
+  u: number;
+  v: number;
+  boneIndices: number[];
+  boneWeights: number[];
+}
+
+interface SerializedMesh {
+  id: string;
+  vertices: SerializedMeshVertex[];
+  triangles: number[];
+  skeletonId: string;
 }
 
 interface SerializedDoc {
@@ -43,6 +82,9 @@ interface SerializedDoc {
   createdAt: number;
   modifiedAt: number;
   layers: SerializedLayer[];
+  /** Ausentes en proyectos anteriores al Módulo de Rigging — ver `normalizeSkeleton`/`normalizeMesh`. */
+  skeletons?: SerializedSkeleton[];
+  meshes?: SerializedMesh[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -89,6 +131,24 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
         files[`cels/${cel.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
       }
     }
+
+    let swap: SerializedLayer['swap'];
+    if (layer.swap) {
+      const variants: { id: string; label: string }[] = [];
+      for (const variant of layer.swap.variants) {
+        variants.push({ id: variant.id, label: variant.label });
+        if (!variant.surface.empty) {
+          const data = engine.renderer.toImageData(
+            engine.renderer.ensureResident(variant.surface),
+          );
+          files[`swap/${layer.id}/${variant.id}.png`] = await canvasToPngBytes(
+            canvasFromImageData(data),
+          );
+        }
+      }
+      swap = { variants, selected: layer.swap.selected };
+    }
+
     layers.push({
       id: layer.id,
       name: layer.name,
@@ -101,6 +161,8 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       animated: layer.animated,
       cels,
       transform: layer.transform,
+      rig: layer.rig,
+      swap,
     });
   }
 
@@ -117,6 +179,8 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     createdAt: doc.createdAt,
     modifiedAt: Date.now(),
     layers,
+    skeletons: doc.skeletons,
+    meshes: doc.meshes,
   };
   files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
 
@@ -141,6 +205,8 @@ export async function deserializeProject(
   doc.createdAt = meta.createdAt;
   doc.modifiedAt = meta.modifiedAt;
   doc.layers = [];
+  doc.skeletons = normalizeSkeletons(meta.skeletons);
+  doc.meshes = normalizeMeshes(meta.meshes);
 
   engine.renderer.setDocumentSize(doc.width, doc.height);
 
@@ -158,6 +224,7 @@ export async function deserializeProject(
       animated: sl.animated,
       cels: new Map(),
       transform: normalizeTransform(sl.transform),
+      rig: normalizeLayerRig(sl.rig),
     };
     for (const sc of sl.cels) {
       const cel: Cel = {
@@ -174,6 +241,22 @@ export async function deserializeProject(
         bitmap.close();
       }
       layer.cels.set(sc.frame, cel);
+    }
+    if (sl.swap) {
+      const catalog: SpriteSwapCatalog = { variants: [], selected: sl.swap.selected };
+      for (const sv of sl.swap.variants) {
+        const surface = engine.renderer.createSurface('swap');
+        const png = files[`swap/${sl.id}/${sv.id}.png`];
+        if (png) {
+          const bitmap = await createImageBitmap(
+            new Blob([png as BlobPart], { type: 'image/png' }),
+          );
+          engine.renderer.uploadImage(surface, bitmap);
+          bitmap.close();
+        }
+        catalog.variants.push({ id: sv.id, label: sv.label, surface });
+      }
+      layer.swap = catalog;
     }
     doc.layers.push(layer);
   }
@@ -193,6 +276,77 @@ function normalizeTransform(t: Partial<TransformTrack> | undefined): TransformTr
     rotation: ch(t?.rotation, 0),
     opacity: ch(t?.opacity, 1),
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Rig: esqueletos, mallas y catálogos de intercambio de sprites.
+ * Todos son campos opcionales de `SerializedDoc`/`SerializedLayer` — un
+ * `.trace` de antes del Módulo de Rigging no los lleva, y estas funciones
+ * rellenan valores base en vez de lanzar, siguiendo el mismo criterio que
+ * `normalizeTransform`. No hace falta subir `FORMAT_VERSION` por esto.
+ * ------------------------------------------------------------------ */
+
+function normalizeBoneTrack(t: Partial<BoneTrack> | undefined): BoneTrack {
+  const ch = (c: Channel | undefined, base: number): Channel =>
+    c && Array.isArray(c.keys) ? c : { base, keys: [] };
+  const base = newBoneTrack();
+  return {
+    x: ch(t?.x, base.x.base),
+    y: ch(t?.y, base.y.base),
+    rotation: ch(t?.rotation, base.rotation.base),
+    scaleX: ch(t?.scaleX, base.scaleX.base),
+    scaleY: ch(t?.scaleY, base.scaleY.base),
+  };
+}
+
+function normalizeBone(b: Partial<SerializedBone>): Bone {
+  return {
+    id: b.id ?? uid('bone'),
+    name: b.name ?? 'Hueso',
+    parentId: b.parentId ?? null,
+    length: b.length ?? 80,
+    restX: b.restX ?? 0,
+    restY: b.restY ?? 0,
+    restRotation: b.restRotation ?? 0,
+    track: normalizeBoneTrack(b.track),
+  };
+}
+
+function normalizeSkeletons(list: SerializedSkeleton[] | undefined): Skeleton[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((s) => ({
+    id: s.id ?? uid('skel'),
+    name: s.name ?? 'Esqueleto',
+    bones: Array.isArray(s.bones) ? s.bones.map(normalizeBone) : [],
+  }));
+}
+
+function normalizeMeshVertex(v: Partial<SerializedMeshVertex>): MeshVertex {
+  const idx = Array.isArray(v.boneIndices) ? v.boneIndices : [0, 0, 0, 0];
+  const w = Array.isArray(v.boneWeights) ? v.boneWeights : [1, 0, 0, 0];
+  return {
+    x: v.x ?? 0,
+    y: v.y ?? 0,
+    u: v.u ?? 0,
+    v: v.v ?? 0,
+    boneIndices: [idx[0] ?? 0, idx[1] ?? 0, idx[2] ?? 0, idx[3] ?? 0],
+    boneWeights: [w[0] ?? 0, w[1] ?? 0, w[2] ?? 0, w[3] ?? 0],
+  };
+}
+
+function normalizeMeshes(list: SerializedMesh[] | undefined): Mesh[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((m) => ({
+    id: m.id ?? uid('mesh'),
+    vertices: Array.isArray(m.vertices) ? m.vertices.map(normalizeMeshVertex) : [],
+    triangles: Array.isArray(m.triangles) ? m.triangles : [],
+    skeletonId: m.skeletonId ?? '',
+  }));
+}
+
+function normalizeLayerRig(r: LayerRig | undefined): LayerRig | undefined {
+  if (!r) return undefined;
+  return { skeletonId: r.skeletonId, boneId: r.boneId ?? null, meshId: r.meshId ?? null };
 }
 
 /* ------------------------------------------------------------------ *

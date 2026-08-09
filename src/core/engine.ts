@@ -19,6 +19,14 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  createBone,
+  newSkeleton,
+  removeBone as removeBoneFromSkeleton,
+  type Bone,
+  type LayerRig,
+  type Skeleton,
+} from './rig';
+import {
   rasterizeSelection,
   rectCorners,
   shapeBounds,
@@ -743,6 +751,87 @@ export class Engine {
     prop: 'x' | 'y' | 'scale' | 'rotation' | 'opacity',
   ): number {
     return sampleChannel(layer.transform[prop], this.currentFrame);
+  }
+
+  /* --- rig: esqueletos, huesos y su vínculo con las capas --- */
+
+  createSkeleton(name = 'Esqueleto'): Skeleton {
+    const skel = newSkeleton(name);
+    this.history.run({
+      label: 'Crear esqueleto',
+      redo: () => {
+        this.doc.skeletons.push(skel);
+        this.touch();
+      },
+      undo: () => {
+        this.doc.skeletons = this.doc.skeletons.filter((s) => s.id !== skel.id);
+        this.touch();
+      },
+    });
+    return skel;
+  }
+
+  addBone(
+    skeletonId: string,
+    name: string,
+    parentId: string | null,
+    rest: { x: number; y: number; rotation?: number; length?: number },
+  ): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    // Se construye fuera de redo() para que el mismo objeto Bone sea el que
+    // entra y sale del array en cada redo/undo — igual que `createSkeleton`.
+    const bone = createBone(name, parentId, rest);
+    this.history.run({
+      label: 'Añadir hueso',
+      redo: () => {
+        skel.bones.push(bone);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = skel.bones.filter((b) => b.id !== bone.id);
+        this.touch();
+      },
+    });
+    return bone;
+  }
+
+  removeBone(skeletonId: string, boneId: string) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return;
+    // `removeBoneFromSkeleton` reengancha a los hijos del hueso borrado a su
+    // padre, mutando `parentId` en sitio — clonamos antes para poder
+    // restaurar exactamente ese árbol al deshacer.
+    const before = skel.bones.map((b) => ({ ...b }));
+    this.history.run({
+      label: 'Quitar hueso',
+      redo: () => {
+        removeBoneFromSkeleton(skel, boneId);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = before;
+        this.touch();
+      },
+    });
+  }
+
+  attachLayerToBone(layerId: string, skeletonId: string, boneId: string | null) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const before = layer.rig;
+    const after: LayerRig = { skeletonId, boneId, meshId: before?.meshId ?? null };
+    this.history.run({
+      label: 'Vincular capa a hueso',
+      redo: () => {
+        layer.rig = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.rig = before;
+        this.touch();
+      },
+    });
   }
 
   /* ---------------------------------------------------------------- *
