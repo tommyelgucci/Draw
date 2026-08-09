@@ -290,12 +290,31 @@ body,
   left: calc(var(--rail-gap) + 64px);
 }
 
+/**
+ * Tras el primer arrastre el panel se independiza del anclaje del CSS
+ * (`right`/`bottom` fijos) y pasa a `position: fixed` con las coordenadas
+ * que puso `useDraggable` — el `left`/`top` en sí van inline, aquí sólo se
+ * apagan las propiedades que si no seguirían tirando de un borde.
+ */
+.panel.is-dragged {
+  position: fixed;
+  right: auto;
+  bottom: auto;
+  max-height: calc(100vh - 20px);
+}
+
 .panel__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 10px 10px 14px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+}
+
+.panel__head:active {
+  cursor: grabbing;
 }
 
 .panel__head h2 {

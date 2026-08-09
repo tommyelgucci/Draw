@@ -108,6 +108,14 @@ interface UIState {
    *  carpeta — vive aquí y no en el documento porque es un gesto de UI a
    *  medias, no contenido. */
   layerGroupSelection: string[];
+  /** Posición a la que se arrastró cada panel flotante (clave = `title`,
+   *  que ya es único y estable por panel — ver `Panel` en controls.tsx).
+   *  Ausente = sin arrastrar todavía, usa la posición por defecto del CSS. */
+  panelPositions: Record<string, { left: number; top: number } | undefined>;
+  /** Punto de pantalla que debe mostrar la lupa de precisión mientras se
+   *  arrastra un tirador fino (nodo de QuickShape, tirador de selección,
+   *  de hueso…) — null cuando no hay ningún arrastre de precisión activo. */
+  precisionDragAt: { x: number; y: number } | null;
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
@@ -136,6 +144,8 @@ interface UIState {
   setReparentingBoneId: (v: string | null) => void;
   toggleLayerGroupSelection: (id: string) => void;
   clearLayerGroupSelection: () => void;
+  setPanelPosition: (id: string, pos: { left: number; top: number } | undefined) => void;
+  setPrecisionDragAt: (p: { x: number; y: number } | null) => void;
 }
 
 /** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
@@ -201,6 +211,8 @@ export const useUI = create<UIState>((set, get) => ({
   ikEnabled: false,
   reparentingBoneId: null,
   layerGroupSelection: [],
+  panelPositions: {},
+  precisionDragAt: null,
 
   setEngine: (engine) => set({ engine }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
@@ -287,6 +299,9 @@ export const useUI = create<UIState>((set, get) => ({
         : [...s.layerGroupSelection, id],
     })),
   clearLayerGroupSelection: () => set({ layerGroupSelection: [] }),
+  setPanelPosition: (id, pos) =>
+    set((s) => ({ panelPositions: { ...s.panelPositions, [id]: pos } })),
+  setPrecisionDragAt: (precisionDragAt) => set({ precisionDragAt }),
 }));
 
 if (import.meta.env.DEV) {
