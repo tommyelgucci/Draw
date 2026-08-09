@@ -184,6 +184,50 @@ export interface Layer {
    * por construcción en una capa con `swap`.
    */
   swap?: SpriteSwapCatalog;
+  /** Presente si esta capa vive dentro de una carpeta de `TraceDocument.layerGroups`. */
+  groupId?: string;
+}
+
+/**
+ * Carpeta organizativa del panel de capas: agrupa un tramo CONTIGUO de
+ * `TraceDocument.layers` bajo un mismo `groupId` — la misma idea que
+ * `ClipGroup` (agrupar por adyacencia en la lista plana), no un árbol
+ * nuevo. No afecta a la composición del lienzo en absoluto: mostrar/ocultar
+ * la carpeta entera es sólo aplicar `visible` a cada capa miembro, y
+ * `collapsed` sólo cambia cómo se ve el panel — el pipeline de render nunca
+ * necesita saber que existen las carpetas.
+ */
+export interface LayerGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;
+}
+
+/** Pico (mínimo/máximo, -1..1) de un tramo de la onda — lo que hace falta
+ *  para dibujar la forma de onda sin volver a decodificar el audio. */
+export interface AudioPeak {
+  min: number;
+  max: number;
+}
+
+/**
+ * Pista de audio única del documento — para sincronizar labios contra el
+ * catálogo de intercambio de sprites (`SpriteSwapCatalog`) sin tener que
+ * llevar la cuenta de memoria. Los bytes del archivo original viven fuera
+ * de `TraceDocument` (en `Engine.audioBytes`, como `Cel.surface` vive en
+ * GPU): esta interfaz sólo lleva datos serializables, no el elemento
+ * `<audio>` que de verdad reproduce — ver `Engine.audioElement`.
+ */
+export interface AudioTrack {
+  id: string;
+  name: string;
+  /** Segundos. */
+  duration: number;
+  mimeType: string;
+  peaks: AudioPeak[];
+  /** Segundos desde el cuadro 0 del documento hasta el inicio del audio. */
+  offset: number;
+  muted: boolean;
 }
 
 export interface TraceDocument {
@@ -207,6 +251,10 @@ export interface TraceDocument {
   skeletons: Skeleton[];
   /** Mallas deformables, referenciadas por id desde `Layer.rig.meshId`. */
   meshes: Mesh[];
+  /** Carpetas del panel de capas — ver `LayerGroup`. */
+  layerGroups: LayerGroup[];
+  /** Presente si el proyecto tiene una pista de audio importada. */
+  audio?: AudioTrack;
 }
 
 let idCounter = 0;
@@ -251,6 +299,7 @@ export function newDocument(
     modifiedAt: Date.now(),
     skeletons: [],
     meshes: [],
+    layerGroups: [],
   };
 }
 

@@ -553,6 +553,14 @@ button:focus-visible {
   color: var(--text-dim);
 }
 
+.audio-track-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .layer__badge {
   display: inline-block;
   margin-right: 6px;
@@ -570,6 +578,68 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.layer__check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+/**
+ * Carpetas del panel de capas: una carpeta es un tramo contiguo de la
+ * misma lista, no un árbol nuevo (ver `LayerGroup` en document.ts), así
+ * que su CSS reutiliza `.layer`/`.layer__buttons` tal cual en vez de
+ * inventar un segundo juego de estilos.
+ */
+.layer-group {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.layer-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.layer-group__chevron {
+  flex: none;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+
+.layer-group__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.layer-group__count {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-group__members {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.layer.is-nested {
+  margin-left: 0;
 }
 
 .transform-row {
@@ -952,6 +1022,46 @@ button:focus-visible {
   padding: 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
+}
+
+/** Barra de acciones del rango marcado en la regla — duplicarlo o
+ *  invertirlo, para ciclos que se repiten o se recorren al revés sin
+ *  redibujar nada. Fila propia bajo la cabecera en vez de flotar sobre la
+ *  regla: así no se recorta con el scroll horizontal de `.timeline__scroll`. */
+.frame-range-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+
+.frame-range-actions__label {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.frame-range-actions button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.frame-range-actions button:hover {
+  background: var(--accent-dim);
+  color: #fff;
 }
 
 .timeline__grid {
@@ -1379,6 +1489,23 @@ button:focus-visible {
   color: #fff;
 }
 
+/** Eje(s) del espejo en vivo — puramente informativa, nunca captura toques. */
+.symmetry-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.symmetry-overlay line {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
+}
+
 .sel-overlay {
   position: absolute;
   inset: 0;
@@ -1575,6 +1702,34 @@ button:focus-visible {
   pointer-events: none;
 }
 
+/**
+ * Fantasma del esqueleto en cuadros vecinos — mismos colores que el papel
+ * cebolla de tinta (rojizo lo anterior, azulado lo posterior) para leerse
+ * como la misma señal. Va DEBAJO de `.bone-outline` en el DOM a propósito:
+ * la pose actual tiene que quedar encima, no perderse entre fantasmas.
+ */
+.bone-onion {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bone-onion line {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 4 3;
+}
+
+.bone-onion line.is-before {
+  stroke: color-mix(in srgb, #ff4053 65%, transparent);
+}
+
+.bone-onion line.is-after {
+  stroke: color-mix(in srgb, #40bfff 65%, transparent);
+}
+
 .bone-outline {
   position: absolute;
   inset: 0;
@@ -1681,6 +1836,18 @@ button:focus-visible {
 .action:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.action.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+/** Rota el icono de simetría 90° para el botón "Horizontal" — mismo SVG
+ *  que "Vertical", sin duplicar el dibujo. */
+.icon-symmetry--h {
+  transform: rotate(90deg);
 }
 
 .action--danger:hover:not(:disabled) {

@@ -6,11 +6,13 @@ import {
   sampleChannel,
   sortedCelFrames,
   TRANSFORM_PROPS,
+  type AudioTrack,
   type Layer,
 } from '../core/document';
 import { useEngineRevision, useUI } from '../state/store';
 import { IconButton, Slider } from './controls';
 import {
+  IconClose,
   IconCopy,
   IconNext,
   IconOnion,
@@ -168,6 +170,37 @@ export function Timeline({ engine }: { engine: Engine }) {
         </label>
       </header>
 
+      {frameRangeStart !== null && frameRangeEnd !== null && frameRangeEnd > frameRangeStart && (
+        <div className="frame-range-actions">
+          <span className="frame-range-actions__label">
+            {frameRangeEnd - frameRangeStart + 1} cuadros marcados
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              engine.duplicateFrameRange(frameRangeStart, frameRangeEnd);
+              setFrameRange(null, null);
+            }}
+            title="Duplicar el rango justo después"
+          >
+            <IconCopy size={16} /> Duplicar
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              engine.reverseFrameRange(frameRangeStart, frameRangeEnd);
+              setFrameRange(null, null);
+            }}
+            title="Invertir el orden de los dibujos del rango"
+          >
+            Invertir
+          </button>
+          <button type="button" onClick={() => setFrameRange(null, null)} aria-label="Quitar la marca de rango">
+            <IconClose size={16} />
+          </button>
+        </div>
+      )}
+
       {onionOpen && (
         <div className="onion-popover">
           <label className="check">
@@ -233,6 +266,11 @@ export function Timeline({ engine }: { engine: Engine }) {
       <div className="timeline__grid">
         <div className="timeline__names">
           <div className="ruler-spacer" />
+          {doc.audio && (
+            <div className="track-name" style={{ height: ROW_H }}>
+              <span>{doc.audio.name}</span>
+            </div>
+          )}
           {layers.map((layer) => (
             <div
               key={layer.id}
@@ -295,6 +333,8 @@ export function Timeline({ engine }: { engine: Engine }) {
               />
             )}
 
+            {doc.audio && <AudioWaveformRow audio={doc.audio} fps={doc.fps} />}
+
             {layers.map((layer) => (
               <TrackRow
                 key={layer.id}
@@ -314,6 +354,48 @@ export function Timeline({ engine }: { engine: Engine }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Forma de onda de la pista de audio — de sólo lectura, dibujada una vez
+ * por cambio de pista en un `<canvas>` en vez de con SVG: son cientos de
+ * barras y un canvas 2D es mucho más barato de repintar que ese número de
+ * nodos DOM. Un `<div>` espaciador antes, en vez de posicionar en
+ * absoluto, para encajar en el mismo flujo `display:flex` que ya usan
+ * `.tick`/`.cell` — `offset` sólo desplaza dónde EMPIEZA el dibujo, el
+ * resto de la fila (regla, cels) no sabe ni le importa que exista.
+ */
+function AudioWaveformRow({ audio, fps }: { audio: AudioTrack; fps: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const width = Math.max(1, Math.round(audio.duration * fps * FRAME_W));
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = width;
+    canvas.height = ROW_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, width, ROW_H);
+    ctx.fillStyle = 'rgba(110, 168, 254, 0.75)';
+    const mid = ROW_H / 2;
+    const n = audio.peaks.length;
+    for (let i = 0; i < n; i++) {
+      const x = (i / n) * width;
+      const w = Math.max(1, width / n);
+      const { min, max } = audio.peaks[i];
+      const y1 = mid + min * (mid - 2);
+      const y2 = mid + max * (mid - 2);
+      ctx.fillRect(x, y1, w, Math.max(1, y2 - y1));
+    }
+  }, [audio, width]);
+
+  return (
+    <div className="track audio-track" style={{ height: ROW_H }}>
+      <div style={{ flex: 'none', width: audio.offset * fps * FRAME_W }} />
+      <canvas ref={canvasRef} style={{ flex: 'none', width, height: ROW_H }} />
+    </div>
   );
 }
 

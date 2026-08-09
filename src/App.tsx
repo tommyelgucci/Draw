@@ -8,6 +8,7 @@ import { SelectionOverlay } from './ui/SelectionOverlay';
 import { QuickShapeOverlay } from './ui/QuickShapeOverlay';
 import { BoneGizmoOverlay } from './ui/BoneGizmoOverlay';
 import { LassoOverlay } from './ui/LassoOverlay';
+import { SymmetryOverlay } from './ui/SymmetryOverlay';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -105,6 +106,7 @@ export default function App() {
         case 'Escape':
           if (engine.floating) engine.cancelFloating();
           else if (engine.pendingLasso) engine.cancelLasso();
+          else if (useUI.getState().reparentingBoneId) useUI.getState().setReparentingBoneId(null);
           else if (engine.selection.active) engine.clearSelection();
           break;
         case 'Delete':
@@ -196,11 +198,12 @@ export default function App() {
       {engine && <QuickShapeOverlay engine={engine} />}
       {engine && <BoneGizmoOverlay engine={engine} />}
       {engine && <LassoOverlay engine={engine} />}
+      {engine && <SymmetryOverlay engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 
       {engine && panel === 'layers' && <LayersPanel engine={engine} />}
-      {panel === 'brush' && <BrushPanel />}
+      {panel === 'brush' && <BrushPanel engine={engine} />}
       {panel === 'color' && <ColorPanel />}
       {engine && panel === 'export' && <ExportPanel engine={engine} />}
       {engine && panel === 'poses' && <PoseLibraryPanel engine={engine} />}

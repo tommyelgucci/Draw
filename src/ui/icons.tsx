@@ -228,6 +228,12 @@ export const IconVideo = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconAudio = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9 6v10.5a2.5 2.5 0 1 1-2-2.45V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9.5a2.5 2.5 0 1 1-2-2.45V7H9z" />
+  </svg>
+);
+
 export const IconMergeDown = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <rect x="4" y="3.5" width="16" height="6" rx="1" />
@@ -265,5 +271,25 @@ export const IconQuickShape = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M3 15c1-3 2.5-5 3.5-4.5S7 13 8 12" strokeDasharray="2.5 2" />
     <circle cx="15.5" cy="12" r="5.5" />
+  </svg>
+);
+
+export const IconSymmetry = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 3v18" strokeDasharray="2.5 2" />
+    <path d="M12 5c-3 1.5-6 3-6 7s3 5.5 6 7" />
+    <path d="M12 5c3 1.5 6 3 6 7s-3 5.5-6 7" strokeOpacity="0.45" />
+  </svg>
+);
+
+export const IconChevronRight = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="m9 5 7 7-7 7" />
+  </svg>
+);
+
+export const IconFolder = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4 6.5a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" />
   </svg>
 );

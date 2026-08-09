@@ -15,14 +15,17 @@ import {
   sortedCelFrames,
   transformIsIdentity,
   uid,
+  type AudioPeak,
   type Cel,
   type Layer,
+  type LayerGroup,
   type SpriteSwapCatalog,
   type SpriteSwapVariant,
   type TraceDocument,
 } from './document';
 import { History } from './history';
 import {
+  bendSignFor,
   boneRestFromDrag,
   boneRigidMatrix,
   createBone,
@@ -32,10 +35,14 @@ import {
   findBone,
   hitTestBone as hitTestBoneInSkeleton,
   hitTestBoneTail as hitTestBoneTailInSkeleton,
+  isBoneDescendantOf,
   matRotation,
   newMesh,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
+  reparentBoneRest,
+  solveTwoBoneIK,
+  topoSortBones,
   worldPointToBoneOffset,
   worldPointToBoneRotation,
   type Bone,
@@ -196,9 +203,22 @@ export class Engine {
     opacity: 0.35,
     colored: true,
   };
+  /** Espejo en vivo: cada estampa del trazo se refleja también al otro lado
+   *  del eje (o de los dos) mientras se dibuja — no es un filtro que se
+   *  aplique después, es tinta real puesta en los dos sitios a la vez. */
+  symmetry: { vertical: boolean; horizontal: boolean } = { vertical: false, horizontal: false };
 
   playing = false;
   loop = true;
+
+  /** Elemento reproductor de la pista de audio (ver `AudioTrack` en
+   *  document.ts) — vive fuera del documento serializable, como la
+   *  superficie GPU de un `Cel`. Null si no hay audio importado. */
+  audioElement: HTMLAudioElement | null = null;
+  /** Bytes originales del archivo, cacheados para no tener que volver a
+   *  pedirle el archivo al usuario al guardar el proyecto. */
+  audioBytes: Uint8Array | null = null;
+  private audioObjectUrl: string | null = null;
 
   selection: SelectionState = { active: false, bounds: emptyRect() };
   floating: FloatingSelection | null = null;
@@ -206,6 +226,17 @@ export class Engine {
   pendingLasso: PendingLasso | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
+  /** Arrastre de IK de 2 huesos en marcha — `bendSign` se fija al empezar y
+   *  se mantiene todo el gesto, ver `bendSignFor` en `rig.ts`. */
+  private ikDrag: {
+    skeletonId: string;
+    rootId: string;
+    midId: string;
+    root: Vec2;
+    len1: number;
+    len2: number;
+    bendSign: 1 | -1;
+  } | null = null;
 
   /** Se incrementa en cualquier cambio estructural; la UI se suscribe. */
   revision = 0;
@@ -529,6 +560,113 @@ export class Engine {
     const layer = this.doc.layers.find((l) => l.id === id);
     if (!layer) return;
     layer[key] = value;
+    this.touch();
+  }
+
+  /**
+   * Agrupa capas EXISTENTES bajo una carpeta nueva. Una carpeta es un tramo
+   * CONTIGUO de `doc.layers` (como `ClipGroup`, no un árbol aparte), así
+   * que agrupar reordena la pila: las capas elegidas se juntan donde
+   * estaba la más profunda de ellas, conservando su orden relativo entre
+   * sí — el resto de la pila no se mueve. Null si `layerIds` no llega a
+   * dos capas, alguna no existe, o alguna ya está en otra carpeta (anidar
+   * carpetas queda fuera de alcance por ahora).
+   */
+  groupLayers(layerIds: string[], name = 'Grupo'): string | null {
+    const ids = new Set(layerIds);
+    if (ids.size < 2) return null;
+    const before = this.doc.layers.slice();
+    const members = before.filter((l) => ids.has(l.id));
+    if (members.length !== ids.size || members.some((l) => l.groupId)) return null;
+
+    const insertAt = Math.min(...before.map((l, i) => (ids.has(l.id) ? i : Infinity)));
+    const rest = before.filter((l) => !ids.has(l.id));
+    const insertAtInRest = rest.filter((l) => before.indexOf(l) < insertAt).length;
+    const after = [...rest.slice(0, insertAtInRest), ...members, ...rest.slice(insertAtInRest)];
+    const group: LayerGroup = { id: uid('grp'), name, collapsed: false };
+
+    this.history.run({
+      label: 'Agrupar capas',
+      redo: () => {
+        for (const l of members) l.groupId = group.id;
+        this.doc.layerGroups.push(group);
+        this.doc.layers = after;
+        this.touch();
+      },
+      undo: () => {
+        for (const l of members) l.groupId = undefined;
+        this.doc.layerGroups = this.doc.layerGroups.filter((g) => g.id !== group.id);
+        this.doc.layers = before;
+        this.touch();
+      },
+    });
+    return group.id;
+  }
+
+  /** Disuelve la carpeta; las capas se quedan donde están (ya son contiguas). */
+  ungroupLayers(groupId: string) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const members = this.doc.layers.filter((l) => l.groupId === groupId);
+    this.history.run({
+      label: 'Desagrupar capas',
+      redo: () => {
+        for (const l of members) l.groupId = undefined;
+        this.doc.layerGroups = this.doc.layerGroups.filter((g) => g.id !== groupId);
+        this.touch();
+      },
+      undo: () => {
+        for (const l of members) l.groupId = groupId;
+        this.doc.layerGroups.push(group);
+        this.touch();
+      },
+    });
+  }
+
+  /** Muestra/oculta todas las capas de la carpeta a la vez, en un único
+   *  paso de deshacer — no una toggleada por capa. */
+  setLayerGroupVisible(groupId: string, visible: boolean) {
+    const members = this.doc.layers.filter((l) => l.groupId === groupId);
+    if (members.length === 0) return;
+    const before = members.map((l) => l.visible);
+    this.history.run({
+      label: visible ? 'Mostrar grupo' : 'Ocultar grupo',
+      redo: () => {
+        for (const l of members) l.visible = visible;
+        this.touch();
+      },
+      undo: () => {
+        members.forEach((l, i) => {
+          l.visible = before[i];
+        });
+        this.touch();
+      },
+    });
+  }
+
+  renameLayerGroup(groupId: string, name: string) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group || group.name === name) return;
+    const before = group.name;
+    this.history.run({
+      label: 'Renombrar grupo',
+      redo: () => {
+        group.name = name;
+        this.touch();
+      },
+      undo: () => {
+        group.name = before;
+        this.touch();
+      },
+    });
+  }
+
+  /** Colapsar/expandir es presentación pura del panel, no contenido del
+   *  documento — no entra en el historial, igual que `onion.enabled`. */
+  setLayerGroupCollapsed(groupId: string, collapsed: boolean) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    group.collapsed = collapsed;
     this.touch();
   }
 
@@ -892,6 +1030,95 @@ export class Engine {
     });
   }
 
+  /**
+   * Copia los dibujos que EMPIEZAN dentro de `[fromFrame, toFrame]` justo
+   * después del rango, desplazados por su misma longitud — para repetir un
+   * ciclo (una caminata, un parpadeo) sin volver a dibujarlo. Mismo
+   * criterio que `liftSelectionRange`: sólo los cels que empiezan ahí, no
+   * cada fotograma sostenido, porque tocar el mismo dibujo una vez por
+   * fotograma lo procesaría de más para el mismo resultado. Amplía
+   * `frameCount` si el destino no cabe todavía.
+   */
+  duplicateFrameRange(fromFrame: number, toFrame: number) {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || layer.kind === 'reference' || !layer.animated) return;
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    const span = hi - lo + 1;
+    const sourceFrames = sortedCelFrames(layer).filter((f) => f >= lo && f <= hi);
+    if (sourceFrames.length === 0) return;
+
+    const copies = sourceFrames.map((f) => {
+      const src = layer.cels.get(f)!;
+      const cel = this.makeCel();
+      this.renderer.copy(cel.surface, this.renderer.ensureResident(src.surface), 1);
+      return { frame: f + span, cel };
+    });
+
+    const destEnd = hi + span;
+    const before = layer.cels;
+    const prevFrameCount = this.doc.frameCount;
+    const growsDoc = destEnd >= this.doc.frameCount;
+
+    this.history.run({
+      label: 'Duplicar rango de cuadros',
+      redo: () => {
+        if (growsDoc) this.doc.frameCount = destEnd + 1;
+        const after = new Map(before);
+        for (const c of copies) after.set(c.frame, c.cel);
+        layer.cels = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.cels = before;
+        if (growsDoc) this.doc.frameCount = prevFrameCount;
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Invierte el orden temporal de los dibujos dentro de `[fromFrame,
+   * toFrame]` en la capa activa — para recorrer un ciclo hacia atrás sin
+   * redibujarlo. No copia superficies: reubica los mismos `Cel` que ya
+   * existían en los fotogramas espejados, así que lo único que cambia es
+   * en qué fotograma EMPIEZA a sostenerse cada uno.
+   */
+  reverseFrameRange(fromFrame: number, toFrame: number) {
+    const layer = this.activeLayer;
+    if (!layer || layer.locked || layer.kind === 'reference' || !layer.animated) return;
+    const lo = Math.min(fromFrame, toFrame);
+    const hi = Math.max(fromFrame, toFrame);
+    if (lo >= hi) return;
+
+    const before = layer.cels;
+    const after = new Map(before);
+    for (const f of [...after.keys()]) if (f >= lo && f <= hi) after.delete(f);
+
+    // `celAt` lee `layer.cels`, que sigue siendo `before` hasta el redo():
+    // el bucle de abajo calcula sobre el estado ORIGINAL, no sobre `after`.
+    let prevCel = lo > 0 ? celAt(layer, lo - 1) : null;
+    for (let f = lo; f <= hi; f++) {
+      const cel = celAt(layer, lo + hi - f);
+      if (cel !== prevCel) {
+        if (cel) after.set(f, cel);
+        prevCel = cel;
+      }
+    }
+
+    this.history.run({
+      label: 'Invertir rango de cuadros',
+      redo: () => {
+        layer.cels = after;
+        this.touch();
+      },
+      undo: () => {
+        layer.cels = before;
+        this.touch();
+      },
+    });
+  }
+
   clearCel(layerId: string, frame: number) {
     const layer = this.doc.layers.find((l) => l.id === layerId);
     if (!layer) return;
@@ -1016,6 +1243,54 @@ export class Engine {
       label: 'Quitar hueso',
       redo: () => {
         removeBoneFromSkeleton(skel, boneId);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = before;
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Reasigna el padre de un hueso sin que salte de sitio: recalcula su
+   * reposo en el marco del nuevo padre (`reparentBoneRest`, `rig.ts`) y
+   * reordena `bones` para conservar el invariante topológico — el padre
+   * nuevo puede estar DESPUÉS en el array, y evaluar la pose asume que
+   * nunca lo está. `newParentId: null` lo desengancha a hueso raíz.
+   *
+   * Rechaza en silencio (sin tocar el historial) los casos que romperían
+   * el árbol: colgar un hueso de sí mismo o de uno de sus propios
+   * descendientes crearía un ciclo, y `evaluatePoseWorldMatrices` no
+   * termina nunca sobre un ciclo.
+   */
+  reparentBone(skeletonId: string, boneId: string, newParentId: string | null) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone || bone.parentId === newParentId) return;
+    if (newParentId === boneId) return;
+    const newParent = newParentId ? findBone(skel, newParentId) : null;
+    if (newParentId && !newParent) return;
+    if (newParentId && isBoneDescendantOf(skel, newParentId, boneId)) return;
+
+    const restWorlds = evaluateRestWorldMatrices(skel);
+    const oldWorld = restWorlds.get(boneId) ?? mat3Identity();
+    const newParentWorld = newParent ? (restWorlds.get(newParent.id) ?? mat3Identity()) : mat3Identity();
+    const rest = reparentBoneRest(oldWorld, newParentWorld);
+
+    const before = skel.bones.map((b) => ({ ...b }));
+    const after = topoSortBones(
+      skel.bones.map((b) =>
+        b.id === boneId
+          ? { ...b, parentId: newParentId, restX: rest.x, restY: rest.y, restRotation: rest.rotation }
+          : b,
+      ),
+    );
+
+    this.history.run({
+      label: 'Reparentar hueso',
+      redo: () => {
+        skel.bones = after;
         this.touch();
       },
       undo: () => {
@@ -1320,6 +1595,83 @@ export class Engine {
     );
   }
 
+  /**
+   * Padre e hijo de `boneId` si forman una cadena de IK de 2 huesos válida
+   * — `boneId` es el hueso INFERIOR (p. ej. el antebrazo), y necesita un
+   * padre (el brazo) del que tirar. Null si `boneId` es un hueso raíz: sin
+   * padre no hay cadena que resolver, sólo el arrastre normal de un hueso.
+   */
+  twoBoneChain(skeletonId: string, boneId: string): { root: Bone; mid: Bone } | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const mid = skel && findBone(skel, boneId);
+    if (!skel || !mid || !mid.parentId) return null;
+    const root = findBone(skel, mid.parentId);
+    return root ? { root, mid } : null;
+  }
+
+  /**
+   * Arranca un arrastre de IK: el `bendSign` (de qué lado cae el codo/
+   * rodilla) se calcula UNA VEZ aquí, a partir de dónde está la
+   * articulación ahora mismo, y se mantiene fijo durante todo el gesto —
+   * ver `bendSignFor` en `rig.ts`. Sin fijarlo, el codo saltaría de lado en
+   * cuanto la mano cruzara la línea hombro→mano.
+   */
+  beginBoneIKDrag(skeletonId: string, boneId: string): boolean {
+    const chain = this.twoBoneChain(skeletonId, boneId);
+    if (!chain) return false;
+    const endpoints = this.boneEndpoints(skeletonId);
+    const rootEp = endpoints.find((ep) => ep.bone.id === chain.root.id);
+    const midEp = endpoints.find((ep) => ep.bone.id === chain.mid.id);
+    if (!rootEp || !midEp) return false;
+    this.ikDrag = {
+      skeletonId,
+      rootId: chain.root.id,
+      midId: chain.mid.id,
+      root: rootEp.head,
+      len1: chain.root.length,
+      len2: chain.mid.length,
+      bendSign: bendSignFor(rootEp.head, midEp.head, midEp.tail),
+    };
+    return true;
+  }
+
+  /**
+   * Resuelve la cadena para `worldPoint` y orienta los dos huesos. Primero
+   * el raíz hacia el codo resuelto; luego, con el raíz ya orientado, el
+   * intermedio hacia el objetivo real — el orden importa porque el mundo
+   * del intermedio depende de la pose nueva del raíz, no de la vieja. Sin
+   * `history.run`, igual que `setBonePose`: es una muestra continua de
+   * arrastre, no un paso que deshacer de por sí.
+   */
+  updateBoneIKDrag(worldPoint: Vec2) {
+    const drag = this.ikDrag;
+    if (!drag) return;
+    const skel = this.doc.skeletons.find((s) => s.id === drag.skeletonId);
+    const root = skel && findBone(skel, drag.rootId);
+    const mid = skel && findBone(skel, drag.midId);
+    if (!skel || !root || !mid) return;
+
+    const elbow = solveTwoBoneIK(drag.root, drag.len1, drag.len2, worldPoint, drag.bendSign);
+
+    const rootParentWorld = this.boneParentWorldMatrix(drag.skeletonId, root.id);
+    const rootOffset = { x: this.getBoneValue(root, 'x'), y: this.getBoneValue(root, 'y') };
+    this.setBonePose(drag.skeletonId, root.id, {
+      rotation: worldPointToBoneRotation(root, rootParentWorld, rootOffset, elbow),
+    });
+
+    // El mundo del raíz cambió con la línea de arriba: se vuelve a leer en
+    // vez de reutilizar `rootParentWorld`/`elbow`, que ya están obsoletos.
+    const midParentWorld = evaluatePoseWorldMatrices(skel, this.currentFrame).get(root.id) ?? mat3Identity();
+    const midOffset = { x: this.getBoneValue(mid, 'x'), y: this.getBoneValue(mid, 'y') };
+    this.setBonePose(drag.skeletonId, mid.id, {
+      rotation: worldPointToBoneRotation(mid, midParentWorld, midOffset, worldPoint),
+    });
+  }
+
+  endBoneIKDrag() {
+    this.ikDrag = null;
+  }
+
   /* ---------------------------------------------------------------- *
    * Trazo
    * ---------------------------------------------------------------- */
@@ -1366,21 +1718,43 @@ export class Engine {
       this.strokeRawPoints.push({ x: s.x, y: s.y });
     }
     this.commitStamps(stamps);
-    this.predictedStamps = predicted.length ? this.builder.speculate(predicted) : [];
+    const speculated = predicted.length ? this.builder.speculate(predicted) : [];
+    this.predictedStamps = [...speculated, ...this.mirrorStamps(speculated)];
     this.requestRender();
+  }
+
+  /**
+   * Copias reflejadas de `stamps` según `symmetry` — vertical (eje X en
+   * `doc.width/2`), horizontal (eje Y en `doc.height/2`), o las dos a la
+   * vez, que añade también la copia en diagonal (reflejada en ambos ejes),
+   * como la simetría de 4 vías de Procreate. El ángulo se refleja junto
+   * con la posición: sin eso, una estampa ovalada (pincel achatado)
+   * quedaría girada al revés de como se ve al otro lado del eje.
+   */
+  private mirrorStamps(stamps: Stamp[]): Stamp[] {
+    const { vertical, horizontal } = this.symmetry;
+    if (!vertical && !horizontal) return [];
+    const mirrorV = (s: Stamp): Stamp => ({ ...s, x: this.doc.width - s.x, angle: Math.PI - s.angle });
+    const mirrorH = (s: Stamp): Stamp => ({ ...s, y: this.doc.height - s.y, angle: -s.angle });
+    const out: Stamp[] = [];
+    if (vertical) out.push(...stamps.map(mirrorV));
+    if (horizontal) out.push(...stamps.map(mirrorH));
+    if (vertical && horizontal) out.push(...stamps.map((s) => mirrorH(mirrorV(s))));
+    return out;
   }
 
   private commitStamps(stamps: Stamp[]) {
     if (stamps.length === 0 || !this.strokeCtx) return;
     const wet = this.renderer.scratch('wet');
     const texId = this.strokeCtx.brush.textureId;
+    const allStamps = [...stamps, ...this.mirrorStamps(stamps)];
     this.renderer.drawStamps(
       wet,
-      stamps,
+      allStamps,
       this.strokeCtx.color,
       texId ? this.renderer.getBrushTexture(texId) : undefined,
     );
-    for (const s of stamps) {
+    for (const s of allStamps) {
       expandRect(this.strokeRect, s.x, s.y, s.size * 0.75 + 2);
     }
   }
@@ -1704,10 +2078,100 @@ export class Engine {
     this.setFrame(target ?? this.currentFrame);
   }
 
+  /* ---------------------------------------------------------------- *
+   * Audio
+   * ---------------------------------------------------------------- */
+
+  /** Sustituye el elemento `<audio>` en marcha por uno nuevo — usado tanto
+   *  al importar un archivo como al reabrir un proyecto guardado. No toca
+   *  `doc.audio`: el llamador decide esos metadatos aparte. */
+  private loadAudioBytes(bytes: Uint8Array, mimeType: string) {
+    this.releaseAudioElement();
+    const blob = new Blob([bytes as BlobPart], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('audio');
+    el.src = url;
+    el.preload = 'auto';
+    this.audioElement = el;
+    this.audioBytes = bytes;
+    this.audioObjectUrl = url;
+  }
+
+  private releaseAudioElement() {
+    this.audioElement?.pause();
+    this.audioElement = null;
+    this.audioBytes = null;
+    if (this.audioObjectUrl) {
+      URL.revokeObjectURL(this.audioObjectUrl);
+      this.audioObjectUrl = null;
+    }
+  }
+
+  /**
+   * Importa una pista de audio nueva — `bytes`/`mimeType`/`duration`/`peaks`
+   * ya vienen calculados por `importAudioTrack` (io.ts), que es quien sabe
+   * decodificar el archivo; aquí sólo se engancha el resultado. No pasa por
+   * el historial: es adjuntar un archivo externo, no una edición de dibujo,
+   * mismo criterio que `beginReferenceImport`.
+   */
+  setAudioTrack(bytes: Uint8Array, mimeType: string, name: string, duration: number, peaks: AudioPeak[]) {
+    this.loadAudioBytes(bytes, mimeType);
+    this.doc.audio = { id: uid('audio'), name, duration, mimeType, peaks, offset: 0, muted: false };
+    this.touch();
+  }
+
+  /** Reengancha el elemento reproductor al reabrir un proyecto — los
+   *  metadatos (`doc.audio`) ya vienen normalizados por `deserializeProject`,
+   *  aquí sólo hace falta el archivo real para poder reproducirlo. */
+  attachAudioBytes(bytes: Uint8Array, mimeType: string) {
+    this.loadAudioBytes(bytes, mimeType);
+  }
+
+  removeAudio() {
+    this.releaseAudioElement();
+    this.doc.audio = undefined;
+    this.touch();
+  }
+
+  setAudioOffset(seconds: number) {
+    if (!this.doc.audio) return;
+    this.doc.audio.offset = seconds;
+    this.touch(false);
+  }
+
+  setAudioMuted(muted: boolean) {
+    if (!this.doc.audio) return;
+    this.doc.audio.muted = muted;
+    if (muted) this.audioElement?.pause();
+    else if (this.playing) this.playAudioTrack();
+    this.touch(false);
+  }
+
   togglePlay() {
     this.playing = !this.playing;
     this.playClock = performance.now();
+    if (this.playing) this.playAudioTrack();
+    else this.audioElement?.pause();
     this.touch(false);
+  }
+
+  /** Coloca el audio en el punto que le corresponde a `currentFrame` y lo
+   *  arranca — llamado al empezar a reproducir y al dar la vuelta del bucle. */
+  private playAudioTrack() {
+    const el = this.audioElement;
+    const audio = this.doc.audio;
+    if (!el || !audio || audio.muted) return;
+    const t = this.currentFrame / this.doc.fps + audio.offset;
+    if (t < 0 || t >= audio.duration) {
+      el.pause();
+      return;
+    }
+    el.currentTime = t;
+    // Los navegadores pueden rechazar `play()` (política de autoplay) si no
+    // hubo antes un gesto del usuario; el play/pausa del propio botón de
+    // reproducción ya cuenta como uno, pero por si acaso no se deja una
+    // promesa sin capturar rechazada en la consola.
+    el.play().catch(() => {});
   }
 
   setFrameCount(n: number) {
@@ -1740,14 +2204,19 @@ export class Engine {
           this.playClock += advance * step;
           let next = this.currentFrame + advance;
           if (next >= this.doc.frameCount) {
-            if (this.loop) next %= this.doc.frameCount;
-            else {
+            if (this.loop) {
+              next %= this.doc.frameCount;
+              this.currentFrame = next;
+              this.playAudioTrack();
+            } else {
               next = this.doc.frameCount - 1;
               this.playing = false;
-              for (const fn of this.listeners) fn();
+              this.audioElement?.pause();
+              this.currentFrame = next;
             }
+          } else {
+            this.currentFrame = next;
           }
-          this.currentFrame = next;
           this.belowCacheKey = '';
           this.renderQueued = true;
           for (const fn of this.listeners) fn();
@@ -1764,6 +2233,7 @@ export class Engine {
   dispose() {
     cancelAnimationFrame(this.rafId);
     this.listeners.clear();
+    this.releaseAudioElement();
   }
 
   requestRender() {
