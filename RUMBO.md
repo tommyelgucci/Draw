@@ -81,6 +81,53 @@ Dos caminos, no excluyentes:
   callbacks, así que hay que puentear memoria WASM y texturas WebGL cada
   fotograma. Se hace por *fidelidad del trazo*, no por velocidad.
 
+## Frente a Procreate
+
+Procreate es el estándar en iPad y conviene saber exactamente dónde se le puede
+ganar y dónde no. Perseguirlo función por función es la estrategia equivocada;
+las oportunidades están donde su arquitectura no le deja llegar.
+
+### Lo que ya tenemos resuelto y a ellos les cuesta
+
+| Su límite | Nuestra situación |
+| --- | --- |
+| Tope de capas atado a la RAM (~20 en 4K) | Presupuesto en bytes con expulsión a CPU: ~23 texturas residentes y del orden de 100-200 cels en 1080p. El techo se corrió, no desapareció. |
+| Redimensionar el lienzo pixela los trazos | `resizeCanvas` recorta o amplía, nunca reescala: copia 1:1. |
+| Animación caótica pasados unos segundos | Cels con sostenido, línea de tiempo y keyframes interpolados en la misma capa. |
+| Dreams salió sin lazo ni transformación libre | Ambas desde la Fase 0. |
+| Sólo iPad, sólo Apple | iPad, iPhone, Android y escritorio con el mismo código. |
+| Pago único, pero pago | Gratis y sin cuentas. |
+
+### Lo que sigue siendo suyo
+
+- **Latencia.** ~9 ms con Metal y ProMotion contra nuestros 30-50 ms. No se
+  gana en web; ver la Fase 3.
+- **Hover del Apple Pencil.** Safari no lo expone.
+- **Madurez del motor de pinceles.** Sus más de 100 ajustes y los pinceles
+  duales son años de pulido.
+
+### Oportunidades, por valor entre coste
+
+1. **QuickShape.** Mantener el lápiz al final del trazo y ajustarlo a línea,
+   círculo, rectángulo o polígono. Es de lo más querido de Procreate y se monta
+   encima del `StrokeBuilder` que ya existe. La mejor relación deleite/esfuerzo.
+2. **Historial persistente.** Su queja número uno de flujo: al cerrar el
+   archivo se pierde el deshacer. Para nosotros es barato porque los pasos ya
+   son instantáneas por rectángulo; falta serializarlas en el `.trace`. No lo
+   hace nadie.
+3. **Time-lapse.** La codificación con WebCodecs ya está; falta capturar un
+   fotograma por trazo en un búfer circular.
+4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
+   quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
+   que el cambio queda contenido en `gl/renderer.ts`.
+
+### Lo que no perseguir
+
+- **Los 9 ms.** No se gana en web, y perseguirlo desvía de lo que sí se gana.
+- **Pinceles duales.** Bonito, pero nadie cambia de app por eso.
+- **Vectores como añadido.** Ver la pregunta abierta más abajo: no es una
+  función, es otra arquitectura.
+
 ## Descartado, y por qué
 
 Para no volver sobre lo mismo:
@@ -101,8 +148,14 @@ Para no volver sobre lo mismo:
 Abiertas, sin respuesta todavía:
 
 - **El nombre.** "Trace" es provisional.
-- **Vectores.** Hoy todo es ráster. Meter trazos vectoriales editables cambia
-  el modelo de documento y es donde Skia sí empezaría a valer la pena.
+- **Vectores.** Hoy todo es ráster. No es una función que se añade: cambia el
+  modelo de documento, el renderizador, las herramientas, el formato de archivo
+  y el historial. Meses de trabajo, y es donde Skia sí empezaría a valer la
+  pena. Además aporta menos de lo que parece al caso de uso principal: en
+  animación cuadro por cuadro el dibujo se rehace en cada fotograma, así que la
+  ventaja de escalar sin pérdida pesa en ilustración, no aquí. La pregunta real
+  que hay debajo es si Trace quiere ser sobre todo una app de ilustración o de
+  animación.
 - **Audio.** Sin audio no hay sincronización de labios ni timing sobre música.
   Es un módulo grande.
 - **Colaboración.** Choca con "nada sale del dispositivo". Si se hace, con
