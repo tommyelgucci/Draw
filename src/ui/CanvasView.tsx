@@ -6,12 +6,21 @@ import type { SelectionMode, SelectionShape } from '../core/selection';
 import type { InputSample, Vec2 } from '../core/types';
 import { useActiveBrush, useUI } from '../state/store';
 
-/** Cuánto tarda el lápiz en considerarse "quieto" para disparar QuickShape,
- * y qué radio de pantalla se tolera como temblor antes de eso. Un dedo real
- * en pantalla táctil tiembla bastante más que un ratón o un lápiz: con 3px
- * casi nunca se consideraba "quieto" y el dwell no llegaba a disparar. */
+/**
+ * Cuánto tarda el lápiz en considerarse "quieto" para disparar QuickShape,
+ * y qué radio de pantalla se tolera como temblor antes de eso.
+ *
+ * Un dedo real en pantalla táctil no sólo tiembla más que un ratón: el
+ * área de contacto se mueve varios píxeles incluso "sin querer" durante los
+ * ~380ms que dura la espera, y como el ancla se realinea con cada
+ * movimiento que supera el radio, un radio demasiado ajustado hace que el
+ * temporizador se reinicie sin parar y nunca llegue a completarse — el
+ * dwell no es que falle al reconocer, es que ni siquiera llega a
+ * dispararse. 8px (calibrado con ratón) se quedaba corto; el radio típico
+ * de "touch slop" en apps táctiles ronda 15-20px CSS.
+ */
 const DWELL_MS = 380;
-const DWELL_RADIUS = 8;
+const DWELL_RADIUS = 18;
 
 interface TrackedPointer {
   id: number;
@@ -52,6 +61,9 @@ export function CanvasView() {
   const lastPenAt = useRef(0);
   const dwellTimer = useRef<number | null>(null);
   const dwellAnchor = useRef<Vec2 | null>(null);
+  /** Aro que crece durante el dwell: sin él, "mantener quieto" es un gesto
+   * invisible que nadie puede aprender ni depurar cuando falla. */
+  const dwellRingRef = useRef<HTMLDivElement>(null);
   /** Gesto de segundo dedo mientras se sostiene una forma QuickShape recién
    * reconocida: rotación en incrementos de 15°, independiente del gesto de
    * vista/capa de `GestureState` (ver `beginGesture`). */
@@ -161,12 +173,31 @@ export function CanvasView() {
    * QuickShape: detección de "lápiz quieto"
    * ---------------------------------------------------------------- */
 
+  const hideDwellRing = () => {
+    dwellRingRef.current?.classList.remove('is-armed');
+  };
+
+  /** (Re)arranca la animación del aro en `local`, reiniciándola aunque ya
+   * estuviera a mitad — por eso el `classList.remove` + reflow forzado antes
+   * de volver a añadir la clase que dispara la transición CSS. */
+  const showDwellRing = (local: Vec2) => {
+    const el = dwellRingRef.current;
+    if (!el) return;
+    el.style.left = `${local.x}px`;
+    el.style.top = `${local.y}px`;
+    el.classList.remove('is-armed');
+    void el.offsetWidth;
+    el.style.transitionDuration = `${DWELL_MS}ms`;
+    el.classList.add('is-armed');
+  };
+
   const clearDwell = () => {
     if (dwellTimer.current !== null) {
       window.clearTimeout(dwellTimer.current);
       dwellTimer.current = null;
     }
     dwellAnchor.current = null;
+    hideDwellRing();
   };
 
   /**
@@ -182,11 +213,13 @@ export function CanvasView() {
     dwellAnchor.current = local;
     if (dwellTimer.current !== null) window.clearTimeout(dwellTimer.current);
     dwellTimer.current = window.setTimeout(() => fireDwell(pointerId), DWELL_MS);
+    showDwellRing(local);
   };
 
   const fireDwell = (pointerId: number) => {
     dwellTimer.current = null;
     dwellAnchor.current = null;
+    hideDwellRing();
     const engine = engineRef.current;
     // El trazo pudo terminar mientras esperábamos: sin efecto si ya no es
     // el puntero que sigue dibujando.
@@ -502,16 +535,19 @@ export function CanvasView() {
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="canvas-surface"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={finishPointer}
-      onPointerCancel={finishPointer}
-      onWheel={onWheel}
-      onContextMenu={(e) => e.preventDefault()}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className="canvas-surface"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishPointer}
+        onPointerCancel={finishPointer}
+        onWheel={onWheel}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+      <div ref={dwellRingRef} className="dwell-ring" aria-hidden="true" />
+    </>
   );
 }
 
