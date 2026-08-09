@@ -80,6 +80,16 @@ export function CanvasView() {
     points: Vec2[];
     mode: SelectionMode;
   } | null>(null);
+  /** Hueso en creación por arrastre (modo rig): igual que `selectPath`,
+   *  vive fuera de React porque cambia en cada muestra de puntero. */
+  const boneDragId = useRef<number | null>(null);
+  const boneDrag = useRef<{
+    skeletonId: string;
+    boneId: string;
+    createdSkeleton: boolean;
+    startLocal: Vec2;
+    wasEmptyCanvas: boolean;
+  } | null>(null);
 
   const setEngine = useUI((s) => s.setEngine);
   const brush = useActiveBrush();
@@ -412,6 +422,11 @@ export function CanvasView() {
         selectingId.current = null;
         selectPath.current = null;
       }
+      if (boneDragId.current !== null) {
+        engine.cancelBoneDrag(boneDrag.current?.createdSkeleton ?? false);
+        boneDragId.current = null;
+        boneDrag.current = null;
+      }
       beginGesture();
       if (gesture.current) gesture.current.maxPointers = pointers.current.size;
       return;
@@ -453,12 +468,32 @@ export function CanvasView() {
     if (tool === 'rig') {
       // Los tiradores del gizmo (BoneGizmoOverlay) hacen stopPropagation y
       // capturan su propio puntero, así que este bloque sólo ve toques en
-      // lienzo vacío: hueso bajo el dedo si lo hay, si no, deseleccionar.
+      // lienzo vacío o sobre un hueso que no está seleccionado (sin
+      // tiradores propios encima que lo intercepten).
+      //
+      // La cola de un hueso se comprueba ANTES que el cuerpo a propósito:
+      // la cola es parte del segmento, así que un hit-test de cuerpo
+      // primero nunca dejaría llegar un toque ahí a "encadenar hijo" —
+      // siempre ganaría "seleccionar".
+      const point = { x: sample.x, y: sample.y };
       const skel = engine.doc.skeletons[0];
-      const hit = skel
-        ? engine.hitTestBone(skel.id, { x: sample.x, y: sample.y }, 14 / engine.view.zoom)
-        : null;
-      uiRef.current.setSelectedBoneId(hit ? hit.id : null);
+      const hitTail = skel ? engine.hitTestBoneTail(skel.id, point, 18 / engine.view.zoom) : null;
+      if (!hitTail) {
+        const hitBody = skel ? engine.hitTestBone(skel.id, point, 14 / engine.view.zoom) : null;
+        if (hitBody) {
+          uiRef.current.setSelectedBoneId(hitBody.id);
+          return;
+        }
+      }
+      // Ni cola ni cuerpo de ningún hueso: no se sabe todavía si esto va a
+      // ser un toque (deseleccionar) o un arrastre (crear hueso), así que
+      // el hueso se crea YA — con longitud mínima — y `finishPointer` lo
+      // deshace entero si al soltar quedó demasiado corto para ser un
+      // gesto de verdad. Tocar la cola de un hueso existente encadena un
+      // hijo ahí; lienzo vacío arranca uno nuevo (y un esqueleto si hace falta).
+      const created = engine.beginBoneDrag(point, hitTail?.id ?? null);
+      boneDragId.current = e.pointerId;
+      boneDrag.current = { ...created, startLocal: local, wasEmptyCanvas: !hitTail };
       return;
     }
 
@@ -482,6 +517,12 @@ export function CanvasView() {
 
     if (gesture.current || quickShapeGesture.current) {
       updateGesture();
+      return;
+    }
+
+    if (boneDragId.current === e.pointerId && boneDrag.current) {
+      const s = toSample(e);
+      engine.updateBoneDrag(boneDrag.current.skeletonId, boneDrag.current.boneId, { x: s.x, y: s.y });
       return;
     }
 
@@ -558,6 +599,24 @@ export function CanvasView() {
         // es lo que espera cualquiera que venga de un editor de imagen.
         if (tooSmall) engine.clearSelection();
         else engine.applySelectionShape(path.shape, path.points, path.mode);
+      }
+    }
+    if (boneDragId.current === e.pointerId && boneDrag.current) {
+      const drag = boneDrag.current;
+      boneDragId.current = null;
+      boneDrag.current = null;
+      const local = localPoint(e);
+      const moved = Math.hypot(local.x - drag.startLocal.x, local.y - drag.startLocal.y);
+      // Mismo umbral en píxeles de pantalla que el resto de gestos de tap
+      // (p. ej. el atajo de deshacer a dos dedos): por debajo, fue un
+      // toque, no un arrastre para definir un hueso de verdad.
+      if (moved < 10) {
+        engine.cancelBoneDrag(drag.createdSkeleton);
+        // Tocar la cola de un hueso para engancharlo no debe deseleccionar
+        // lo que hubiera activo; tocar lienzo vacío sí, como antes.
+        if (drag.wasEmptyCanvas) uiRef.current.setSelectedBoneId(null);
+      } else {
+        uiRef.current.setSelectedBoneId(drag.boneId);
       }
     }
     if ((gesture.current || quickShapeGesture.current) && pointers.current.size < 2) {

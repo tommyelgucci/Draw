@@ -240,6 +240,56 @@ export function hitTestBone(
   return null;
 }
 
+/**
+ * Hueso cuya COLA de reposo cae dentro de `tolerance` de `p` — más
+ * estricto que `hitTestBone` (que mide contra el segmento entero): es lo
+ * que decide si un toque en el lienzo arranca un hueso hijo encadenado en
+ * vez de seleccionar el hueso que se tocó.
+ */
+export function hitTestBoneTail(
+  skel: Skeleton,
+  worldMatrices: Map<string, Mat3>,
+  p: Vec2,
+  tolerance = 16,
+): Bone | null {
+  for (let i = skel.bones.length - 1; i >= 0; i--) {
+    const b = skel.bones[i];
+    const m = worldMatrices.get(b.id);
+    if (!m) continue;
+    const tail: Vec2 = { x: m[0] * b.length + m[6], y: m[1] * b.length + m[7] };
+    if (Math.hypot(p.x - tail.x, p.y - tail.y) <= tolerance) return b;
+  }
+  return null;
+}
+
+/** Ángulo (radianes) de la parte rotacional de una matriz de mundo,
+ *  asumiendo que es rígida (sin cizalla) — cierto para toda matriz de
+ *  reposo de este motor, que nunca combina escala no uniforme. */
+export function matRotation(m: Mat3): number {
+  return Math.atan2(m[1], m[0]);
+}
+
+/**
+ * Longitud y rotación de reposo que harían que un hueso naciera en
+ * `worldHead` y su cola apuntara a `worldPoint`, dado el ángulo de mundo
+ * del espacio en el que vive (0 para un hueso raíz; la rotación de mundo
+ * del padre para un hijo, porque `restRotation` se compone DENTRO de ese
+ * marco — ver `restLocalMatrix`). Es la base de la creación táctil de
+ * huesos: arrastrar de un punto a otro define un hueso entero de una vez,
+ * sin tener que teclear valores.
+ */
+export function boneRestFromDrag(
+  parentWorldRotation: number,
+  worldHead: Vec2,
+  worldPoint: Vec2,
+): { length: number; restRotation: number } {
+  const dx = worldPoint.x - worldHead.x;
+  const dy = worldPoint.y - worldHead.y;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  const restRotation = Math.atan2(dy, dx) - parentWorldRotation;
+  return { length, restRotation };
+}
+
 /* ------------------------------------------------------------------ *
  * Malla deformable
  * ------------------------------------------------------------------ */

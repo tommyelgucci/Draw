@@ -23,12 +23,16 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  boneRestFromDrag,
   boneRigidMatrix,
   createBone,
   evaluatePoseWorldMatrices,
+  evaluateRestWorldMatrices,
   evaluateSkinMatrices,
   findBone,
   hitTestBone as hitTestBoneInSkeleton,
+  hitTestBoneTail as hitTestBoneTailInSkeleton,
+  matRotation,
   newMesh,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
@@ -1085,6 +1089,91 @@ export class Engine {
     if (!skel) return null;
     const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
     return hitTestBoneInSkeleton(skel, matrices, point, tolerance);
+  }
+
+  /** Hueso cuya cola cae bajo `point` — la señal para encadenar un hijo en
+   *  vez de seleccionar (ver `beginBoneDrag`). Se mide en pose, no en
+   *  reposo, para que el punto de enganche sea el que se ve en pantalla en
+   *  el fotograma actual, no uno invisible si el hueso está animado. */
+  hitTestBoneTail(skeletonId: string, point: Vec2, tolerance = 16): Bone | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    if (!skel) return null;
+    const matrices = evaluatePoseWorldMatrices(skel, this.currentFrame);
+    return hitTestBoneTailInSkeleton(skel, matrices, point, tolerance);
+  }
+
+  /**
+   * Arranca un hueso por arrastre: crea el esqueleto si el documento no
+   * tiene ninguno todavía, y el hueso con longitud mínima en `worldPoint`
+   * (o en la cola de `parentBoneId` si se está encadenando uno hijo).
+   * `updateBoneDrag` ajusta longitud y rotación en cada muestra del
+   * arrastre; `createSkeleton`/`addBone` ya son Commands, así que crear
+   * el hueso (y el esqueleto, si hizo falta) son los únicos pasos que
+   * entran en el historial — arrastrar no añade más. `createdSkeleton` le
+   * dice a `cancelBoneDrag` cuántos de esos pasos deshacer si el gesto
+   * queda en nada.
+   */
+  beginBoneDrag(
+    worldPoint: Vec2,
+    parentBoneId: string | null,
+  ): { skeletonId: string; boneId: string; createdSkeleton: boolean } {
+    const createdSkeleton = this.doc.skeletons.length === 0;
+    const skel = this.doc.skeletons[0] ?? this.createSkeleton('Esqueleto');
+    let restX = worldPoint.x;
+    let restY = worldPoint.y;
+    const parent = parentBoneId ? findBone(skel, parentBoneId) : null;
+    if (parent) {
+      // El hijo nace en la cola de reposo del padre, en SU espacio local
+      // — el mismo convenio que ya usan todos los esqueletos de prueba
+      // (restX = longitud del padre, restY = 0).
+      restX = parent.length;
+      restY = 0;
+    }
+    const bone = this.addBone(skel.id, `Hueso ${skel.bones.length + 1}`, parentBoneId, {
+      x: restX,
+      y: restY,
+      length: 1,
+    })!;
+    return { skeletonId: skel.id, boneId: bone.id, createdSkeleton };
+  }
+
+  /**
+   * Longitud y rotación de reposo del hueso en creación, siguiendo a
+   * `worldPoint`. Sin `history.run`: la creación en sí ya quedó registrada
+   * en `beginBoneDrag`, y esto es la misma muestra continua de arrastre
+   * que `setBonePose`, no un paso aparte que deshacer.
+   */
+  updateBoneDrag(skeletonId: string, boneId: string, worldPoint: Vec2) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone) return;
+    let parentWorldRotation = 0;
+    let worldHead: Vec2 = { x: bone.restX, y: bone.restY };
+    if (bone.parentId) {
+      const parent = findBone(skel, bone.parentId);
+      const parentM = evaluateRestWorldMatrices(skel).get(bone.parentId);
+      if (parent && parentM) {
+        parentWorldRotation = matRotation(parentM);
+        worldHead = { x: parentM[0] * parent.length + parentM[6], y: parentM[1] * parent.length + parentM[7] };
+      }
+    }
+    const { length, restRotation } = boneRestFromDrag(parentWorldRotation, worldHead, worldPoint);
+    bone.length = length;
+    bone.restRotation = restRotation;
+    this.touch();
+  }
+
+  /**
+   * Deshace un hueso creado por arrastre que quedó demasiado corto — un
+   * toque, no un gesto de verdad. Nada más ha pasado por el historial
+   * desde `beginBoneDrag`, así que uno o dos `undo()` (el hueso, y el
+   * esqueleto si `beginBoneDrag` tuvo que crear uno) lo revierten limpio,
+   * igual que `cancelStroke`/`cancelFloating` deshacen su propio gesto
+   * pendiente sin dejar rastro.
+   */
+  cancelBoneDrag(createdSkeleton: boolean) {
+    this.history.undo();
+    if (createdSkeleton) this.history.undo();
   }
 
   getBoneValue(bone: Bone, prop: 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'): number {
