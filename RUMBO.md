@@ -122,11 +122,13 @@ las oportunidades están donde su arquitectura no le deja llegar.
 4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
    quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
    que el cambio queda contenido en `gl/renderer.ts`.
-5. **Presets de lienzo con nombre y tipo de proyecto.** Procreate y la app
-   vectorial de referencia separan Pintura / Animación / Tracing antes de
-   elegir tamaño, y ofrecen presets con nombre (Cuadrado, 4K, formatos de
-   story) en vez de sólo ancho/alto en píxeles. Esfuerzo bajo, hueco real: hoy
-   Trace sólo tiene el campo numérico.
+5. **Presets de lienzo con nombre y tipo de proyecto.** `hecho`. Botón
+   "Nuevo proyecto" en el panel Proyecto, con confirmación: tipo
+   (Animación/Pintura, sólo decide valores por defecto — cuadros y si la
+   línea de tiempo arranca visible, no se guarda en el documento) y tamaño
+   con nombre reutilizando los presets que ya existían para redimensionar.
+   De paso corrigió una fuga real: "Abrir proyecto" cambiaba de documento
+   sin soltar las superficies GPU del anterior.
 6. **Paletas de usuario con nombre.** Crear, nombrar y guardar paletas propias
    (Procreate lo resuelve con una simple lista "+"). La gestión de color de
    Trace ya casi llega ahí — sólo falta la capa "mis paletas" editable encima
