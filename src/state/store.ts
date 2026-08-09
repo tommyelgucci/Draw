@@ -101,6 +101,9 @@ interface UIState {
    *  la cadena de 2 huesos entera (`engine.beginBoneIKDrag`) en vez de
    *  rotar sólo ese hueso. */
   ikEnabled: boolean;
+  /** Id del hueso que espera nuevo padre: el siguiente toque en el lienzo
+   *  (otro hueso, o vacío para desengancharlo a raíz) decide cuál. */
+  reparentingBoneId: string | null;
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
@@ -126,6 +129,7 @@ interface UIState {
   setRangeSelectMode: (v: boolean) => void;
   setFrameRange: (start: number | null, end: number | null) => void;
   setIkEnabled: (v: boolean) => void;
+  setReparentingBoneId: (v: string | null) => void;
 }
 
 /** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
@@ -189,6 +193,7 @@ export const useUI = create<UIState>((set, get) => ({
   frameRangeStart: null,
   frameRangeEnd: null,
   ikEnabled: false,
+  reparentingBoneId: null,
 
   setEngine: (engine) => set({ engine }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
@@ -267,6 +272,7 @@ export const useUI = create<UIState>((set, get) => ({
     set(rangeSelectMode ? { rangeSelectMode } : { rangeSelectMode, frameRangeStart: null, frameRangeEnd: null }),
   setFrameRange: (frameRangeStart, frameRangeEnd) => set({ frameRangeStart, frameRangeEnd }),
   setIkEnabled: (ikEnabled) => set({ ikEnabled }),
+  setReparentingBoneId: (reparentingBoneId) => set({ reparentingBoneId }),
 }));
 
 if (import.meta.env.DEV) {

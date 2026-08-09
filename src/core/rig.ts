@@ -107,6 +107,56 @@ export function findBone(skel: Skeleton, boneId: string): Bone | null {
   return skel.bones.find((b) => b.id === boneId) ?? null;
 }
 
+/** Si `boneId` cuelga de `ancestorId` (o es el mismo hueso) — lo que hay
+ *  que comprobar antes de reparentar, para no crear un ciclo en el árbol. */
+export function isBoneDescendantOf(skel: Skeleton, boneId: string, ancestorId: string): boolean {
+  let cursor: Bone | null = findBone(skel, boneId);
+  while (cursor) {
+    if (cursor.id === ancestorId) return true;
+    cursor = cursor.parentId ? findBone(skel, cursor.parentId) : null;
+  }
+  return false;
+}
+
+/**
+ * Reordena `bones` en orden topológico (todo padre antes que sus hijos).
+ * `addBone` mantiene ese orden por construcción (siempre añade al final,
+ * con el padre ya insertado antes), pero reparentar puede romperlo — un
+ * hueso puede acabar colgando de otro que está DESPUÉS en el array — así
+ * que hace falta rehacer el orden entero tras el cambio, no sólo mover ese
+ * hueso.
+ */
+export function topoSortBones(bones: Bone[]): Bone[] {
+  const byId = new Map(bones.map((b) => [b.id, b]));
+  const out: Bone[] = [];
+  const visited = new Set<string>();
+  const visit = (b: Bone) => {
+    if (visited.has(b.id)) return;
+    visited.add(b.id);
+    const parent = b.parentId ? byId.get(b.parentId) : undefined;
+    if (parent) visit(parent);
+    out.push(b);
+  };
+  for (const b of bones) visit(b);
+  return out;
+}
+
+/**
+ * Traslación y rotación de reposo que, en el espacio local de
+ * `newParentWorld`, ponen al hueso exactamente donde estaba con
+ * `childOldWorld` — la cuenta que hace posible "reparentar sin que salte
+ * de sitio": Blender la llama "keep transform". `track` (la animación) no
+ * se toca; sigue siendo un delta ENCIMA de este nuevo reposo, así que la
+ * forma de la animación sobrevive, sólo cambia el marco desde el que se mide.
+ */
+export function reparentBoneRest(
+  childOldWorld: Mat3,
+  newParentWorld: Mat3,
+): { x: number; y: number; rotation: number } {
+  const local = mat3Multiply(mat3Invert(newParentWorld), childOldWorld);
+  return { x: local[6], y: local[7], rotation: matRotation(local) };
+}
+
 /** Matriz local del hueso en reposo (padre→hijo), sin animación. */
 function restLocalMatrix(b: Bone): Mat3 {
   return mat3FromTRS(b.restX, b.restY, b.restRotation, 1, 1);

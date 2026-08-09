@@ -19,6 +19,7 @@
     "test:lasso-procreate": "node scripts/lasso-procreate.mjs",
     "test:batch-transform": "node scripts/batch-transform.mjs",
     "test:bone-ik": "node scripts/bone-ik.mjs",
+    "test:bone-reparent": "node scripts/bone-reparent.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",

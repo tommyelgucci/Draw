@@ -498,13 +498,23 @@ export function CanvasView() {
       // capturan su propio puntero, así que este bloque sólo ve toques en
       // lienzo vacío o sobre un hueso que no está seleccionado (sin
       // tiradores propios encima que lo intercepten).
+      const skel = engine.doc.skeletons[0];
+      const reparenting = uiRef.current.reparentingBoneId;
+      if (reparenting) {
+        // Modo "elegir nuevo padre": este toque decide, no crea ni
+        // selecciona nada — un hueso tocado es el nuevo padre, lienzo vacío
+        // lo desengancha a raíz.
+        const hit = skel ? engine.hitTestBone(skel.id, { x: sample.x, y: sample.y }, 14 / engine.view.zoom) : null;
+        if (skel) engine.reparentBone(skel.id, reparenting, hit?.id ?? null);
+        uiRef.current.setReparentingBoneId(null);
+        return;
+      }
       //
       // La cola de un hueso se comprueba ANTES que el cuerpo a propósito:
       // la cola es parte del segmento, así que un hit-test de cuerpo
       // primero nunca dejaría llegar un toque ahí a "encadenar hijo" —
       // siempre ganaría "seleccionar".
       const point = { x: sample.x, y: sample.y };
-      const skel = engine.doc.skeletons[0];
       const hitTail = skel ? engine.hitTestBoneTail(skel.id, point, 18 / engine.view.zoom) : null;
       if (!hitTail) {
         const hitBody = skel ? engine.hitTestBone(skel.id, point, 14 / engine.view.zoom) : null;

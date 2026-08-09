@@ -31,6 +31,8 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
   const setSelectedBoneId = useUI((s) => s.setSelectedBoneId);
   const ikEnabled = useUI((s) => s.ikEnabled);
   const setIkEnabled = useUI((s) => s.setIkEnabled);
+  const reparentingBoneId = useUI((s) => s.reparentingBoneId);
+  const setReparentingBoneId = useUI((s) => s.setReparentingBoneId);
   const drag = useRef<DragState | null>(null);
 
   if (tool !== 'rig') return null;
@@ -195,47 +197,66 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
   if (selected) {
     const anchor = engine.docToScreen(selected.head);
     const hasKeyframe = engine.boneHasKeyframeHere(selected.bone);
+    const isReparenting = reparentingBoneId === selected.bone.id;
     actionBar = (
       <div
         className="sel-bar"
         style={{ left: anchor.x, top: Math.max(52, anchor.y - 52) }}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <span className="sel-bar__readout">{selected.bone.name}</span>
-        {selected.bone.parentId && (
-          <button
-            type="button"
-            className={ikEnabled ? 'is-key' : ''}
-            onClick={() => setIkEnabled(!ikEnabled)}
-            title={
-              ikEnabled
-                ? 'IK activada: arrastrar la cola dobla también el hueso padre'
-                : 'Activar IK: arrastrar la cola dobla la cadena de 2 huesos'
-            }
-          >
-            IK
-          </button>
+        {isReparenting ? (
+          <>
+            <span className="sel-bar__readout">Toca el nuevo padre (o el lienzo vacío)</span>
+            <button type="button" onClick={() => setReparentingBoneId(null)}>
+              Cancelar
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="sel-bar__readout">{selected.bone.name}</span>
+            <button
+              type="button"
+              onClick={() => setReparentingBoneId(selected!.bone.id)}
+              title="Cambiar de qué hueso cuelga, sin que se mueva de sitio"
+            >
+              Reparentar
+            </button>
+            {selected.bone.parentId && (
+              <button
+                type="button"
+                className={ikEnabled ? 'is-key' : ''}
+                onClick={() => setIkEnabled(!ikEnabled)}
+                title={
+                  ikEnabled
+                    ? 'IK activada: arrastrar la cola dobla también el hueso padre'
+                    : 'Activar IK: arrastrar la cola dobla la cadena de 2 huesos'
+                }
+              >
+                IK
+              </button>
+            )}
+            {attachedLayer && !attachedMesh && (
+              <button
+                type="button"
+                onClick={() => {
+                  const mesh = engine.createMesh(skeleton.id);
+                  if (mesh) engine.attachLayerToMesh(attachedLayer.id, skeleton.id, mesh.id);
+                }}
+                title="Deformar esta capa con una malla en vez de moverla entera"
+              >
+                Convertir a malla
+              </button>
+            )}
+            <button
+              type="button"
+              className={hasKeyframe ? 'is-key' : ''}
+              onClick={() => engine.toggleBonePoseKeyframe(skeleton.id, selected.bone.id)}
+              title={hasKeyframe ? 'Quitar fotograma clave' : 'Añadir fotograma clave'}
+            >
+              <IconKey size={14} />
+            </button>
+          </>
         )}
-        {attachedLayer && !attachedMesh && (
-          <button
-            type="button"
-            onClick={() => {
-              const mesh = engine.createMesh(skeleton.id);
-              if (mesh) engine.attachLayerToMesh(attachedLayer.id, skeleton.id, mesh.id);
-            }}
-            title="Deformar esta capa con una malla en vez de moverla entera"
-          >
-            Convertir a malla
-          </button>
-        )}
-        <button
-          type="button"
-          className={hasKeyframe ? 'is-key' : ''}
-          onClick={() => engine.toggleBonePoseKeyframe(skeleton.id, selected.bone.id)}
-          title={hasKeyframe ? 'Quitar fotograma clave' : 'Añadir fotograma clave'}
-        >
-          <IconKey size={14} />
-        </button>
       </div>
     );
   }

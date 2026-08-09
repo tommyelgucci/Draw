@@ -105,6 +105,7 @@ export default function App() {
         case 'Escape':
           if (engine.floating) engine.cancelFloating();
           else if (engine.pendingLasso) engine.cancelLasso();
+          else if (useUI.getState().reparentingBoneId) useUI.getState().setReparentingBoneId(null);
           else if (engine.selection.active) engine.clearSelection();
           break;
         case 'Delete':

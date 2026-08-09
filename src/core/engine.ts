@@ -33,11 +33,14 @@ import {
   findBone,
   hitTestBone as hitTestBoneInSkeleton,
   hitTestBoneTail as hitTestBoneTailInSkeleton,
+  isBoneDescendantOf,
   matRotation,
   newMesh,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
+  reparentBoneRest,
   solveTwoBoneIK,
+  topoSortBones,
   worldPointToBoneOffset,
   worldPointToBoneRotation,
   type Bone,
@@ -1029,6 +1032,54 @@ export class Engine {
       label: 'Quitar hueso',
       redo: () => {
         removeBoneFromSkeleton(skel, boneId);
+        this.touch();
+      },
+      undo: () => {
+        skel.bones = before;
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Reasigna el padre de un hueso sin que salte de sitio: recalcula su
+   * reposo en el marco del nuevo padre (`reparentBoneRest`, `rig.ts`) y
+   * reordena `bones` para conservar el invariante topológico — el padre
+   * nuevo puede estar DESPUÉS en el array, y evaluar la pose asume que
+   * nunca lo está. `newParentId: null` lo desengancha a hueso raíz.
+   *
+   * Rechaza en silencio (sin tocar el historial) los casos que romperían
+   * el árbol: colgar un hueso de sí mismo o de uno de sus propios
+   * descendientes crearía un ciclo, y `evaluatePoseWorldMatrices` no
+   * termina nunca sobre un ciclo.
+   */
+  reparentBone(skeletonId: string, boneId: string, newParentId: string | null) {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const bone = skel && findBone(skel, boneId);
+    if (!skel || !bone || bone.parentId === newParentId) return;
+    if (newParentId === boneId) return;
+    const newParent = newParentId ? findBone(skel, newParentId) : null;
+    if (newParentId && !newParent) return;
+    if (newParentId && isBoneDescendantOf(skel, newParentId, boneId)) return;
+
+    const restWorlds = evaluateRestWorldMatrices(skel);
+    const oldWorld = restWorlds.get(boneId) ?? mat3Identity();
+    const newParentWorld = newParent ? (restWorlds.get(newParent.id) ?? mat3Identity()) : mat3Identity();
+    const rest = reparentBoneRest(oldWorld, newParentWorld);
+
+    const before = skel.bones.map((b) => ({ ...b }));
+    const after = topoSortBones(
+      skel.bones.map((b) =>
+        b.id === boneId
+          ? { ...b, parentId: newParentId, restX: rest.x, restY: rest.y, restRotation: rest.rotation }
+          : b,
+      ),
+    );
+
+    this.history.run({
+      label: 'Reparentar hueso',
+      redo: () => {
+        skel.bones = after;
         this.touch();
       },
       undo: () => {
