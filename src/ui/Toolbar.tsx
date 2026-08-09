@@ -9,6 +9,7 @@ import {
   IconBrush,
   IconDropper,
   IconEraser,
+  IconFace,
   IconFill,
   IconFit,
   IconHand,
@@ -169,6 +170,13 @@ export function Toolbar({ engine }: { engine: Engine }) {
           onClick={() => togglePanel('layers')}
         >
           <IconLayers />
+        </IconButton>
+        <IconButton
+          title="Poses"
+          active={panel === 'poses'}
+          onClick={() => togglePanel('poses')}
+        >
+          <IconFace />
         </IconButton>
         <IconButton
           title="Proyecto"

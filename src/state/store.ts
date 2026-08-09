@@ -20,7 +20,7 @@ export type Tool =
 /** Herramientas que construyen una máscara de selección. */
 export const SELECT_TOOLS: Tool[] = ['selectRect', 'selectLasso'];
 
-export type PanelId = 'layers' | 'brush' | 'color' | 'export' | 'settings' | null;
+export type PanelId = 'layers' | 'brush' | 'color' | 'export' | 'settings' | 'poses' | null;
 
 export interface PaletteGroup {
   name: string;

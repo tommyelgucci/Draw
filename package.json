@@ -14,6 +14,7 @@
     "test:rig-data": "node scripts/rig-data.mjs",
     "test:rig-viewport": "node scripts/rig-viewport.mjs",
     "test:rig-mesh": "node scripts/rig-mesh.mjs",
+    "test:pose-library": "node scripts/pose-library.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",
