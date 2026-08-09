@@ -629,6 +629,18 @@ button:focus-visible {
   border-radius: 50%;
 }
 
+.texture-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.texture-chip__canvas {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+}
+
 .sv-area {
   position: relative;
   height: 170px;

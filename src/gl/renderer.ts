@@ -7,6 +7,7 @@ import {
   STAMP_FS,
   STAMP_VS,
 } from './shaders';
+import { generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import { mat3Identity, type Mat3 } from '../core/math';
 import type { RGB, Rect, Stamp } from '../core/types';
 
@@ -75,6 +76,9 @@ export class Renderer {
 
   private scratches = new Map<string, Surface>();
   private smallTargets = new Map<string, { tex: WebGLTexture; fbo: WebGLFramebuffer }>();
+  /** Máscaras de punta de pincel, generadas una vez y cacheadas por id: no
+   * dependen del tamaño del documento, así que sobreviven a `setDocumentSize`. */
+  private brushTextures = new Map<BuiltinTextureId, WebGLTexture>();
   private resident = new Set<Surface>();
   private clock = 0;
   private maxResident = MAX_RESIDENT;
@@ -389,6 +393,34 @@ export class Renderer {
   /* ---------------------------------------------------------------- *
    * Dibujo
    * ---------------------------------------------------------------- */
+
+  /**
+   * Textura de máscara para una punta de pincel con textura, generada la
+   * primera vez que se pide y cacheada después. `null` (punta lisa) no pasa
+   * por aquí: lo resuelve el llamador antes de invocar este método.
+   */
+  getBrushTexture(id: BuiltinTextureId): WebGLTexture {
+    const cached = this.brushTextures.get(id);
+    if (cached) return cached;
+
+    const gl = this.gl;
+    const size = 128;
+    const pixels = generateBrushTexturePixels(id, size);
+
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, size, size);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // El UV de la estampa (vLocal*0.5+0.5) siempre cae en 0..1 exacto: no hay
+    // que envolver el borde, así que CLAMP evita cualquier fuga entre bordes.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    this.brushTextures.set(id, tex);
+    return tex;
+  }
 
   /**
    * Estampa un lote de puntos de pincel. Todas las estampas de un segmento van
