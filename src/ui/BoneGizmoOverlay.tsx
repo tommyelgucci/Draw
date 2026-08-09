@@ -1,9 +1,10 @@
 import { useRef } from 'react';
 import type { Engine } from '../core/engine';
 import { clamp } from '../core/math';
-import type { Bone } from '../core/rig';
+import { evaluateSkinnedMeshPositions, type Bone } from '../core/rig';
 import type { Vec2 } from '../core/types';
 import { useEngineRevision, useUI } from '../state/store';
+import { IconKey } from './icons';
 
 type DragKind = 'move' | 'rotate' | 'scale';
 
@@ -38,6 +39,14 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
 
   const endpoints = engine.boneEndpoints(skeleton.id);
   const selected = endpoints.find((ep) => ep.bone.id === selectedBoneId) ?? null;
+  // La capa que sigue al hueso seleccionado, rígida o por malla — attachLayerToMesh
+  // conserva `boneId` aunque ya haya `meshId`, así que este único campo basta.
+  const attachedLayer = selected
+    ? engine.doc.layers.find((l) => l.rig?.boneId === selected.bone.id)
+    : undefined;
+  const attachedMesh = attachedLayer?.rig?.meshId
+    ? engine.doc.meshes.find((m) => m.id === attachedLayer.rig!.meshId)
+    : undefined;
 
   const localPoint = (e: React.PointerEvent): Vec2 => {
     const rect = engine.renderer.canvas.getBoundingClientRect();
@@ -95,6 +104,33 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
 
+  let wireframe: React.ReactNode = null;
+  if (attachedMesh) {
+    const skinned = evaluateSkinnedMeshPositions(attachedMesh, skeleton, engine.currentFrame).map(
+      (p) => engine.docToScreen(p),
+    );
+    const edges: React.ReactNode[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < attachedMesh.triangles.length; i += 3) {
+      const tri = [attachedMesh.triangles[i], attachedMesh.triangles[i + 1], attachedMesh.triangles[i + 2]];
+      for (let k = 0; k < 3; k++) {
+        const a = tri[k];
+        const b = tri[(k + 1) % 3];
+        const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push(
+          <line key={key} x1={skinned[a].x} y1={skinned[a].y} x2={skinned[b].x} y2={skinned[b].y} />,
+        );
+      }
+    }
+    wireframe = (
+      <svg className="bone-mesh-wire" aria-hidden="true">
+        {edges}
+      </svg>
+    );
+  }
+
   let handles: React.ReactNode = null;
   if (selected) {
     const headScreen = engine.docToScreen(selected.head);
@@ -141,8 +177,44 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     );
   }
 
+  let actionBar: React.ReactNode = null;
+  if (selected) {
+    const anchor = engine.docToScreen(selected.head);
+    const hasKeyframe = engine.boneHasKeyframeHere(selected.bone);
+    actionBar = (
+      <div
+        className="sel-bar"
+        style={{ left: anchor.x, top: Math.max(52, anchor.y - 52) }}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <span className="sel-bar__readout">{selected.bone.name}</span>
+        {attachedLayer && !attachedMesh && (
+          <button
+            type="button"
+            onClick={() => {
+              const mesh = engine.createMesh(skeleton.id);
+              if (mesh) engine.attachLayerToMesh(attachedLayer.id, skeleton.id, mesh.id);
+            }}
+            title="Deformar esta capa con una malla en vez de moverla entera"
+          >
+            Convertir a malla
+          </button>
+        )}
+        <button
+          type="button"
+          className={hasKeyframe ? 'is-key' : ''}
+          onClick={() => engine.toggleBonePoseKeyframe(skeleton.id, selected.bone.id)}
+          title={hasKeyframe ? 'Quitar fotograma clave' : 'Añadir fotograma clave'}
+        >
+          <IconKey size={14} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="bone-overlay">
+      {wireframe}
       <svg className="bone-outline" aria-hidden="true">
         {endpoints.map(({ bone, head, tail }) => {
           const a = engine.docToScreen(head);
@@ -160,6 +232,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
         })}
       </svg>
       {handles}
+      {actionBar}
     </div>
   );
 }

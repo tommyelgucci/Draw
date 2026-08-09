@@ -245,8 +245,11 @@ export function hitTestBone(
  * ------------------------------------------------------------------ */
 
 /**
- * Hasta 4 huesos por vértice. `boneWeights` debería sumar 1; el editor de
- * pesos (Sprint 3) es responsable de normalizar, no se fuerza aquí.
+ * Hasta 4 huesos por vértice. `boneWeights` debería sumar 1; el auto-peso
+ * inicial (`autoWeightMesh`) es responsable de eso, no se fuerza aquí.
+ * `boneIndices` son índices POSICIONALES en `Skeleton.bones` (no ids) — es
+ * el mismo orden en el que `rasterizeLayer` sube las matrices de piel al
+ * shader, para poder indexarlas con un entero pequeño en vez de un string.
  */
 export interface MeshVertex {
   /** Posición de reposo en píxeles de documento (mismo espacio que Cel). */
@@ -276,4 +279,101 @@ export interface LayerRig {
   boneId: string | null;
   /** Sprint 3: si está presente, sustituye a `boneId` en la composición. */
   meshId: string | null;
+}
+
+/**
+ * Rejilla regular cubriendo todo el documento, en espacio documento con UV
+ * 0..1 correspondiente — la fuente que se deforma (`src` en `rasterizeLayer`)
+ * es siempre el cel entero, igual que ya asume el camino rígido del Sprint 2,
+ * así que la malla por defecto cubre ese mismo rectángulo completo en vez de
+ * recortarse al contorno de la tinta (que exigiría leer píxeles).
+ */
+export function newGridMesh(
+  skeletonId: string,
+  docWidth: number,
+  docHeight: number,
+  cols = 8,
+  rows = 8,
+): Mesh {
+  const vertices: MeshVertex[] = [];
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      const u = c / cols;
+      const v = r / rows;
+      vertices.push({ x: u * docWidth, y: v * docHeight, u, v, boneIndices: [0, 0, 0, 0], boneWeights: [1, 0, 0, 0] });
+    }
+  }
+  const triangles: number[] = [];
+  const stride = cols + 1;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i0 = r * stride + c;
+      const i1 = i0 + 1;
+      const i2 = i0 + stride;
+      const i3 = i2 + 1;
+      triangles.push(i0, i2, i1, i1, i2, i3);
+    }
+  }
+  return { id: uid('mesh'), vertices, triangles, skeletonId };
+}
+
+/**
+ * Auto-peso por distancia: cada vértice se asigna entero (peso 1.0) al
+ * hueso cuyo segmento cabeza→cola de REPOSO tiene más cerca. No es un
+ * skinning suave (sin mezcla entre huesos vecinos), pero evita exigir un
+ * editor de pesos pintado a mano para el primer corte — ver nota de riesgo
+ * del plan de diseño.
+ */
+export function autoWeightMesh(mesh: Mesh, skel: Skeleton) {
+  const rest = evaluateRestWorldMatrices(skel);
+  for (const v of mesh.vertices) {
+    let bestIndex = 0;
+    let bestDist = Infinity;
+    skel.bones.forEach((b, i) => {
+      const m = rest.get(b.id);
+      if (!m) return;
+      const head: Vec2 = { x: m[6], y: m[7] };
+      const tail: Vec2 = { x: m[0] * b.length + m[6], y: m[1] * b.length + m[7] };
+      const d = distanceToSegment({ x: v.x, y: v.y }, head, tail);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIndex = i;
+      }
+    });
+    v.boneIndices = [bestIndex, 0, 0, 0];
+    v.boneWeights = [1, 0, 0, 0];
+  }
+}
+
+/** Malla de rejilla con auto-peso ya aplicado — lo que crea el modo Viewport
+ *  al convertir una capa rígida en deformable. */
+export function newMesh(skel: Skeleton, docWidth: number, docHeight: number, cols = 8, rows = 8): Mesh {
+  const mesh = newGridMesh(skel.id, docWidth, docHeight, cols, rows);
+  autoWeightMesh(mesh, skel);
+  return mesh;
+}
+
+/**
+ * Posiciones de los vértices de `mesh` deformadas en `frame`, en espacio
+ * documento — la misma mezcla ponderada de matrices de piel que hace el
+ * vertex shader de skinning, pero en CPU. Sirve para el wireframe de la UI
+ * (`BoneGizmoOverlay`), donde recalcular unas pocas decenas de vértices en
+ * JS es más simple que leer de vuelta lo que dibujó la GPU.
+ */
+export function evaluateSkinnedMeshPositions(mesh: Mesh, skel: Skeleton, frame: number): Vec2[] {
+  const skin = evaluateSkinMatrices(skel, frame);
+  const mats = skel.bones.map((b) => skin.get(b.id) ?? mat3Identity());
+  return mesh.vertices.map((v) => {
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 4; i++) {
+      const w = v.boneWeights[i];
+      if (w === 0) continue;
+      const m = mats[v.boneIndices[i]] ?? mats[0];
+      const p = mat3Apply(m, { x: v.x, y: v.y });
+      x += p.x * w;
+      y += p.y * w;
+    }
+    return { x, y };
+  });
 }

@@ -2,13 +2,16 @@ import {
   ANTS_FS,
   COMPOSITE_FS,
   COPY_FS,
+  MAX_SKIN_BONES,
   PRESENT_FS,
   QUAD_VS,
+  SKIN_VS,
   STAMP_FS,
   STAMP_VS,
 } from './shaders';
 import { generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import { mat3Identity, type Mat3 } from '../core/math';
+import type { Mesh } from '../core/rig';
 import type { RGB, Rect, Stamp } from '../core/types';
 
 /**
@@ -76,6 +79,11 @@ export class Renderer {
 
   private scratches = new Map<string, Surface>();
   private smallTargets = new Map<string, { tex: WebGLTexture; fbo: WebGLFramebuffer }>();
+  /** VAO/VBO/IBO por malla deformable, indexados por `Mesh.id`. Presupuesto
+   *  aparte de `TEXTURE_BUDGET_BYTES`: una rejilla de unos pocos cientos de
+   *  vértices pesa kilobytes, no megabytes, frente a una superficie del
+   *  tamaño del documento — ver plan de diseño del módulo de rig. */
+  private meshGPU = new Map<string, { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; ibo: WebGLBuffer; indexCount: number }>();
   /** Máscaras de punta de pincel, generadas una vez y cacheadas por id: no
    * dependen del tamaño del documento, así que sobreviven a `setDocumentSize`. */
   private brushTextures = new Map<BuiltinTextureId, WebGLTexture>();
@@ -186,6 +194,15 @@ export class Renderer {
       'uPaper',
       'uPaperAlpha',
     ]);
+    this.link('skin', SKIN_VS, COPY_FS, [
+      'uBoneMatrices[0]',
+      'uResolution',
+      'uFlipY',
+      'uSource',
+      'uMask',
+      'uOpacity',
+      'uUseMask',
+    ]);
   }
 
   private buildGeometry() {
@@ -248,6 +265,15 @@ export class Renderer {
       this.gl.deleteTexture(t.tex);
     }
     this.smallTargets.clear();
+    // Las posiciones de reposo de cada malla están en píxeles de este
+    // tamaño de documento; si cambia, hay que regenerarlas desde el core,
+    // no sólo resubir el mismo buffer.
+    for (const m of this.meshGPU.values()) {
+      this.gl.deleteVertexArray(m.vao);
+      this.gl.deleteBuffer(m.vbo);
+      this.gl.deleteBuffer(m.ibo);
+    }
+    this.meshGPU.clear();
   }
 
   /** Cuántas superficies caben en GPU con el lienzo actual. */
@@ -480,6 +506,105 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     target.empty = false;
+    target.version++;
+  }
+
+  /**
+   * Sube (o resube, sin condición) los vértices/índices de `mesh` al VAO
+   * cacheado para su id. Sin control de versión a propósito: una malla de
+   * unas pocas decenas o cientos de vértices cuesta lo mismo volver a subir
+   * entera que comprobar si cambió, y así no hace falta que `Mesh` lleve su
+   * propio contador — mismo criterio que `drawStamps`, que ya resube su
+   * buffer entero en cada llamada.
+   */
+  private ensureMeshGPU(mesh: Mesh) {
+    const gl = this.gl;
+    let gpu = this.meshGPU.get(mesh.id);
+    if (!gpu) {
+      gpu = { vao: gl.createVertexArray()!, vbo: gl.createBuffer()!, ibo: gl.createBuffer()!, indexCount: 0 };
+      this.meshGPU.set(mesh.id, gpu);
+    }
+
+    gl.bindVertexArray(gpu.vao);
+
+    // aRestPos(2) aUV(2) aBoneIndices(4) aBoneWeights(4) = 12 floats/vértice.
+    const stride = 12 * 4;
+    const data = new Float32Array(mesh.vertices.length * 12);
+    for (let i = 0; i < mesh.vertices.length; i++) {
+      const v = mesh.vertices[i];
+      const o = i * 12;
+      data[o] = v.x;
+      data[o + 1] = v.y;
+      data[o + 2] = v.u;
+      data[o + 3] = v.v;
+      data[o + 4] = v.boneIndices[0];
+      data[o + 5] = v.boneIndices[1];
+      data[o + 6] = v.boneIndices[2];
+      data[o + 7] = v.boneIndices[3];
+      data[o + 8] = v.boneWeights[0];
+      data[o + 9] = v.boneWeights[1];
+      data[o + 10] = v.boneWeights[2];
+      data[o + 11] = v.boneWeights[3];
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, gpu.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 8);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, stride, 16);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 4, gl.FLOAT, false, stride, 32);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gpu.ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(mesh.triangles), gl.DYNAMIC_DRAW);
+    gpu.indexCount = mesh.triangles.length;
+
+    gl.bindVertexArray(null);
+    return gpu;
+  }
+
+  /**
+   * Deforma `src` con `mesh` según `boneMatrices` (una por hueso, en el
+   * mismo orden que `Skeleton.bones` — así `MeshVertex.boneIndices` puede
+   * indexarlas con un entero pequeño). Es el único pase que dibuja
+   * triángulos arbitrarios en vez del quad unidad o las estampas
+   * instanciadas; el resto del pipeline (premultiplicado, `uFlipY=0` al
+   * escribir a un FBO) sigue las mismas invariantes que cualquier otro pase.
+   */
+  drawSkinned(target: Surface, src: Surface, mesh: Mesh, boneMatrices: Mat3[]) {
+    if (mesh.vertices.length === 0 || mesh.triangles.length === 0) return;
+    const gl = this.gl;
+    this.ensureResident(target);
+    this.ensureResident(src);
+    const gpu = this.ensureMeshGPU(mesh);
+
+    const p = this.programs.get('skin')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(gpu.vao);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+    gl.viewport(0, 0, this.docWidth, this.docHeight);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    const count = Math.min(boneMatrices.length, MAX_SKIN_BONES);
+    const flat = new Float32Array(Math.max(count, 1) * 9);
+    for (let i = 0; i < count; i++) flat.set(boneMatrices[i], i * 9);
+    gl.uniformMatrix3fv(p.uniforms['uBoneMatrices[0]'], false, flat);
+    gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
+    gl.uniform1f(p.uniforms.uFlipY, 0);
+    gl.uniform1f(p.uniforms.uOpacity, 1);
+    gl.uniform1f(p.uniforms.uUseMask, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+
+    gl.drawElements(gl.TRIANGLES, gpu.indexCount, gl.UNSIGNED_SHORT, 0);
+
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!src.empty) target.empty = false;
     target.version++;
   }
 
