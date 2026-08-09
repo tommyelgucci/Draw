@@ -31,6 +31,10 @@ jobs:
         # Pages sirve el proyecto bajo /<repo>/, no en la raíz del dominio.
         run: BASE_PATH="/${GITHUB_REPOSITORY#*/}/" npm run build
       - uses: actions/configure-pages@v5
+        with:
+          # Habilita Pages por API si aún no lo estaba, en vez de fallar
+          # pidiendo que alguien lo active a mano en los ajustes del repo.
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
