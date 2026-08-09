@@ -1,5 +1,5 @@
 import type { Vec2 } from './types';
-import { TAU } from './math';
+import { clamp, lerp, TAU } from './math';
 
 /**
  * Reconocimiento de formas para QuickShape: cuando el lápiz se queda quieto
@@ -27,23 +27,50 @@ export type RecognizedShape =
 // que un círculo de 20px y uno de 400px se juzguen con el mismo criterio.
 const MIN_POINTS = 5;
 const MIN_DIAGONAL = 6; // px de documento: trazos más pequeños no merecen forzarse
-const CLOSE_GAP_RATIO = 0.14; // dist(inicio,fin) / diagonal para considerarlo "cerrado"
-const LINE_MAX_ERROR = 0.06; // desviación perpendicular media / longitud
-// Desviación radial MÁXIMA (no media) relativa al radio: un rectángulo
-// dibujado a mano tiene pocos puntos en las esquinas frente a muchos en los
-// lados rectos, así que el error medio los diluye y un rectángulo se cuela
-// como elipse. El máximo sí acusa el pico de cada esquina.
-const ELLIPSE_MAX_ERROR = 0.24;
 const MIN_POLYGON_SIDES = 3;
 const MAX_POLYGON_SIDES = 10;
+
+/**
+ * Cada umbral tiene un extremo laxo (precisión 0) y uno estricto
+ * (precisión 1); `recognizeShape` interpola entre ambos. Los calibré en
+ * mesa con un trazo de ratón perfecto y salieron demasiado ajustados para
+ * un dedo real en pantalla táctil — en particular, un círculo dibujado a
+ * mano casi nunca cierra el lazo exacto donde empezó, y una "línea recta"
+ * tiembla bastante más del 6% de su longitud. El extremo laxo de cada
+ * rango parte de ahí, no de la teoría.
+ */
+const THRESHOLDS = {
+  // dist(inicio,fin) / diagonal para considerar el trazo "cerrado". Al 0%
+  // tolera un hueco de casi un tercio de la diagonal; al 100%, casi nada.
+  closeGap: { loose: 0.32, strict: 0.06 },
+  // Desviación perpendicular media / longitud, para la línea recta.
+  line: { loose: 0.22, strict: 0.025 },
+  // Desviación radial MÁXIMA (no media) relativa al radio: un rectángulo
+  // dibujado a mano tiene pocos puntos en las esquinas frente a muchos en
+  // los lados rectos, así que el error medio los diluye y un rectángulo se
+  // cuela como elipse. El máximo sí acusa el pico de cada esquina.
+  ellipse: { loose: 0.4, strict: 0.14 },
+  // Factor de la diagonal para el epsilon de Douglas-Peucker al contar
+  // esquinas: más laxo funde esquinas cercanas entre sí en una sola.
+  corner: { loose: 0.05, strict: 0.02 },
+};
+
+function threshold(t: { loose: number; strict: number }, precision: number): number {
+  return lerp(t.loose, t.strict, clamp(precision, 0, 1));
+}
 
 /**
  * Intenta reconocer el recorrido como línea, elipse/círculo, rectángulo,
  * triángulo o polígono regular. Devuelve `null` cuando no hay un ajuste lo
  * bastante bueno — igual que Procreate, si no reconoce nada no fuerza nada
  * y el trazo original se queda tal cual.
+ *
+ * `precision` es 0..1 y lo controla la persona que dibuja (menos precisión
+ * = perdona trazos más torpes, más precisión = exige un parecido casi
+ * exacto). El punto dulce típico ronda 0.5-0.8, no 1: al máximo casi nada
+ * encaja salvo algo que ya estaba perfecto.
  */
-export function recognizeShape(points: Vec2[]): RecognizedShape | null {
+export function recognizeShape(points: Vec2[], precision = 0.6): RecognizedShape | null {
   if (points.length < MIN_POINTS) return null;
   const box = boundingBox(points);
   const diag = Math.hypot(box.maxX - box.minX, box.maxY - box.minY);
@@ -51,18 +78,48 @@ export function recognizeShape(points: Vec2[]): RecognizedShape | null {
 
   const first = points[0];
   const last = points[points.length - 1];
-  const closed = dist(first, last) < diag * CLOSE_GAP_RATIO;
+  const closed = dist(first, last) < diag * threshold(THRESHOLDS.closeGap, precision);
 
   if (!closed) {
     const line = fitLine(points);
-    if (line.error < LINE_MAX_ERROR) return { kind: 'line', a: line.a, b: line.b };
+    if (line.error < threshold(THRESHOLDS.line, precision)) {
+      return { kind: 'line', a: line.a, b: line.b };
+    }
     // Abierta y no es una línea recta: sin arcos ni polilíneas en esta
     // versión (ver CLAUDE.md / notas de alcance), se deja el trazo intacto.
     return null;
   }
 
+  // Se ajustan las dos hipótesis — curva suave y polígono — y gana la que
+  // mejor explique el trazo. Antes se probaba la elipse y sólo si fallaba
+  // se contaban esquinas: con dos umbrales independientes, afinar uno podía
+  // voltear silenciosamente la clasificación del otro (así se coló un
+  // rectángulo real como elipse). Comparar los errores de frente es más
+  // robusto porque no depende de que ambos umbrales queden perfectamente
+  // calibrados entre sí.
   const ellipse = fitEllipse(points);
-  if (ellipse.error < ELLIPSE_MAX_ERROR) {
+  const tol = threshold(THRESHOLDS.ellipse, precision);
+  const ellipseOk = ellipse.error < tol;
+
+  // El propio Douglas-Peucker hace de "detector de esquinas" — conserva los
+  // puntos de máxima desviación (las esquinas) y descarta los que caen
+  // sobre un tramo recto dentro de la tolerancia.
+  const epsilon = Math.max(diag * threshold(THRESHOLDS.corner, precision), 3);
+  const corners = simplifyClosed(points, epsilon);
+  const n = corners.length;
+  const hasPolygon = n >= MIN_POLYGON_SIDES && n <= MAX_POLYGON_SIDES;
+  const polyError = hasPolygon ? polygonFitError(points, corners) : Infinity;
+  const polyOk = hasPolygon && polyError < tol;
+  // Un triángulo o rectángulo real se distingue de un círculo a simple
+  // vista, así que basta con ganar por poco. Cuantos más lados tiene el
+  // polígono detectado, más se parece cualquier curva suave a esa forma por
+  // pura definición (un decágono aproxima un círculo casi tan bien como la
+  // propia elipse) — así que el margen exigido crece con `n`, no es fijo.
+  const polyMargin = n <= 4 ? 1 : lerp(0.85, 0.45, clamp((n - 5) / 5, 0, 1));
+  const polyMustBeat = ellipse.error * polyMargin;
+
+  if (!ellipseOk && !polyOk) return null;
+  if (ellipseOk && (!polyOk || polyError > polyMustBeat)) {
     return {
       kind: 'ellipse',
       cx: ellipse.cx,
@@ -72,15 +129,6 @@ export function recognizeShape(points: Vec2[]): RecognizedShape | null {
       rotation: ellipse.rotation,
     };
   }
-
-  // No es una curva suave: cuenta esquinas simplificando el lazo cerrado.
-  // El propio Douglas-Peucker ya hace de "detector de esquinas" — conserva
-  // los puntos de máxima desviación (las esquinas) y descarta los que caen
-  // sobre un tramo recto dentro de la tolerancia.
-  const epsilon = Math.max(diag * 0.035, 3);
-  const corners = simplifyClosed(points, epsilon);
-  const n = corners.length;
-  if (n < MIN_POLYGON_SIDES || n > MAX_POLYGON_SIDES) return null;
   if (n === 3) return { kind: 'triangle', points: [corners[0], corners[1], corners[2]] };
   if (n === 4) return rectFromCorners(corners);
   return polygonFromCorners(corners);
@@ -460,6 +508,43 @@ function farthestIndex(points: Vec2[], from: Vec2): number {
     }
   }
   return idx;
+}
+
+/**
+ * Desviación MÁXIMA de los puntos originales frente al polígono de
+ * esquinas, relativa al radio medio del polígono — mismas unidades que el
+ * error de `fitEllipse`, para poder comparar de frente cuál ajuste explica
+ * mejor el trazo.
+ */
+function polygonFitError(points: Vec2[], corners: Vec2[]): number {
+  const c = centroidOf(corners);
+  let charRadius = 0;
+  for (const p of corners) charRadius += dist(p, c);
+  charRadius = Math.max(1, charRadius / corners.length);
+
+  let maxErr = 0;
+  for (const p of points) {
+    let best = Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const a = corners[i];
+      const b = corners[(i + 1) % corners.length];
+      const d = pointToSegmentDistance(p, a, b);
+      if (d < best) best = d;
+    }
+    const err = best / charRadius;
+    if (err > maxErr) maxErr = err;
+  }
+  return maxErr;
+}
+
+function pointToSegmentDistance(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-9) return dist(p, a);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = clamp(t, 0, 1);
+  return dist(p, { x: a.x + dx * t, y: a.y + dy * t });
 }
 
 function rectFromCorners(corners: Vec2[]): RecognizedShape {

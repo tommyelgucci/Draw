@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { DEFAULT_BRUSHES, type BrushPreset } from '../core/brush';
 import type { Engine } from '../core/engine';
-import { hsvToRgb } from '../core/math';
+import { clamp, hsvToRgb } from '../core/math';
 import type { SelectionMode } from '../core/selection';
 import type { RGB } from '../core/types';
 
@@ -47,6 +47,11 @@ interface UIState {
    * forma perfecta (línea, círculo, rectángulo...). Se puede apagar porque
    * sin aviso previo un trazo lento se sentiría "corregido" sin permiso. */
   quickShapeEnabled: boolean;
+  /** 0..1, cuánto tiene que parecerse el trazo a la forma para que encaje.
+   * Bajo perdona manos temblorosas o dedos en pantalla táctil; alto exige
+   * casi perfección — igual que el ajuste equivalente de Procreate, cuyo
+   * punto dulce ronda 0.5-0.8, no el máximo. */
+  quickShapePrecision: number;
   showTimeline: boolean;
   busy: string | null;
 
@@ -62,6 +67,7 @@ interface UIState {
   togglePanel: (p: Exclude<PanelId, null>) => void;
   setFingerDraws: (v: boolean) => void;
   setQuickShapeEnabled: (v: boolean) => void;
+  setQuickShapePrecision: (v: number) => void;
   setShowTimeline: (v: boolean) => void;
   setBusy: (v: string | null) => void;
 }
@@ -118,6 +124,7 @@ export const useUI = create<UIState>((set, get) => ({
   selectionMode: 'replace',
   fingerDraws: true,
   quickShapeEnabled: true,
+  quickShapePrecision: 0.6,
   showTimeline: true,
   busy: null,
 
@@ -156,9 +163,16 @@ export const useUI = create<UIState>((set, get) => ({
   togglePanel: (p) => set((s) => ({ panel: s.panel === p ? null : p })),
   setFingerDraws: (fingerDraws) => set({ fingerDraws }),
   setQuickShapeEnabled: (quickShapeEnabled) => set({ quickShapeEnabled }),
+  setQuickShapePrecision: (quickShapePrecision) => set({ quickShapePrecision: clamp(quickShapePrecision, 0, 1) }),
   setShowTimeline: (showTimeline) => set({ showTimeline }),
   setBusy: (busy) => set({ busy }),
 }));
+
+if (import.meta.env.DEV) {
+  // Igual que `window.__trace` para el motor: punto de entrada para las
+  // pruebas de navegador y para inspeccionar el store desde la consola.
+  (window as unknown as { __uiStore: typeof useUI }).__uiStore = useUI;
+}
 
 /** Pincel activo con los ajustes rápidos de tamaño y opacidad aplicados. */
 export function useActiveBrush(): BrushPreset {

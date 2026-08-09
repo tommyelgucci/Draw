@@ -7,9 +7,11 @@ import type { InputSample, Vec2 } from '../core/types';
 import { useActiveBrush, useUI } from '../state/store';
 
 /** Cuánto tarda el lápiz en considerarse "quieto" para disparar QuickShape,
- * y qué radio de pantalla se tolera como temblor antes de eso. */
+ * y qué radio de pantalla se tolera como temblor antes de eso. Un dedo real
+ * en pantalla táctil tiembla bastante más que un ratón o un lápiz: con 3px
+ * casi nunca se consideraba "quieto" y el dwell no llegaba a disparar. */
 const DWELL_MS = 380;
-const DWELL_RADIUS = 3;
+const DWELL_RADIUS = 8;
 
 interface TrackedPointer {
   id: number;
@@ -189,7 +191,7 @@ export function CanvasView() {
     // El trazo pudo terminar mientras esperábamos: sin efecto si ya no es
     // el puntero que sigue dibujando.
     if (!engine || drawingId.current !== pointerId) return;
-    engine.tryQuickShape();
+    engine.tryQuickShape(uiRef.current.quickShapePrecision);
   };
 
   /* ---------------------------------------------------------------- *
