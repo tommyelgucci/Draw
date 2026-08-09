@@ -415,6 +415,10 @@ button:focus-visible {
   color: var(--text);
 }
 
+.btn--danger {
+  background: var(--danger);
+}
+
 .segmented {
   display: flex;
   gap: 2px;
@@ -773,6 +777,104 @@ button:focus-visible {
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ *
+ * Paletas de usuario
+ * ------------------------------------------------------------------ */
+
+.panel__subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 0 10px;
+}
+
+.panel__subtitle-row .panel__subtitle {
+  margin: 0;
+}
+
+.user-palette {
+  margin-bottom: 14px;
+}
+
+.user-palette__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.user-palette__name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.user-palette__name:hover,
+.user-palette__name:focus {
+  border-color: var(--border);
+}
+
+.user-palette__confirm {
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-size: 13px;
+}
+
+.user-palette__confirm .field-row {
+  margin-top: 8px;
+}
+
+.user-palette__confirm .btn,
+.user-palette__confirm .btn--ghost {
+  margin-bottom: 0;
+}
+
+/* El botón de quitar sale de la esquina, no del propio swatch: un swatch es
+ * un color de un tap, y anidar dos botones interactivos no es válido en
+ * HTML. */
+.swatch-wrap {
+  position: relative;
+  aspect-ratio: 1;
+}
+
+.swatch-wrap .swatch {
+  position: absolute;
+  inset: 0;
+}
+
+.swatch-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.swatch--add {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-dim);
 }
 
 /* ------------------------------------------------------------------ *
