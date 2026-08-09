@@ -108,9 +108,11 @@ las oportunidades están donde su arquitectura no le deja llegar.
 
 ### Oportunidades, por valor entre coste
 
-1. **QuickShape.** Mantener el lápiz al final del trazo y ajustarlo a línea,
-   círculo, rectángulo o polígono. Es de lo más querido de Procreate y se monta
-   encima del `StrokeBuilder` que ya existe. La mejor relación deleite/esfuerzo.
+1. **QuickShape.** `hecho`. Mantener el lápiz al final del trazo y ajustarlo a
+   línea, círculo, rectángulo, triángulo o polígono, con edición de nodos y
+   segundo dedo para forzar proporción. Precisión ajustable porque la
+   calibración inicial (probada con ratón) fallaba con dedo real en pantalla
+   táctil — ver commits de recalibración.
 2. **Historial persistente.** Su queja número uno de flujo: al cerrar el
    archivo se pierde el deshacer. Para nosotros es barato porque los pasos ya
    son instantáneas por rectángulo; falta serializarlas en el `.trace`. No lo
@@ -120,6 +122,24 @@ las oportunidades están donde su arquitectura no le deja llegar.
 4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
    quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
    que el cambio queda contenido en `gl/renderer.ts`.
+5. **Presets de lienzo con nombre y tipo de proyecto.** Procreate y la app
+   vectorial de referencia separan Pintura / Animación / Tracing antes de
+   elegir tamaño, y ofrecen presets con nombre (Cuadrado, 4K, formatos de
+   story) en vez de sólo ancho/alto en píxeles. Esfuerzo bajo, hueco real: hoy
+   Trace sólo tiene el campo numérico.
+6. **Paletas de usuario con nombre.** Crear, nombrar y guardar paletas propias
+   (Procreate lo resuelve con una simple lista "+"). La gestión de color de
+   Trace ya casi llega ahí — sólo falta la capa "mis paletas" editable encima
+   de los grupos fijos actuales.
+7. **Taper de extremo + rotación de estampa según dirección del trazo**, en el
+   estudio de pincel. Encajan en el modelo de estampas instanciadas que ya
+   existe, sin arquitectura nueva — de las mejoras con más impacto visual por
+   el esfuerzo más bajo revisadas hasta ahora.
+
+Los tres últimos salieron de un repaso más amplio (no sólo Procreate: también
+Artstudio Pro y una app de dibujo vectorial sin identificar con certeza,
+probablemente Concepts) — catálogo completo, con lo que se miró y se
+descartó, en `REFERENCIAS-UI.md`.
 
 ### Lo que no perseguir
 
