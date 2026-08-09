@@ -26,7 +26,7 @@ import {
   type SelectionMode,
   type SelectionShape,
 } from './selection';
-import { clamp, mat3Identity, mat3Invert, mat3Multiply, type Mat3 } from './math';
+import { clamp, mat3Identity, mat3Invert, mat3Multiply, snapAngle, type Mat3 } from './math';
 import {
   BLEND_INDEX,
   clampRect,
@@ -39,6 +39,14 @@ import {
   type Stamp,
   type Vec2,
 } from './types';
+import {
+  forceProportion,
+  recognizeShape,
+  sampleShapeOutline,
+  shapeNodes,
+  updateShapeNode,
+  type RecognizedShape,
+} from './quickshape';
 
 export interface ViewState {
   /** Posición en pantalla del centro del documento, en píxeles CSS. */
@@ -61,6 +69,26 @@ export interface OnionSettings {
 export interface StrokeContext {
   brush: BrushPreset;
   color: RGB;
+}
+
+/**
+ * Forma reconocida por QuickShape, sostenida en memoria como geometría
+ * pura hasta que se confirma. `editing` distingue las dos fases del gesto
+ * de Procreate: `false` mientras el puntero que la reconoció sigue
+ * apoyado (se puede seguir arrastrando o forzar proporción con un segundo
+ * dedo), `true` tras soltarlo, cuando ya sólo el overlay de nodos la toca.
+ */
+export interface PendingQuickShape {
+  shape: RecognizedShape;
+  layer: Layer;
+  cel: Cel;
+  ctx: StrokeContext;
+  /** Igual semántica que `createdCelFrame` del trazo normal. */
+  createdCelFrame: number;
+  editing: boolean;
+  /** Nodo más cercano al punto donde se disparó el dwell — el que sigue el
+   * arrastre mientras el puntero original no se ha soltado todavía. */
+  holdNodeIndex: number;
 }
 
 export interface SelectionState {
@@ -113,6 +141,7 @@ export class Engine {
 
   selection: SelectionState = { active: false, bounds: emptyRect() };
   floating: FloatingSelection | null = null;
+  pendingQuickShape: PendingQuickShape | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
 
@@ -137,6 +166,10 @@ export class Engine {
   private strokeRect: Rect = emptyRect();
   private createdCelFrame = -1;
   private predictedStamps: Stamp[] = [];
+  /** Recorrido crudo del trazo en curso, en espacio documento — lo único
+   * que necesita el reconocedor de QuickShape; `StrokeBuilder` ya filtra y
+   * suaviza el suyo, así que se lleva por separado sin tocarlo. */
+  private strokeRawPoints: Vec2[] = [];
 
   constructor(canvas: HTMLCanvasElement, doc?: TraceDocument) {
     this.renderer = new Renderer(canvas);
@@ -724,6 +757,11 @@ export class Engine {
     const layer = this.activeLayer;
     if (!layer || layer.locked || !layer.visible || layer.kind === 'reference') return false;
 
+    // Un trazo nuevo confirma cualquier forma QuickShape que hubiera
+    // quedado pendiente de edición — es lo que espera cualquiera que venga
+    // de Procreate: seguir dibujando la da por buena.
+    if (this.pendingQuickShape) this.commitQuickShape();
+
     const { cel, created } = this.ensureCel(layer, this.currentFrame);
     this.strokeLayer = layer;
     this.strokeCel = cel;
@@ -731,6 +769,7 @@ export class Engine {
     this.createdCelFrame = created;
     this.strokeRect = emptyRect();
     this.predictedStamps = [];
+    this.strokeRawPoints = [{ x: sample.x, y: sample.y }];
 
     this.renderer.clear(this.renderer.scratch('wet'));
     this.renderer.clear(this.renderer.scratch('predict'));
@@ -745,7 +784,10 @@ export class Engine {
   moveStroke(samples: InputSample[], predicted: InputSample[] = []) {
     if (!this.builder) return;
     const stamps: Stamp[] = [];
-    for (const s of samples) stamps.push(...this.builder.push(s));
+    for (const s of samples) {
+      stamps.push(...this.builder.push(s));
+      this.strokeRawPoints.push({ x: s.x, y: s.y });
+    }
     this.commitStamps(stamps);
     this.predictedStamps = predicted.length ? this.builder.speculate(predicted) : [];
     this.requestRender();
@@ -839,6 +881,220 @@ export class Engine {
   }
 
   /* ---------------------------------------------------------------- *
+   * QuickShape
+   * ---------------------------------------------------------------- */
+
+  /** Redibuja `wet` desde cero con el contorno actual de la forma. Barato:
+   * son unas pocas decenas de estampas, no el trazo entero. */
+  private paintQuickShapeOutline(shape: RecognizedShape, ctx: StrokeContext) {
+    const wet = this.renderer.scratch('wet');
+    this.renderer.clear(wet);
+    const b = ctx.brush;
+    const points = sampleShapeOutline(shape, Math.max(0.5, b.size * b.spacing));
+
+    // Estampas a presión plena y sin las variaciones que dependen de datos
+    // de puntero reales (jitter, dispersión, inclinación, velocidad): una
+    // forma "perfecta" no debe temblar, es justo lo contrario de lo que
+    // QuickShape promete.
+    const stamps: Stamp[] = [];
+    this.strokeRect = emptyRect();
+    let last: Vec2 | null = null;
+    for (const p of points) {
+      const angle = b.followDirection && last ? Math.atan2(p.y - last.y, p.x - last.x) : 0;
+      stamps.push({
+        x: p.x,
+        y: p.y,
+        size: b.size,
+        angle,
+        alpha: clamp(b.flow, 0, 1),
+        hardness: b.hardness,
+        aspect: clamp(b.aspect, 0.05, 1),
+      });
+      expandRect(this.strokeRect, p.x, p.y, b.size * 0.75 + 2);
+      last = p;
+    }
+    if (stamps.length > 0) {
+      const texId = b.textureId;
+      this.renderer.drawStamps(
+        wet,
+        stamps,
+        ctx.color,
+        texId ? this.renderer.getBrushTexture(texId) : undefined,
+      );
+    }
+  }
+
+  /**
+   * Se llama cuando el lápiz lleva quieto el tiempo de dwell (el
+   * temporizador vive en `CanvasView`, que es DOM; ver CLAUDE.md sobre la
+   * frontera de `core/`). Si el recorrido bruto del trazo en curso encaja
+   * con una forma conocida, la sustituye por su versión geométrica
+   * editable; si no reconoce nada, no toca nada y el trazo libre sigue
+   * exactamente igual — igual que Procreate.
+   */
+  tryQuickShape(): boolean {
+    if (!this.builder || !this.strokeLayer || !this.strokeCel || !this.strokeCtx) return false;
+    const shape = recognizeShape(this.strokeRawPoints);
+    if (!shape) return false;
+
+    const layer = this.strokeLayer;
+    const cel = this.strokeCel;
+    const ctx = this.strokeCtx;
+    const createdCelFrame = this.createdCelFrame;
+    const anchor = this.strokeRawPoints[this.strokeRawPoints.length - 1];
+
+    // Apaga el trazo libre: a partir de aquí no le llegan más muestras (lo
+    // decide `CanvasView` al ver `pendingQuickShape`), la forma vive sólo
+    // como geometría hasta que se hornee.
+    this.builder = null;
+    this.strokeLayer = null;
+    this.strokeCel = null;
+    this.strokeCtx = null;
+    this.createdCelFrame = -1;
+    this.strokeRawPoints = [];
+    this.predictedStamps = [];
+    this.renderer.clear(this.renderer.scratch('predict'));
+
+    const nodes = shapeNodes(shape);
+    let holdNodeIndex = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const d = Math.hypot(nodes[i].x - anchor.x, nodes[i].y - anchor.y);
+      if (d < bestDist) {
+        bestDist = d;
+        holdNodeIndex = i;
+      }
+    }
+
+    this.pendingQuickShape = { shape, layer, cel, ctx, createdCelFrame, editing: false, holdNodeIndex };
+    this.paintQuickShapeOutline(shape, ctx);
+    this.touch();
+    return true;
+  }
+
+  /**
+   * Arrastre mientras el puntero que disparó el reconocimiento sigue
+   * apoyado: sigue moviendo el mismo nodo que ya estaba "tocando" cuando
+   * se hizo el snap, como una continuación natural del trazo original.
+   */
+  adjustQuickShape(point: Vec2) {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    p.shape = updateShapeNode(p.shape, p.holdNodeIndex, point);
+    this.paintQuickShapeOutline(p.shape, p.ctx);
+    this.touch(false);
+  }
+
+  /** Arrastre de un nodo concreto del overlay de edición (tras soltar). */
+  dragQuickShapeNode(index: number, point: Vec2) {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    p.shape = updateShapeNode(p.shape, index, point);
+    this.paintQuickShapeOutline(p.shape, p.ctx);
+    this.touch(false);
+  }
+
+  /** El "segundo dedo" de Procreate: fuerza proporción exacta. */
+  forceQuickShapeProportion() {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    p.shape = forceProportion(p.shape);
+    this.paintQuickShapeOutline(p.shape, p.ctx);
+    this.touch(false);
+  }
+
+  /**
+   * Rotación absoluta en incrementos de 15°, para el gesto de dos dedos —
+   * `rotation` es el ángulo ya calculado por la UI (arranque + delta del
+   * gesto), no un incremento a sumar, igual que `updateFloating`. Sólo las
+   * formas con un único campo `rotation` propio lo soportan; triángulo y
+   * línea se rotan arrastrando un vértice/extremo, no tienen este gesto.
+   */
+  rotateQuickShapeSnapped(rotation: number) {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    const snapped = snapAngle(rotation, Math.PI / 12);
+    switch (p.shape.kind) {
+      case 'ellipse':
+      case 'rect':
+      case 'polygon':
+        p.shape = { ...p.shape, rotation: snapped };
+        break;
+      default:
+        return;
+    }
+    this.paintQuickShapeOutline(p.shape, p.ctx);
+    this.touch(false);
+  }
+
+  /**
+   * El puntero que reconoció la forma se soltó: en vez de hornear directo,
+   * pasa al modo "Edit Shape" con nodos arrastrables — hornear ocurre sólo
+   * al confirmar (`commitQuickShape`) o al empezar otra acción.
+   */
+  finishQuickShapeHold() {
+    if (!this.pendingQuickShape) return;
+    this.pendingQuickShape.editing = true;
+    this.touch(false);
+  }
+
+  /** Mismo patrón exacto que el horneado final de `endStroke()`. */
+  commitQuickShape() {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    this.pendingQuickShape = null;
+
+    const wet = this.renderer.scratch('wet');
+    const rect = clampRect(this.strokeRect, this.doc.width, this.doc.height);
+    if (rectIsEmpty(rect)) {
+      if (p.createdCelFrame >= 0) p.layer.cels.delete(p.createdCelFrame);
+      this.renderer.clear(wet);
+      this.touch();
+      return;
+    }
+
+    const before = this.renderer.readRect(p.cel.surface, rect);
+    this.renderer.drawOver(
+      p.cel.surface,
+      wet,
+      p.ctx.brush.opacity,
+      undefined,
+      p.ctx.brush.erase,
+      this.clipMask,
+    );
+    const after = this.renderer.readRect(p.cel.surface, rect);
+    this.renderer.clear(wet);
+
+    const layer = p.layer;
+    const cel = p.cel;
+    const createdCelFrame = p.createdCelFrame;
+    this.history.push({
+      label: p.ctx.brush.erase ? 'Borrar' : 'Forma',
+      cost: before.byteLength + after.byteLength,
+      redo: () => {
+        if (createdCelFrame >= 0) layer.cels.set(createdCelFrame, cel);
+        this.renderer.writeRect(cel.surface, rect, after);
+        this.touch();
+      },
+      undo: () => {
+        this.renderer.writeRect(cel.surface, rect, before);
+        if (createdCelFrame >= 0) layer.cels.delete(createdCelFrame);
+        this.touch();
+      },
+    });
+    this.touch();
+  }
+
+  cancelQuickShape() {
+    const p = this.pendingQuickShape;
+    if (!p) return;
+    if (p.createdCelFrame >= 0) p.layer.cels.delete(p.createdCelFrame);
+    this.pendingQuickShape = null;
+    this.renderer.clear(this.renderer.scratch('wet'));
+    this.touch();
+  }
+
+  /* ---------------------------------------------------------------- *
    * Reproducción
    * ---------------------------------------------------------------- */
 
@@ -846,6 +1102,7 @@ export class Engine {
     const f = clampFrame(this.doc, frame);
     if (f === this.currentFrame) return;
     if (this.builder) this.endStroke();
+    if (this.pendingQuickShape) this.commitQuickShape();
     this.currentFrame = f;
     this.touch();
   }
@@ -944,40 +1201,50 @@ export class Engine {
     const cel = celAt(layer, frame);
     const isStrokeTarget =
       includeWet && this.builder !== null && this.strokeLayer?.id === layer.id;
+    // Mientras hay una forma QuickShape pendiente, `wet` guarda su contorno
+    // en vez de un trazo libre — mismo mecanismo de composición en vivo,
+    // sólo cambia qué lo alimenta (ver `paintQuickShapeOutline`).
+    const isQuickShapeTarget =
+      includeWet && this.pendingQuickShape !== null && this.pendingQuickShape.layer.id === layer.id;
     const hasFloating =
       includeWet && this.floating !== null && this.floating.layerId === layer.id;
-    if (!cel && !isStrokeTarget && !hasFloating) return null;
+    if (!cel && !isStrokeTarget && !isQuickShapeTarget && !hasFloating) return null;
 
     let src = cel ? this.renderer.ensureResident(cel.surface) : null;
 
-    if (isStrokeTarget && this.strokeCtx) {
+    const wetCtx = isStrokeTarget
+      ? this.strokeCtx
+      : this.pendingQuickShape && isQuickShapeTarget
+        ? this.pendingQuickShape.ctx
+        : null;
+    if (wetCtx) {
       const combined = this.renderer.scratch('xf1');
       if (src) this.renderer.copy(combined, src, 1);
       else this.renderer.clear(combined);
-      const erase = this.strokeCtx.brush.erase;
+      const erase = wetCtx.brush.erase;
       const mask = this.clipMask;
       this.renderer.drawOver(
         combined,
         this.renderer.scratch('wet'),
-        this.strokeCtx.brush.opacity,
+        wetCtx.brush.opacity,
         undefined,
         erase,
         mask,
       );
-      if (this.predictedStamps.length > 0) {
+      if (isStrokeTarget && this.predictedStamps.length > 0) {
         const predict = this.renderer.scratch('predict');
         this.renderer.clear(predict);
-        const texId = this.strokeCtx.brush.textureId;
+        const texId = wetCtx.brush.textureId;
         this.renderer.drawStamps(
           predict,
           this.predictedStamps,
-          this.strokeCtx.color,
+          wetCtx.color,
           texId ? this.renderer.getBrushTexture(texId) : undefined,
         );
         this.renderer.drawOver(
           combined,
           predict,
-          this.strokeCtx.brush.opacity,
+          wetCtx.brush.opacity,
           undefined,
           erase,
           mask,
@@ -1298,6 +1565,7 @@ export class Engine {
    */
   beginSelectionDrag() {
     if (this.floating) this.commitFloating();
+    if (this.pendingQuickShape) this.commitQuickShape();
     const src = this.selectionSurfaceCanvas();
     if (
       !this.selectionBackup ||
@@ -1820,6 +2088,7 @@ export class Engine {
 
     if (this.floating) this.commitFloating();
     if (this.builder) this.endStroke();
+    if (this.pendingQuickShape) this.commitQuickShape();
 
     const oldW = this.doc.width;
     const oldH = this.doc.height;
