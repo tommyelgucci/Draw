@@ -137,6 +137,21 @@ function partialPolygonPoints(cx, cy, r, sides, fraction) {
   return pts;
 }
 
+/**
+ * Círculo casi completo cuyo trazo final se pasa un poco del punto de
+ * partida antes de parar — el cruce que se ve en la práctica al cerrar un
+ * lazo a mano. Un solo punto raro ahí no debe tumbar el ajuste de elipse
+ * si el resto de la forma es limpio.
+ */
+function circleWithCrossingPoints(cx, cy, r, n = 26) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * Math.PI * 2 * 1.03; // se pasa un poco del cierre
+    pts.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r]);
+  }
+  return pts;
+}
+
 const pendingShape = () =>
   page.evaluate(() => {
     const p = window.__trace.pendingQuickShape;
@@ -297,6 +312,21 @@ check(
 await release();
 if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
 await page.screenshot({ path: `${out}/qs-10-cierre-lento.png` });
+
+console.log('\n— Círculo con un cruce al cerrar el lazo —');
+// Reportado con captura: un óvalo con lados algo planos y las líneas
+// cruzándose un poco cerca de arriba no se reconocía. La sospecha era el
+// punto raro que deja ese cruce: con el error máximo, un único punto fuera
+// de sitio bastaba para tumbar un ajuste de elipse limpio en todo lo demás.
+await drawAndHold(circleWithCrossingPoints(cx - 200, cy - 100, 95));
+s = await pendingShape();
+check(
+  'un círculo con un cruce al cerrar el lazo se reconoce igual',
+  s?.kind === 'ellipse',
+  JSON.stringify(s),
+);
+await release();
+if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
 
 console.log('\n— Círculo confundido con un polígono de muchos lados —');
 // Reportado con captura: un óvalo dibujado a mano salía como eneágono.
