@@ -3266,11 +3266,21 @@ export class Engine {
     }
 
     // Un par de píxeles de crecimiento evita la orla blanca que deja el
-    // antialias de la línea entre el relleno y el trazo.
+    // antialias de la línea entre el relleno y el trazo. Cada pasada sólo
+    // puede alcanzar un píxel más allá de lo ya lleno, así que tras `expand`
+    // pasadas nada fuera de este margen puede haber cambiado — acotar los
+    // dos bucles a esta caja, en vez de recorrer el lienzo entero, es la
+    // diferencia entre 8 millones de comprobaciones y unos pocos miles en un
+    // documento 4K con un relleno pequeño.
+    const boundMinX = Math.max(0, minX - expand);
+    const boundMinY = Math.max(0, minY - expand);
+    const boundMaxX = Math.min(w - 1, maxX + expand);
+    const boundMaxY = Math.min(h - 1, maxY + expand);
+
     for (let pass = 0; pass < expand; pass++) {
       const grown = filled.slice();
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
+      for (let y = boundMinY; y <= boundMaxY; y++) {
+        for (let x = boundMinX; x <= boundMaxX; x++) {
           if (filled[y * w + x]) continue;
           const up = y > 0 && filled[(y - 1) * w + x];
           const down = y < h - 1 && filled[(y + 1) * w + x];
@@ -3281,21 +3291,24 @@ export class Engine {
       }
       filled.set(grown);
     }
-    minX = Math.max(0, minX - expand);
-    minY = Math.max(0, minY - expand);
-    maxX = Math.min(w - 1, maxX + expand);
-    maxY = Math.min(h - 1, maxY + expand);
+    minX = boundMinX;
+    minY = boundMinY;
+    maxX = boundMaxX;
+    maxY = boundMaxY;
 
     const cr = Math.round(color.r * 255);
     const cg = Math.round(color.g * 255);
     const cb = Math.round(color.b * 255);
-    for (let i = 0; i < filled.length; i++) {
-      if (!filled[i]) continue;
-      const o = i * 4;
-      target[o] = cr;
-      target[o + 1] = cg;
-      target[o + 2] = cb;
-      target[o + 3] = 255;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const i = y * w + x;
+        if (!filled[i]) continue;
+        const o = i * 4;
+        target[o] = cr;
+        target[o + 1] = cg;
+        target[o + 2] = cb;
+        target[o + 3] = 255;
+      }
     }
 
     const rect: Rect = { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 };
