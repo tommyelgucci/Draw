@@ -15,6 +15,7 @@ import {
   sortedCelFrames,
   transformIsIdentity,
   uid,
+  type AudioPeak,
   type Cel,
   type Layer,
   type LayerGroup,
@@ -209,6 +210,15 @@ export class Engine {
 
   playing = false;
   loop = true;
+
+  /** Elemento reproductor de la pista de audio (ver `AudioTrack` en
+   *  document.ts) — vive fuera del documento serializable, como la
+   *  superficie GPU de un `Cel`. Null si no hay audio importado. */
+  audioElement: HTMLAudioElement | null = null;
+  /** Bytes originales del archivo, cacheados para no tener que volver a
+   *  pedirle el archivo al usuario al guardar el proyecto. */
+  audioBytes: Uint8Array | null = null;
+  private audioObjectUrl: string | null = null;
 
   selection: SelectionState = { active: false, bounds: emptyRect() };
   floating: FloatingSelection | null = null;
@@ -2068,10 +2078,100 @@ export class Engine {
     this.setFrame(target ?? this.currentFrame);
   }
 
+  /* ---------------------------------------------------------------- *
+   * Audio
+   * ---------------------------------------------------------------- */
+
+  /** Sustituye el elemento `<audio>` en marcha por uno nuevo — usado tanto
+   *  al importar un archivo como al reabrir un proyecto guardado. No toca
+   *  `doc.audio`: el llamador decide esos metadatos aparte. */
+  private loadAudioBytes(bytes: Uint8Array, mimeType: string) {
+    this.releaseAudioElement();
+    const blob = new Blob([bytes as BlobPart], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('audio');
+    el.src = url;
+    el.preload = 'auto';
+    this.audioElement = el;
+    this.audioBytes = bytes;
+    this.audioObjectUrl = url;
+  }
+
+  private releaseAudioElement() {
+    this.audioElement?.pause();
+    this.audioElement = null;
+    this.audioBytes = null;
+    if (this.audioObjectUrl) {
+      URL.revokeObjectURL(this.audioObjectUrl);
+      this.audioObjectUrl = null;
+    }
+  }
+
+  /**
+   * Importa una pista de audio nueva — `bytes`/`mimeType`/`duration`/`peaks`
+   * ya vienen calculados por `importAudioTrack` (io.ts), que es quien sabe
+   * decodificar el archivo; aquí sólo se engancha el resultado. No pasa por
+   * el historial: es adjuntar un archivo externo, no una edición de dibujo,
+   * mismo criterio que `beginReferenceImport`.
+   */
+  setAudioTrack(bytes: Uint8Array, mimeType: string, name: string, duration: number, peaks: AudioPeak[]) {
+    this.loadAudioBytes(bytes, mimeType);
+    this.doc.audio = { id: uid('audio'), name, duration, mimeType, peaks, offset: 0, muted: false };
+    this.touch();
+  }
+
+  /** Reengancha el elemento reproductor al reabrir un proyecto — los
+   *  metadatos (`doc.audio`) ya vienen normalizados por `deserializeProject`,
+   *  aquí sólo hace falta el archivo real para poder reproducirlo. */
+  attachAudioBytes(bytes: Uint8Array, mimeType: string) {
+    this.loadAudioBytes(bytes, mimeType);
+  }
+
+  removeAudio() {
+    this.releaseAudioElement();
+    this.doc.audio = undefined;
+    this.touch();
+  }
+
+  setAudioOffset(seconds: number) {
+    if (!this.doc.audio) return;
+    this.doc.audio.offset = seconds;
+    this.touch(false);
+  }
+
+  setAudioMuted(muted: boolean) {
+    if (!this.doc.audio) return;
+    this.doc.audio.muted = muted;
+    if (muted) this.audioElement?.pause();
+    else if (this.playing) this.playAudioTrack();
+    this.touch(false);
+  }
+
   togglePlay() {
     this.playing = !this.playing;
     this.playClock = performance.now();
+    if (this.playing) this.playAudioTrack();
+    else this.audioElement?.pause();
     this.touch(false);
+  }
+
+  /** Coloca el audio en el punto que le corresponde a `currentFrame` y lo
+   *  arranca — llamado al empezar a reproducir y al dar la vuelta del bucle. */
+  private playAudioTrack() {
+    const el = this.audioElement;
+    const audio = this.doc.audio;
+    if (!el || !audio || audio.muted) return;
+    const t = this.currentFrame / this.doc.fps + audio.offset;
+    if (t < 0 || t >= audio.duration) {
+      el.pause();
+      return;
+    }
+    el.currentTime = t;
+    // Los navegadores pueden rechazar `play()` (política de autoplay) si no
+    // hubo antes un gesto del usuario; el play/pausa del propio botón de
+    // reproducción ya cuenta como uno, pero por si acaso no se deja una
+    // promesa sin capturar rechazada en la consola.
+    el.play().catch(() => {});
   }
 
   setFrameCount(n: number) {
@@ -2104,14 +2204,19 @@ export class Engine {
           this.playClock += advance * step;
           let next = this.currentFrame + advance;
           if (next >= this.doc.frameCount) {
-            if (this.loop) next %= this.doc.frameCount;
-            else {
+            if (this.loop) {
+              next %= this.doc.frameCount;
+              this.currentFrame = next;
+              this.playAudioTrack();
+            } else {
               next = this.doc.frameCount - 1;
               this.playing = false;
-              for (const fn of this.listeners) fn();
+              this.audioElement?.pause();
+              this.currentFrame = next;
             }
+          } else {
+            this.currentFrame = next;
           }
-          this.currentFrame = next;
           this.belowCacheKey = '';
           this.renderQueued = true;
           for (const fn of this.listeners) fn();
@@ -2128,6 +2233,7 @@ export class Engine {
   dispose() {
     cancelAnimationFrame(this.rafId);
     this.listeners.clear();
+    this.releaseAudioElement();
   }
 
   requestRender() {

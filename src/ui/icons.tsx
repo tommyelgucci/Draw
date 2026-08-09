@@ -228,6 +228,12 @@ export const IconVideo = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconAudio = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9 6v10.5a2.5 2.5 0 1 1-2-2.45V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9.5a2.5 2.5 0 1 1-2-2.45V7H9z" />
+  </svg>
+);
+
 export const IconMergeDown = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <rect x="4" y="3.5" width="16" height="6" rx="1" />

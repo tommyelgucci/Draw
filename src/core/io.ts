@@ -5,6 +5,8 @@ import {
   newDocument,
   newLayer,
   uid,
+  type AudioPeak,
+  type AudioTrack,
   type Cel,
   type Channel,
   type Layer,
@@ -90,6 +92,9 @@ interface SerializedDoc {
   meshes?: SerializedMesh[];
   /** Ausente en proyectos anteriores a las carpetas de capas. */
   layerGroups?: LayerGroup[];
+  /** Ausente en proyectos sin pista de audio; el archivo real va aparte,
+   *  bajo `audio/<id>` — ver `normalizeAudioTrack`. */
+  audio?: AudioTrack;
 }
 
 /* ------------------------------------------------------------------ *
@@ -172,6 +177,10 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     });
   }
 
+  if (doc.audio && engine.audioBytes) {
+    files[`audio/${doc.audio.id}`] = engine.audioBytes;
+  }
+
   const meta: SerializedDoc = {
     version: FORMAT_VERSION,
     id: doc.id,
@@ -188,6 +197,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     skeletons: doc.skeletons,
     meshes: doc.meshes,
     layerGroups: doc.layerGroups,
+    audio: doc.audio,
   };
   files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
 
@@ -271,6 +281,16 @@ export async function deserializeProject(
   }
 
   if (doc.layers.length === 0) doc.layers.push(newLayer('Capa 1'));
+
+  if (meta.audio) {
+    doc.audio = normalizeAudioTrack(meta.audio);
+    const audioBytes = files[`audio/${doc.audio.id}`];
+    // Sin los bytes no hay con qué reconstruir el `<audio>` — se conservan
+    // los metadatos (para no perder la forma de onda) pero sin reproductor;
+    // no debería pasar salvo un .trace tocado a mano.
+    if (audioBytes) engine.attachAudioBytes(audioBytes, doc.audio.mimeType);
+  }
+
   return doc;
 }
 
@@ -365,6 +385,18 @@ function normalizeLayerGroups(list: LayerGroup[] | undefined): LayerGroup[] {
     name: g.name ?? 'Grupo',
     collapsed: g.collapsed ?? false,
   }));
+}
+
+function normalizeAudioTrack(a: Partial<AudioTrack>): AudioTrack {
+  return {
+    id: a.id ?? uid('audio'),
+    name: a.name ?? 'Audio',
+    duration: a.duration ?? 0,
+    mimeType: a.mimeType ?? 'audio/mpeg',
+    peaks: Array.isArray(a.peaks) ? a.peaks : [],
+    offset: a.offset ?? 0,
+    muted: a.muted ?? false,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -609,6 +641,48 @@ export function documentIsEmpty(doc: TraceDocument): boolean {
 
 function baseName(filename: string): string {
   return filename.replace(/\.[^./]+$/, '') || filename;
+}
+
+/**
+ * Audio: decodifica el archivo para calcular los picos de la forma de onda
+ * (`AudioPeak[]`) una sola vez aquí, y le pasa a `engine.setAudioTrack` el
+ * resultado ya listo — el motor sólo engancha el `<audio>`, no decodifica
+ * nada. Se cierra el `AudioContext` en cuanto termina: no hace falta uno
+ * en marcha para simplemente reproducir el elemento después.
+ */
+export async function importAudioTrack(engine: Engine, file: File): Promise<void> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const AudioCtx =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const ctx = new AudioCtx();
+  let duration = 0;
+  const peaks: AudioPeak[] = [];
+  try {
+    // `decodeAudioData` transfiere y vacía el ArrayBuffer que recibe; se le
+    // pasa una copia para poder quedarse con `bytes` intactos y guardarlos
+    // tal cual en el .trace al exportar.
+    const buffer = await ctx.decodeAudioData(bytes.slice().buffer as ArrayBuffer);
+    duration = buffer.duration;
+    const data = buffer.getChannelData(0);
+    const BUCKETS = 800;
+    const bucketSize = Math.max(1, Math.floor(data.length / BUCKETS));
+    for (let i = 0; i < BUCKETS; i++) {
+      const start = i * bucketSize;
+      const end = Math.min(data.length, start + bucketSize);
+      let min = 0;
+      let max = 0;
+      for (let j = start; j < end; j++) {
+        const v = data[j];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      peaks.push({ min, max });
+    }
+  } finally {
+    await ctx.close();
+  }
+  engine.setAudioTrack(bytes, file.type || 'audio/mpeg', baseName(file.name), duration, peaks);
 }
 
 /** Imagen suelta: una capa de referencia con un único cel sostenido. */

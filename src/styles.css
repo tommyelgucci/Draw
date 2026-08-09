@@ -553,6 +553,14 @@ button:focus-visible {
   color: var(--text-dim);
 }
 
+.audio-track-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .layer__badge {
   display: inline-block;
   margin-right: 6px;

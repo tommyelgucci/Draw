@@ -23,6 +23,7 @@ import {
   exportAPNG,
   exportFramePNG,
   exportSequenceZip,
+  importAudioTrack,
   importReferenceImage,
   importReferenceVideo,
   serializeProject,
@@ -31,6 +32,7 @@ import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/vi
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Slider } from './controls';
 import {
+  IconAudio,
   IconChevronRight,
   IconClose,
   IconCopy,
@@ -211,7 +213,9 @@ export function LayersPanel({ engine }: { engine: Engine }) {
   const active = engine.activeLayer;
   const imageInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  const audioInput = useRef<HTMLInputElement>(null);
   const [refProgress, setRefProgress] = useState<string | null>(null);
+  const audio = engine.doc.audio;
 
   // Tramos contiguos de capas con el mismo `groupId` se pintan como una
   // sola carpeta; si por algún motivo dejaron de ser contiguas (reordenar
@@ -457,6 +461,65 @@ export function LayersPanel({ engine }: { engine: Engine }) {
           Se añade como una capa de referencia: no se puede dibujar sobre ella y queda
           fuera de la exportación final. Un vídeo se trocea en un cel por fotograma del
           documento, listo para calcar (rotoscopia).
+        </p>
+      </div>
+
+      <div className="panel__section">
+        <h3 className="panel__subtitle">Audio</h3>
+        {audio ? (
+          <>
+            <div className="audio-track-info">
+              <span className="layer__name">{audio.name}</span>
+              <span className="layer__meta">{audio.duration.toFixed(1)} s</span>
+            </div>
+            <Field label="Inicio (segundos desde el cuadro 0)">
+              <input
+                type="number"
+                step={0.1}
+                value={audio.offset}
+                onChange={(e) => engine.setAudioOffset(Number(e.target.value) || 0)}
+              />
+            </Field>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={audio.muted}
+                onChange={(e) => engine.setAudioMuted(e.target.checked)}
+              />
+              <span>Silenciar</span>
+            </label>
+            <button className="btn btn--ghost" onClick={() => engine.removeAudio()}>
+              <IconTrash size={16} /> Quitar audio
+            </button>
+          </>
+        ) : (
+          <button className="btn btn--ghost" onClick={() => audioInput.current?.click()}>
+            <IconAudio size={16} /> Importar audio…
+          </button>
+        )}
+        <input
+          ref={audioInput}
+          type="file"
+          accept="audio/*"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            setBusy('Analizando audio…');
+            try {
+              await importAudioTrack(engine, file);
+            } catch (err) {
+              console.error(err);
+              alert(`No se pudo importar el audio: ${(err as Error).message}`);
+            } finally {
+              setBusy(null);
+            }
+          }}
+        />
+        <p className="hint">
+          Se reproduce en sincronía al pulsar "Reproducir" — para calzar el movimiento de
+          la boca (panel de Poses) contra un diálogo grabado.
         </p>
       </div>
     </Panel>

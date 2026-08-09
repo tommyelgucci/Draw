@@ -203,6 +203,33 @@ export interface LayerGroup {
   collapsed: boolean;
 }
 
+/** Pico (mínimo/máximo, -1..1) de un tramo de la onda — lo que hace falta
+ *  para dibujar la forma de onda sin volver a decodificar el audio. */
+export interface AudioPeak {
+  min: number;
+  max: number;
+}
+
+/**
+ * Pista de audio única del documento — para sincronizar labios contra el
+ * catálogo de intercambio de sprites (`SpriteSwapCatalog`) sin tener que
+ * llevar la cuenta de memoria. Los bytes del archivo original viven fuera
+ * de `TraceDocument` (en `Engine.audioBytes`, como `Cel.surface` vive en
+ * GPU): esta interfaz sólo lleva datos serializables, no el elemento
+ * `<audio>` que de verdad reproduce — ver `Engine.audioElement`.
+ */
+export interface AudioTrack {
+  id: string;
+  name: string;
+  /** Segundos. */
+  duration: number;
+  mimeType: string;
+  peaks: AudioPeak[];
+  /** Segundos desde el cuadro 0 del documento hasta el inicio del audio. */
+  offset: number;
+  muted: boolean;
+}
+
 export interface TraceDocument {
   id: string;
   name: string;
@@ -226,6 +253,8 @@ export interface TraceDocument {
   meshes: Mesh[];
   /** Carpetas del panel de capas — ver `LayerGroup`. */
   layerGroups: LayerGroup[];
+  /** Presente si el proyecto tiene una pista de audio importada. */
+  audio?: AudioTrack;
 }
 
 let idCounter = 0;
