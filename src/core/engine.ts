@@ -241,6 +241,13 @@ export class Engine {
   /** Se incrementa en cualquier cambio estructural; la UI se suscribe. */
   revision = 0;
   private listeners = new Set<() => void>();
+  /** Se llama al final de cada `render()` de verdad — no en cada `touch()`,
+   *  que sólo PIDE uno. Lo usa `LoupeOverlay` para copiar del lienzo justo
+   *  después de que el frame real quedó presentado: leerlo en cualquier
+   *  otro momento (p. ej. un `requestAnimationFrame` propio) podría pillar
+   *  el búfer ya limpiado por el navegador, con `preserveDrawingBuffer:
+   *  false` — ver la nota de `page.screenshot()` en CLAUDE.md. */
+  private afterRenderListeners = new Set<() => void>();
 
   private renderQueued = false;
   private belowCacheKey = '';
@@ -295,6 +302,12 @@ export class Engine {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Se dispara al final de cada `render()` real — ver `afterRenderListeners`. */
+  onAfterRender(fn: () => void): () => void {
+    this.afterRenderListeners.add(fn);
+    return () => this.afterRenderListeners.delete(fn);
   }
 
   /** Notifica a la UI y descarta la caché de composición. */
@@ -2681,6 +2694,8 @@ export class Engine {
       // El contorno se mueve solo, así que hay que seguir pidiendo cuadros.
       this.requestRender();
     }
+
+    for (const fn of this.afterRenderListeners) fn();
   }
 
   /* ---------------------------------------------------------------- *

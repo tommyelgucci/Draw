@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import type { Engine } from '../core/engine';
 import { hasRotateHandle, sampleShapeOutline, shapeNodes } from '../core/quickshape';
 import type { Vec2 } from '../core/types';
-import { useEngineRevision } from '../state/store';
+import { useEngineRevision, useUI } from '../state/store';
 
 /** Diagonal de una nube de puntos, para escalar el paso de muestreo del
  * contorno visual a cada forma sin depender del tamaño del pincel. */
@@ -36,6 +36,7 @@ function boundingDiag(points: Vec2[]): number {
 export function QuickShapeOverlay({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const dragIndex = useRef<number | null>(null);
+  const setPrecisionDragAt = useUI((s) => s.setPrecisionDragAt);
 
   const pending = engine.pendingQuickShape;
   if (!pending || !pending.editing) return null;
@@ -48,6 +49,7 @@ export function QuickShapeOverlay({ engine }: { engine: Engine }) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     dragIndex.current = index;
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
   };
   const move = (e: React.PointerEvent) => {
     if (dragIndex.current === null) return;
@@ -55,10 +57,12 @@ export function QuickShapeOverlay({ engine }: { engine: Engine }) {
     const rect = engine.renderer.canvas.getBoundingClientRect();
     const local = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     engine.dragQuickShapeNode(dragIndex.current, engine.screenToDoc(local));
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
   };
   const end = (e: React.PointerEvent) => {
     dragIndex.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    setPrecisionDragAt(null);
   };
 
   // Contorno de referencia: la silueta real ya se ve a través de `wet` (las
