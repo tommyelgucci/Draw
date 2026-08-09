@@ -8,19 +8,21 @@ import { useActiveBrush, useUI } from '../state/store';
 
 /**
  * Cuánto tarda el lápiz en considerarse "quieto" para disparar QuickShape,
- * y qué radio de pantalla se tolera como temblor antes de eso.
+ * y por debajo de qué velocidad (px/ms de pantalla) se considera que ya
+ * casi no se mueve.
  *
- * Un dedo real en pantalla táctil no sólo tiembla más que un ratón: el
- * área de contacto se mueve varios píxeles incluso "sin querer" durante los
- * ~380ms que dura la espera, y como el ancla se realinea con cada
- * movimiento que supera el radio, un radio demasiado ajustado hace que el
- * temporizador se reinicie sin parar y nunca llegue a completarse — el
- * dwell no es que falle al reconocer, es que ni siquiera llega a
- * dispararse. 8px (calibrado con ratón) se quedaba corto; el radio típico
- * de "touch slop" en apps táctiles ronda 15-20px CSS.
+ * No se mide por distancia a un punto ancla fijo (versión anterior, con
+ * `DWELL_RADIUS`): eso funcionaba para una línea, donde el gesto natural es
+ * parar en seco, pero fallaba sistemáticamente al cerrar un círculo — la
+ * mano sigue trazando la curva mientras decelera, así que la posición se
+ * aleja del ancla constantemente y el temporizador se reiniciaba sin parar,
+ * sin llegar nunca a los `DWELL_MS`. Midiendo velocidad instantánea entre
+ * muestras consecutivas en vez de distancia acumulada, una curva que se va
+ * frenando cuenta como "quieta" aunque la posición siga desplazándose un
+ * poco, igual que pararía de contar un ratón real.
  */
 const DWELL_MS = 380;
-const DWELL_RADIUS = 18;
+const DWELL_SPEED = 0.3;
 
 interface TrackedPointer {
   id: number;
@@ -60,7 +62,11 @@ export function CanvasView() {
   const gesture = useRef<GestureState | null>(null);
   const lastPenAt = useRef(0);
   const dwellTimer = useRef<number | null>(null);
-  const dwellAnchor = useRef<Vec2 | null>(null);
+  /** Marca de tiempo desde la que la velocidad lleva por debajo de
+   * `DWELL_SPEED` sin interrupción, o `null` si ahora mismo se está
+   * moviendo de verdad. */
+  const dwellSlowSince = useRef<number | null>(null);
+  const dwellLastSample = useRef<{ x: number; y: number; t: number } | null>(null);
   /** Aro que crece durante el dwell: sin él, "mantener quieto" es un gesto
    * invisible que nadie puede aprender ni depurar cuando falla. */
   const dwellRingRef = useRef<HTMLDivElement>(null);
@@ -177,9 +183,11 @@ export function CanvasView() {
     dwellRingRef.current?.classList.remove('is-armed');
   };
 
-  /** (Re)arranca la animación del aro en `local`, reiniciándola aunque ya
-   * estuviera a mitad — por eso el `classList.remove` + reflow forzado antes
-   * de volver a añadir la clase que dispara la transición CSS. */
+  /** (Re)arranca la animación del aro en `local` desde cero — por eso el
+   * `classList.remove` + reflow forzado antes de volver a añadir la clase
+   * que dispara la transición CSS. Sólo se llama al empezar una racha de
+   * calma nueva, no en cada muestra: si no, cerrar una curva despacio
+   * reiniciaría el aro sin parar y nunca se le vería crecer. */
   const showDwellRing = (local: Vec2) => {
     const el = dwellRingRef.current;
     if (!el) return;
@@ -191,34 +199,58 @@ export function CanvasView() {
     el.classList.add('is-armed');
   };
 
+  /** Sigue al puntero sin tocar la animación en marcha. */
+  const repositionDwellRing = (local: Vec2) => {
+    const el = dwellRingRef.current;
+    if (!el) return;
+    el.style.left = `${local.x}px`;
+    el.style.top = `${local.y}px`;
+  };
+
   const clearDwell = () => {
     if (dwellTimer.current !== null) {
       window.clearTimeout(dwellTimer.current);
       dwellTimer.current = null;
     }
-    dwellAnchor.current = null;
+    dwellSlowSince.current = null;
+    dwellLastSample.current = null;
     hideDwellRing();
   };
 
   /**
-   * Reinicia el temporizador cada vez que el puntero se mueve más allá del
-   * radio de temblor. Si nunca se reinicia, `fireDwell` dispara sola tras
-   * `DWELL_MS` — no hace falta guardar cuánto tiempo lleva quieto, sólo no
-   * tocar el timer mientras siga dentro del radio.
+   * Arma (o reinicia) el temporizador según la velocidad instantánea entre
+   * la muestra anterior y ésta, no según cuánto se haya alejado de un punto
+   * fijo. Por encima de `DWELL_SPEED` cuenta como movimiento de verdad y
+   * reinicia la racha de calma; por debajo, si ya había una racha en curso,
+   * no se toca — el temporizador armado al empezarla sigue corriendo solo
+   * y dispara a los `DWELL_MS` exactos desde que empezó a ir despacio,
+   * aunque la posición haya seguido desplazándose mientras tanto.
    */
-  const updateDwell = (pointerId: number, local: Vec2) => {
+  const updateDwell = (pointerId: number, local: Vec2, t: number) => {
     if (!uiRef.current.quickShapeEnabled) return;
-    const anchor = dwellAnchor.current;
-    if (anchor && Math.hypot(local.x - anchor.x, local.y - anchor.y) <= DWELL_RADIUS) return;
-    dwellAnchor.current = local;
-    if (dwellTimer.current !== null) window.clearTimeout(dwellTimer.current);
-    dwellTimer.current = window.setTimeout(() => fireDwell(pointerId), DWELL_MS);
-    showDwellRing(local);
+    const last = dwellLastSample.current;
+    dwellLastSample.current = { x: local.x, y: local.y, t };
+
+    let speed = 0;
+    if (last) {
+      const dt = Math.max(t - last.t, 1);
+      speed = Math.hypot(local.x - last.x, local.y - last.y) / dt;
+    }
+
+    if (speed > DWELL_SPEED || dwellSlowSince.current === null) {
+      dwellSlowSince.current = t;
+      if (dwellTimer.current !== null) window.clearTimeout(dwellTimer.current);
+      dwellTimer.current = window.setTimeout(() => fireDwell(pointerId), DWELL_MS);
+      showDwellRing(local);
+    } else {
+      repositionDwellRing(local);
+    }
   };
 
   const fireDwell = (pointerId: number) => {
     dwellTimer.current = null;
-    dwellAnchor.current = null;
+    dwellSlowSince.current = null;
+    dwellLastSample.current = null;
     hideDwellRing();
     const engine = engineRef.current;
     // El trazo pudo terminar mientras esperábamos: sin efecto si ya no es
@@ -420,7 +452,7 @@ export function CanvasView() {
 
     if (engine.beginStroke(sample, { brush: brushRef.current, color: uiRef.current.color })) {
       drawingId.current = e.pointerId;
-      updateDwell(e.pointerId, local);
+      updateDwell(e.pointerId, local, sample.time);
     }
   };
 
@@ -479,7 +511,7 @@ export function CanvasView() {
     const predicted = (native.getPredictedEvents?.() ?? []).map((ev) => toSample(ev));
 
     engine.moveStroke(samples, predicted);
-    updateDwell(e.pointerId, localPoint(e));
+    updateDwell(e.pointerId, localPoint(e), e.timeStamp || performance.now());
   };
 
   const finishPointer = (e: React.PointerEvent) => {
