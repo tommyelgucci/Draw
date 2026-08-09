@@ -33,6 +33,7 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
   const frameRangeEnd = useUI((s) => s.frameRangeEnd);
   const setFrameRange = useUI((s) => s.setFrameRange);
   const setRangeSelectMode = useUI((s) => s.setRangeSelectMode);
+  const setPrecisionDragAt = useUI((s) => s.setPrecisionDragAt);
 
   const floating = engine.floating;
   const hasSelection = engine.selection.active;
@@ -130,6 +131,7 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
       startDistance: Math.hypot(start.x - center.x, start.y - center.y) || 1,
       startAngle: Math.atan2(start.y - center.y, start.x - center.x),
     };
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
   };
 
   const move = (e: React.PointerEvent) => {
@@ -138,6 +140,7 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
     e.stopPropagation();
     const rect = engine.renderer.canvas.getBoundingClientRect();
     const p = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
 
     if (d.kind === 'move') {
       // El desplazamiento se expresa en píxeles de documento, y el lienzo
@@ -164,6 +167,7 @@ export function SelectionOverlay({ engine }: { engine: Engine }) {
   const end = (e: React.PointerEvent) => {
     drag.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    setPrecisionDragAt(null);
   };
 
   const outline = screen.map((p) => `${p.x},${p.y}`).join(' ');

@@ -33,6 +33,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
   const setIkEnabled = useUI((s) => s.setIkEnabled);
   const reparentingBoneId = useUI((s) => s.reparentingBoneId);
   const setReparentingBoneId = useUI((s) => s.setReparentingBoneId);
+  const setPrecisionDragAt = useUI((s) => s.setPrecisionDragAt);
   const drag = useRef<DragState | null>(null);
 
   if (tool !== 'rig') return null;
@@ -61,6 +62,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setSelectedBoneId(bone.id);
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
     // Con IK activada y un padre del que tirar, el tirador de "rotar" mueve
     // la cadena de 2 huesos entera en vez de rotar sólo este hueso — más
     // natural para posar una mano/pie que rotar hombro y codo por separado.
@@ -86,6 +88,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     const bone = skeleton.bones.find((b) => b.id === d.boneId);
     if (!bone) return;
     const local = localPoint(e);
+    setPrecisionDragAt({ x: e.clientX, y: e.clientY });
 
     if (d.kind === 'ik') {
       engine.updateBoneIKDrag(engine.screenToDoc(local));
@@ -118,6 +121,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     if (drag.current?.kind === 'ik') engine.endBoneIKDrag();
     drag.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    setPrecisionDragAt(null);
   };
 
   let wireframe: React.ReactNode = null;

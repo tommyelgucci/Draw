@@ -1540,6 +1540,25 @@ button:focus-visible {
   color: #fff;
 }
 
+/**
+ * Lupa de precisión: coordenadas en `left`/`top` de página (viewport), no
+ * relativas al lienzo, porque flota por encima de TODA la interfaz — un
+ * tirador de hueso o de selección puede estar en cualquier borde.
+ */
+.loupe {
+  position: fixed;
+  z-index: 60;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+.loupe canvas {
+  display: block;
+}
+
 /** Eje(s) del espejo en vivo — puramente informativa, nunca captura toques. */
 .symmetry-overlay {
   position: absolute;

@@ -26,6 +26,7 @@
     "test:symmetry-draw": "node scripts/symmetry-draw.mjs",
     "test:audio-track": "node scripts/audio-track.mjs",
     "test:draggable-panels": "node scripts/draggable-panels.mjs",
+    "test:loupe-precision": "node scripts/loupe-precision.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",
