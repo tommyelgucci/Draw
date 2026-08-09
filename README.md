@@ -47,10 +47,21 @@ probar un cambio abriendo una URL.
 
 **Capas**
 
+- Nueva, duplicar, combinar hacia abajo y eliminar, con el nombre a la vista
+  en el panel: en una tablet no hay puntero y un tooltip nunca se muestra.
+- Ocultar y bloquear desde cada fila; la capa oculta se marca en rojo para que
+  no parezca que el dibujo se perdió.
 - Los 13 modos de fusión separables de la especificación de compositing.
 - Máscaras de recorte con la semántica correcta de grupo (la capa recortada se
   ajusta a su capa base, no al fondo acumulado).
 - Opacidad, visibilidad, bloqueo, reordenar, duplicar y combinar hacia abajo.
+
+**Lienzo**
+
+- El tamaño se cambia cuando quieras desde *Proyecto → Tamaño del lienzo*, con
+  seis medidas predefinidas o a medida. Los dibujos de todas las capas y
+  fotogramas se conservan y se recolocan según un anclaje de nueve posiciones.
+  Al encoger se recorta lo que sobresalga, y deshacer lo devuelve entero.
 
 **Animación — el modelo híbrido**
 
@@ -174,6 +185,7 @@ app de dibujo son visuales:
 npm run test:smoke        # dibujo, deshacer, sostenido, onion, capas, export
 npm run test:selection    # selección, recorte, transformación libre
 npm run test:video        # exportación de vídeo, decodificada y comprobada
+npm run test:canvas-size  # redimensionado, anclaje y controles de capa
 npm run test:responsive   # maquetación en iPhone e iPad
 ```
 

@@ -14,7 +14,8 @@
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",
     "test:brushes": "node scripts/kit-sanity.mjs",
-    "test:video": "node scripts/video.mjs"
+    "test:video": "node scripts/video.mjs",
+    "test:canvas-size": "node scripts/canvas-size.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
