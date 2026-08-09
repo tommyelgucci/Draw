@@ -50,6 +50,44 @@ function circlePoints(cx, cy, r, n = 28) {
   });
 }
 
+/** Generador determinista: mismos "temblores" en cada corrida. */
+function seededRandom(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+}
+
+/**
+ * Círculo con un hueco de cierre y ruido radial — así es un círculo real
+ * dibujado con el dedo, no el arco perfecto de `circlePoints`. Es justo lo
+ * que se ve en el primer pantallazo del bug: el trazo no vuelve exacto al
+ * punto de partida.
+ */
+function shakyCirclePoints(cx, cy, r, gapDeg, jitter, rand, n = 26) {
+  const endT = ((360 - gapDeg) / 360) * Math.PI * 2;
+  return Array.from({ length: n }, (_, i) => {
+    const t = (i / (n - 1)) * endT;
+    const jr = r + (rand() - 0.5) * 2 * jitter;
+    return [cx + Math.cos(t) * jr, cy + Math.sin(t) * jr];
+  });
+}
+
+/** Línea recta con temblor perpendicular, no la recta exacta de un script. */
+function shakyLinePoints(x0, y0, x1, y1, jitter, rand, n = 16) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  return Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1);
+    const j = (rand() - 0.5) * 2 * jitter;
+    return [x0 + dx * t + nx * j, y0 + dy * t + ny * j];
+  });
+}
+
 const pendingShape = () =>
   page.evaluate(() => {
     const p = window.__trace.pendingQuickShape;
@@ -152,6 +190,59 @@ await release();
 await page.evaluate(() => window.__trace.commitQuickShape());
 await page.waitForTimeout(150);
 await page.screenshot({ path: `${out}/qs-05-linea-horneada.png` });
+
+console.log('\n— Calibración con temblor de dedo real —');
+// El bug reportado: con umbrales calibrados sobre un trazo de ratón
+// perfecto, un círculo con el lazo sin cerrar del todo nunca se
+// reconocía, y una "línea recta" temblorosa sólo encajaba 1 de cada 10
+// veces. Este bloque reproduce ambos con ruido determinista y comprueba
+// la tasa de acierto con la precisión por defecto (60%).
+const rand = seededRandom(7);
+
+await drawAndHold(shakyCirclePoints(cx - 200, cy - 100, 90, 14, 10, rand));
+s = await pendingShape();
+check(
+  'círculo con hueco de cierre y ruido: se reconoce igualmente',
+  s?.kind === 'ellipse',
+  JSON.stringify(s),
+);
+await release();
+if (s?.editing) await page.evaluate(() => window.__trace.cancelQuickShape());
+await page.screenshot({ path: `${out}/qs-07-circulo-tembloroso.png` });
+
+let lineHits = 0;
+const angles = [0, 18, -22, 40, -55, 70, -80, 100, -130, 160];
+// Centrada en el propio centro del lienzo con medio largo corto: así
+// ningún ángulo saca un extremo fuera del área dibujable (barras y línea
+// de tiempo se tragan el clic si cae encima).
+const lineLen = 180;
+for (const deg of angles) {
+  const rad = (deg * Math.PI) / 180;
+  const x0 = cx + (Math.cos(rad) * lineLen) / 2;
+  const y0 = cy + (Math.sin(rad) * lineLen) / 2;
+  const x1 = cx - (Math.cos(rad) * lineLen) / 2;
+  const y1 = cy - (Math.sin(rad) * lineLen) / 2;
+  await drawAndHold(shakyLinePoints(x0, y0, x1, y1, 6, rand), 450);
+  const st = await pendingShape();
+  if (st?.kind === 'line') lineHits++;
+  await release();
+  if (st) await page.evaluate(() => window.__trace.cancelQuickShape());
+}
+check(
+  'línea temblorosa: se reconoce la mayoría de las veces',
+  lineHits >= 8,
+  `${lineHits}/${angles.length}`,
+);
+
+console.log('\n— El slider de precisión cambia el resultado —');
+await page.evaluate(() => window.__uiStore.getState().setQuickShapePrecision(1));
+await drawAndHold(shakyLinePoints(cx - 100, cy + 200, cx + 100, cy + 180, 25, seededRandom(3)), 450);
+s = await pendingShape();
+check('al 100% de precisión, la misma línea temblorosa ya no encaja', s === null, JSON.stringify(s));
+await release();
+
+await page.evaluate(() => window.__uiStore.getState().setQuickShapePrecision(0.6));
+await page.waitForTimeout(100);
 
 console.log('\n— Desactivar QuickShape —');
 // El store de UI no cuelga de `window`; el botón de la barra sí es DOM real,

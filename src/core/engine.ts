@@ -931,10 +931,14 @@ export class Engine {
    * con una forma conocida, la sustituye por su versión geométrica
    * editable; si no reconoce nada, no toca nada y el trazo libre sigue
    * exactamente igual — igual que Procreate.
+   *
+   * `precision` es el ajuste de la persona que dibuja (ver
+   * `quickShapePrecision` en el store); vive fuera del motor porque es
+   * preferencia de UI, no estado del documento.
    */
-  tryQuickShape(): boolean {
+  tryQuickShape(precision = 0.6): boolean {
     if (!this.builder || !this.strokeLayer || !this.strokeCel || !this.strokeCtx) return false;
-    const shape = recognizeShape(this.strokeRawPoints);
+    const shape = recognizeShape(this.strokeRawPoints, precision);
     if (!shape) return false;
 
     const layer = this.strokeLayer;

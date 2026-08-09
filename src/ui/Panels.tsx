@@ -380,6 +380,9 @@ export function BrushPanel() {
   const setPanel = useUI((s) => s.setPanel);
   const { brushes, brushIndex, setBrushIndex, updateBrush } = useUI();
   const brush = useActiveBrush();
+  const quickShapeEnabled = useUI((s) => s.quickShapeEnabled);
+  const quickShapePrecision = useUI((s) => s.quickShapePrecision);
+  const setQuickShapePrecision = useUI((s) => s.setQuickShapePrecision);
 
   return (
     <Panel title="Pincel" onClose={() => setPanel(null)} width={310}>
@@ -530,6 +533,23 @@ export function BrushPanel() {
         <p className="hint">
           Cada estampa lleva esta máscara de cobertura en vez de un círculo liso: es lo
           que da la textura granulada del lápiz o la salpicadura del aerógrafo.
+        </p>
+
+        <h3 className="panel__subtitle">QuickShape</h3>
+        <Slider
+          label="Precisión de forma"
+          value={quickShapePrecision}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={setQuickShapePrecision}
+        />
+        <p className="hint">
+          Cuánto tiene que parecerse un trazo a una línea, círculo o polígono para que se
+          enderece solo al mantener el lápiz quieto. Baja si dibujas con el dedo o te tiembla
+          el pulso; al 100% casi nada encaja salvo algo ya perfecto. Se activa o desactiva
+          del todo con el botón de la barra superior.
+          {!quickShapeEnabled && ' (Ahora mismo está desactivado.)'}
         </p>
       </div>
     </Panel>
