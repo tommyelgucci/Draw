@@ -150,6 +150,8 @@ export function recognizeShape(points: Vec2[], precision = 0.6): RecognizedShape
   const polyMargin =
     n <= 4 ? 1 : lerp(0.85, 0.35, clamp((n - 5) / (MAX_POLYGON_SIDES - 5), 0, 1));
   const polyMustBeat = ellipse.error * polyMargin;
+  // eslint-disable-next-line no-console
+  console.debug('[qs debug]', { ellipseErr: ellipse.error, tol, n, hasPolygon, polyError, polyMustBeat });
 
   if (!ellipseOk && !polyOk) return null;
   if (ellipseOk && (!polyOk || polyError > polyMustBeat)) {
@@ -460,16 +462,31 @@ function fitEllipse(points: Vec2[]) {
   const ry = Math.max(1, Math.sqrt(varMinor) * Math.SQRT2);
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  let maxErr = 0;
+  const errors: number[] = [];
   for (const p of points) {
     const dx = p.x - cx;
     const dy = p.y - cy;
     const u = (dx * c + dy * s) / rx;
     const v = (-dx * s + dy * c) / ry;
-    const err = Math.abs(Math.hypot(u, v) - 1);
-    if (err > maxErr) maxErr = err;
+    errors.push(Math.abs(Math.hypot(u, v) - 1));
   }
-  return { cx, cy, rx, ry, rotation: angle, error: maxErr };
+  return { cx, cy, rx, ry, rotation: angle, error: percentileError(errors) };
+}
+
+/**
+ * Percentil 90 de una lista de errores, no el máximo estricto. Un solo
+ * punto raro basta para tumbar un ajuste que por lo demás es limpio — el
+ * cruce que deja un lazo mal cerrado al levantar el lápiz, por ejemplo — y
+ * eso es justo lo que se ve en la práctica: una desviación real que afecta
+ * a varios puntos (las esquinas de un rectángulo) sigue empujando el
+ * percentil 90 hacia arriba igual que lo haría el máximo; un pico de un
+ * único punto, no.
+ */
+function percentileError(errors: number[], p = 0.9): number {
+  if (errors.length === 0) return 0;
+  const sorted = errors.slice().sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)));
+  return sorted[idx];
 }
 
 function douglasPeucker(points: Vec2[], epsilon: number): Vec2[] {
@@ -595,7 +612,7 @@ function polygonFitError(points: Vec2[], corners: Vec2[]): number {
   for (const p of corners) charRadius += dist(p, c);
   charRadius = Math.max(1, charRadius / corners.length);
 
-  let maxErr = 0;
+  const errors: number[] = [];
   for (const p of points) {
     let best = Infinity;
     for (let i = 0; i < corners.length; i++) {
@@ -604,10 +621,9 @@ function polygonFitError(points: Vec2[], corners: Vec2[]): number {
       const d = pointToSegmentDistance(p, a, b);
       if (d < best) best = d;
     }
-    const err = best / charRadius;
-    if (err > maxErr) maxErr = err;
+    errors.push(best / charRadius);
   }
-  return maxErr;
+  return percentileError(errors);
 }
 
 function pointToSegmentDistance(p: Vec2, a: Vec2, b: Vec2): number {
