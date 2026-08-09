@@ -6,7 +6,7 @@ import type { Vec2 } from '../core/types';
 import { useEngineRevision, useUI } from '../state/store';
 import { IconKey } from './icons';
 
-type DragKind = 'move' | 'rotate' | 'scale';
+type DragKind = 'move' | 'rotate' | 'scale' | 'ik';
 
 interface DragState {
   kind: DragKind;
@@ -29,6 +29,8 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
   const tool = useUI((s) => s.tool);
   const selectedBoneId = useUI((s) => s.selectedBoneId);
   const setSelectedBoneId = useUI((s) => s.setSelectedBoneId);
+  const ikEnabled = useUI((s) => s.ikEnabled);
+  const setIkEnabled = useUI((s) => s.setIkEnabled);
   const drag = useRef<DragState | null>(null);
 
   if (tool !== 'rig') return null;
@@ -57,6 +59,13 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setSelectedBoneId(bone.id);
+    // Con IK activada y un padre del que tirar, el tirador de "rotar" mueve
+    // la cadena de 2 huesos entera en vez de rotar sólo este hueso — más
+    // natural para posar una mano/pie que rotar hombro y codo por separado.
+    if (kind === 'rotate' && ikEnabled && engine.beginBoneIKDrag(skeleton.id, bone.id)) {
+      drag.current = { kind: 'ik', boneId: bone.id, headScreen, startDistance: 1, startScaleX: 1, startScaleY: 1 };
+      return;
+    }
     const local = localPoint(e);
     drag.current = {
       kind,
@@ -76,6 +85,10 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     if (!bone) return;
     const local = localPoint(e);
 
+    if (d.kind === 'ik') {
+      engine.updateBoneIKDrag(engine.screenToDoc(local));
+      return;
+    }
     if (d.kind === 'move') {
       const offset = engine.boneOffsetForWorldPoint(skeleton.id, bone, engine.screenToDoc(local));
       engine.setBonePose(skeleton.id, bone.id, offset);
@@ -100,6 +113,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
   };
 
   const end = (e: React.PointerEvent) => {
+    if (drag.current?.kind === 'ik') engine.endBoneIKDrag();
     drag.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
@@ -188,6 +202,20 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
         onPointerDown={(e) => e.stopPropagation()}
       >
         <span className="sel-bar__readout">{selected.bone.name}</span>
+        {selected.bone.parentId && (
+          <button
+            type="button"
+            className={ikEnabled ? 'is-key' : ''}
+            onClick={() => setIkEnabled(!ikEnabled)}
+            title={
+              ikEnabled
+                ? 'IK activada: arrastrar la cola dobla también el hueso padre'
+                : 'Activar IK: arrastrar la cola dobla la cadena de 2 huesos'
+            }
+          >
+            IK
+          </button>
+        )}
         {attachedLayer && !attachedMesh && (
           <button
             type="button"

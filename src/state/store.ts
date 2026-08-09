@@ -97,6 +97,10 @@ interface UIState {
   rangeSelectMode: boolean;
   frameRangeStart: number | null;
   frameRangeEnd: number | null;
+  /** Con IK activada, el tirador de "rotar" de un hueso con padre arrastra
+   *  la cadena de 2 huesos entera (`engine.beginBoneIKDrag`) en vez de
+   *  rotar sólo ese hueso. */
+  ikEnabled: boolean;
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
@@ -121,6 +125,7 @@ interface UIState {
   setBusy: (v: string | null) => void;
   setRangeSelectMode: (v: boolean) => void;
   setFrameRange: (start: number | null, end: number | null) => void;
+  setIkEnabled: (v: boolean) => void;
 }
 
 /** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
@@ -183,6 +188,7 @@ export const useUI = create<UIState>((set, get) => ({
   rangeSelectMode: false,
   frameRangeStart: null,
   frameRangeEnd: null,
+  ikEnabled: false,
 
   setEngine: (engine) => set({ engine }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
@@ -260,6 +266,7 @@ export const useUI = create<UIState>((set, get) => ({
   setRangeSelectMode: (rangeSelectMode) =>
     set(rangeSelectMode ? { rangeSelectMode } : { rangeSelectMode, frameRangeStart: null, frameRangeEnd: null }),
   setFrameRange: (frameRangeStart, frameRangeEnd) => set({ frameRangeStart, frameRangeEnd }),
+  setIkEnabled: (ikEnabled) => set({ ikEnabled }),
 }));
 
 if (import.meta.env.DEV) {

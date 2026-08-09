@@ -23,6 +23,7 @@ import {
 } from './document';
 import { History } from './history';
 import {
+  bendSignFor,
   boneRestFromDrag,
   boneRigidMatrix,
   createBone,
@@ -36,6 +37,7 @@ import {
   newMesh,
   newSkeleton,
   removeBone as removeBoneFromSkeleton,
+  solveTwoBoneIK,
   worldPointToBoneOffset,
   worldPointToBoneRotation,
   type Bone,
@@ -206,6 +208,17 @@ export class Engine {
   pendingLasso: PendingLasso | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
+  /** Arrastre de IK de 2 huesos en marcha — `bendSign` se fija al empezar y
+   *  se mantiene todo el gesto, ver `bendSignFor` en `rig.ts`. */
+  private ikDrag: {
+    skeletonId: string;
+    rootId: string;
+    midId: string;
+    root: Vec2;
+    len1: number;
+    len2: number;
+    bendSign: 1 | -1;
+  } | null = null;
 
   /** Se incrementa en cualquier cambio estructural; la UI se suscribe. */
   revision = 0;
@@ -1318,6 +1331,83 @@ export class Engine {
       offset,
       worldPoint,
     );
+  }
+
+  /**
+   * Padre e hijo de `boneId` si forman una cadena de IK de 2 huesos válida
+   * — `boneId` es el hueso INFERIOR (p. ej. el antebrazo), y necesita un
+   * padre (el brazo) del que tirar. Null si `boneId` es un hueso raíz: sin
+   * padre no hay cadena que resolver, sólo el arrastre normal de un hueso.
+   */
+  twoBoneChain(skeletonId: string, boneId: string): { root: Bone; mid: Bone } | null {
+    const skel = this.doc.skeletons.find((s) => s.id === skeletonId);
+    const mid = skel && findBone(skel, boneId);
+    if (!skel || !mid || !mid.parentId) return null;
+    const root = findBone(skel, mid.parentId);
+    return root ? { root, mid } : null;
+  }
+
+  /**
+   * Arranca un arrastre de IK: el `bendSign` (de qué lado cae el codo/
+   * rodilla) se calcula UNA VEZ aquí, a partir de dónde está la
+   * articulación ahora mismo, y se mantiene fijo durante todo el gesto —
+   * ver `bendSignFor` en `rig.ts`. Sin fijarlo, el codo saltaría de lado en
+   * cuanto la mano cruzara la línea hombro→mano.
+   */
+  beginBoneIKDrag(skeletonId: string, boneId: string): boolean {
+    const chain = this.twoBoneChain(skeletonId, boneId);
+    if (!chain) return false;
+    const endpoints = this.boneEndpoints(skeletonId);
+    const rootEp = endpoints.find((ep) => ep.bone.id === chain.root.id);
+    const midEp = endpoints.find((ep) => ep.bone.id === chain.mid.id);
+    if (!rootEp || !midEp) return false;
+    this.ikDrag = {
+      skeletonId,
+      rootId: chain.root.id,
+      midId: chain.mid.id,
+      root: rootEp.head,
+      len1: chain.root.length,
+      len2: chain.mid.length,
+      bendSign: bendSignFor(rootEp.head, midEp.head, midEp.tail),
+    };
+    return true;
+  }
+
+  /**
+   * Resuelve la cadena para `worldPoint` y orienta los dos huesos. Primero
+   * el raíz hacia el codo resuelto; luego, con el raíz ya orientado, el
+   * intermedio hacia el objetivo real — el orden importa porque el mundo
+   * del intermedio depende de la pose nueva del raíz, no de la vieja. Sin
+   * `history.run`, igual que `setBonePose`: es una muestra continua de
+   * arrastre, no un paso que deshacer de por sí.
+   */
+  updateBoneIKDrag(worldPoint: Vec2) {
+    const drag = this.ikDrag;
+    if (!drag) return;
+    const skel = this.doc.skeletons.find((s) => s.id === drag.skeletonId);
+    const root = skel && findBone(skel, drag.rootId);
+    const mid = skel && findBone(skel, drag.midId);
+    if (!skel || !root || !mid) return;
+
+    const elbow = solveTwoBoneIK(drag.root, drag.len1, drag.len2, worldPoint, drag.bendSign);
+
+    const rootParentWorld = this.boneParentWorldMatrix(drag.skeletonId, root.id);
+    const rootOffset = { x: this.getBoneValue(root, 'x'), y: this.getBoneValue(root, 'y') };
+    this.setBonePose(drag.skeletonId, root.id, {
+      rotation: worldPointToBoneRotation(root, rootParentWorld, rootOffset, elbow),
+    });
+
+    // El mundo del raíz cambió con la línea de arriba: se vuelve a leer en
+    // vez de reutilizar `rootParentWorld`/`elbow`, que ya están obsoletos.
+    const midParentWorld = evaluatePoseWorldMatrices(skel, this.currentFrame).get(root.id) ?? mat3Identity();
+    const midOffset = { x: this.getBoneValue(mid, 'x'), y: this.getBoneValue(mid, 'y') };
+    this.setBonePose(drag.skeletonId, mid.id, {
+      rotation: worldPointToBoneRotation(mid, midParentWorld, midOffset, worldPoint),
+    });
+  }
+
+  endBoneIKDrag() {
+    this.ikDrag = null;
   }
 
   /* ---------------------------------------------------------------- *

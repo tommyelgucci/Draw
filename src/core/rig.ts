@@ -291,6 +291,60 @@ export function boneRestFromDrag(
 }
 
 /* ------------------------------------------------------------------ *
+ * IK de 2 huesos
+ * ------------------------------------------------------------------ */
+
+/**
+ * Posición del codo/rodilla que resuelve una cadena de 2 huesos por ley de
+ * cosenos (el mismo método que Spine/Unity llaman "Two Bone IK"): dado el
+ * hombro fijo en `root`, las longitudes de los dos huesos y un objetivo
+ * `target` que debe alcanzar la cola del segundo hueso, calcula dónde cae
+ * la articulación intermedia. `dist` se acota a lo que la cadena puede
+ * alcanzar de verdad — sin esto, un objetivo más allá del alcance máximo (o
+ * más cerca que `|len1-len2|`) haría que `acos` recibiera un valor fuera de
+ * [-1,1] y devolviera `NaN`.
+ *
+ * `bendSign` (+1 o -1) decide de qué lado del segmento raíz→objetivo cae el
+ * codo. Se pasa desde fuera en vez de recalcularse aquí porque debe
+ * mantenerse fijo durante todo un arrastre — recalcularlo cada fotograma a
+ * partir de la pose actual haría que el codo saltara al lado contrario en
+ * cuanto el objetivo cruzara la línea raíz→codo.
+ */
+export function solveTwoBoneIK(
+  root: Vec2,
+  len1: number,
+  len2: number,
+  target: Vec2,
+  bendSign: 1 | -1,
+): Vec2 {
+  const dx = target.x - root.x;
+  const dy = target.y - root.y;
+  const rawDist = Math.hypot(dx, dy);
+  const maxReach = Math.max(1e-3, len1 + len2 - 1e-3);
+  const minReach = Math.abs(len1 - len2) + 1e-3;
+  const dist = Math.max(minReach, Math.min(maxReach, rawDist || 1e-3));
+  const baseAngle = Math.atan2(dy, dx);
+  const cosA = Math.max(
+    -1,
+    Math.min(1, (len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist)),
+  );
+  const angle1 = baseAngle + bendSign * Math.acos(cosA);
+  return { x: root.x + Math.cos(angle1) * len1, y: root.y + Math.sin(angle1) * len1 };
+}
+
+/**
+ * De qué lado de la línea `root`→`target` cae `elbow` ahora mismo — el
+ * `bendSign` que hay que conservar durante un arrastre de IK para que no
+ * cambie de lado solo. Con el brazo estirado (codo casi sobre la línea) el
+ * signo del producto cruzado es ruidoso, pero da igual: no hay doblez que
+ * conservar todavía, así que cualquier lado por defecto vale.
+ */
+export function bendSignFor(root: Vec2, elbow: Vec2, target: Vec2): 1 | -1 {
+  const cross = (target.x - root.x) * (elbow.y - root.y) - (target.y - root.y) * (elbow.x - root.x);
+  return cross >= 0 ? 1 : -1;
+}
+
+/* ------------------------------------------------------------------ *
  * Malla deformable
  * ------------------------------------------------------------------ */
 
