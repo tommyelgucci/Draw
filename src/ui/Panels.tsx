@@ -12,6 +12,7 @@ import {
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
   type Layer,
+  type LayerGroup,
   type TransformProp,
 } from '../core/document';
 import { hexToRgb, hsvToRgb, rgbToHex, rgbToHsv } from '../core/math';
@@ -30,11 +31,13 @@ import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/vi
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Slider } from './controls';
 import {
+  IconChevronRight,
   IconClose,
   IconCopy,
   IconDownload,
   IconEye,
   IconEyeOff,
+  IconFolder,
   IconImage,
   IconKey,
   IconLock,
@@ -67,15 +70,168 @@ function LayerThumb({ engine, layer }: { engine: Engine; layer: Layer }) {
   return <div className="layer__thumb" ref={ref} />;
 }
 
+/**
+ * Una fila de capa — se usa tanto suelta en la lista de arriba como dentro
+ * de una carpeta (con `nested` para el sangrado). La casilla de la
+ * izquierda no cambia la capa activa, sólo la marca para agrupar: son dos
+ * selecciones independientes, como en cualquier gestor de archivos.
+ */
+function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nested?: boolean }) {
+  const isActive = layer.id === engine.activeLayerId;
+  const selection = useUI((s) => s.layerGroupSelection);
+  const toggleSelection = useUI((s) => s.toggleLayerGroupSelection);
+  const checked = selection.includes(layer.id);
+
+  return (
+    <li
+      className={`layer ${isActive ? 'is-active' : ''} ${layer.clipToBelow ? 'is-clipped' : ''} ${nested ? 'is-nested' : ''}`}
+      data-layer-id={layer.id}
+      onClick={() => engine.setActiveLayer(layer.id)}
+    >
+      <input
+        type="checkbox"
+        className="layer__check"
+        checked={checked}
+        aria-label={`Marcar ${layer.name} para agrupar`}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => toggleSelection(layer.id)}
+      />
+      <LayerThumb engine={engine} layer={layer} />
+      <div className="layer__info">
+        <input
+          className="layer__name"
+          value={layer.name}
+          onChange={(e) => engine.setLayerPropLive(layer.id, 'name', e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <div className="layer__meta">
+          {layer.kind === 'reference' && <span className="layer__badge">Ref</span>}
+          {BLEND_LABELS[layer.blend]} · {Math.round(layer.opacity * 100)}%
+          {layer.cels.size > 0 &&
+            ` · ${layer.cels.size} ${layer.kind === 'reference' ? 'fotogramas' : 'dib.'}`}
+        </div>
+      </div>
+      <div className="layer__buttons">
+        <button
+          type="button"
+          className={`layer__toggle ${layer.visible ? '' : 'is-off'}`}
+          title={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
+          aria-label={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
+          aria-pressed={!layer.visible}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.setLayerProp(layer.id, 'visible', !layer.visible, 'Visibilidad');
+          }}
+        >
+          {layer.visible ? <IconEye size={17} /> : <IconEyeOff size={17} />}
+        </button>
+        <button
+          type="button"
+          className={`layer__toggle ${layer.locked ? 'is-on' : ''}`}
+          title={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
+          aria-label={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
+          aria-pressed={layer.locked}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.setLayerProp(layer.id, 'locked', !layer.locked, 'Bloqueo');
+          }}
+        >
+          <IconLock size={17} />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/** Cabecera de una carpeta de capas: colapsar, renombrar, mostrar/ocultar
+ *  el grupo entero y desagrupar — mismo lugar donde vive todo eso para una
+ *  capa suelta, pero operando sobre el lote. */
+function LayerGroupHeader({
+  engine,
+  group,
+  members,
+}: {
+  engine: Engine;
+  group: LayerGroup;
+  members: Layer[];
+}) {
+  const allVisible = members.every((l) => l.visible);
+  return (
+    <div
+      className="layer-group__header"
+      onClick={() => engine.setLayerGroupCollapsed(group.id, !group.collapsed)}
+    >
+      <IconChevronRight size={14} className={`layer-group__chevron ${group.collapsed ? '' : 'is-open'}`} />
+      <IconFolder size={16} />
+      <input
+        className="layer__name"
+        value={group.name}
+        onChange={(e) => engine.renameLayerGroup(group.id, e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <span className="layer-group__count">{members.length}</span>
+      <div className="layer__buttons">
+        <button
+          type="button"
+          className={`layer__toggle ${allVisible ? '' : 'is-off'}`}
+          title={allVisible ? 'Ocultar grupo' : 'Mostrar grupo'}
+          aria-label={allVisible ? 'Ocultar grupo' : 'Mostrar grupo'}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.setLayerGroupVisible(group.id, !allVisible);
+          }}
+        >
+          {allVisible ? <IconEye size={17} /> : <IconEyeOff size={17} />}
+        </button>
+        <button
+          type="button"
+          className="layer__toggle"
+          title="Desagrupar"
+          aria-label="Desagrupar"
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.ungroupLayers(group.id);
+          }}
+        >
+          <IconClose size={17} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function LayersPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const setPanel = useUI((s) => s.setPanel);
   const setBusy = useUI((s) => s.setBusy);
+  const layerGroupSelection = useUI((s) => s.layerGroupSelection);
+  const clearLayerGroupSelection = useUI((s) => s.clearLayerGroupSelection);
   const layers = engine.doc.layers.slice().reverse();
   const active = engine.activeLayer;
   const imageInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
   const [refProgress, setRefProgress] = useState<string | null>(null);
+
+  // Tramos contiguos de capas con el mismo `groupId` se pintan como una
+  // sola carpeta; si por algún motivo dejaron de ser contiguas (reordenar
+  // capas no las mantiene juntas a propósito, ver `groupLayers`), aparecen
+  // como dos carpetas con el mismo nombre en vez de romper — degradado, no roto.
+  const groupsById = new Map(engine.doc.layerGroups.map((g) => [g.id, g]));
+  type Row = { type: 'layer'; layer: Layer } | { type: 'group'; group: LayerGroup; members: Layer[] };
+  const rows: Row[] = [];
+  for (const layer of layers) {
+    const group = layer.groupId ? groupsById.get(layer.groupId) : undefined;
+    if (!group) {
+      rows.push({ type: 'layer', layer });
+      continue;
+    }
+    const last = rows[rows.length - 1];
+    if (last && last.type === 'group' && last.group.id === group.id) {
+      last.members.push(layer);
+    } else {
+      rows.push({ type: 'group', group, members: [layer] });
+    }
+  }
 
   return (
     <Panel title="Capas" onClose={() => setPanel(null)} width={310}>
@@ -125,63 +281,45 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         </button>
       </div>
 
+      {layerGroupSelection.length > 0 && (
+        <div className="panel__actions">
+          <button
+            type="button"
+            className="action"
+            aria-label="Agrupar capas marcadas"
+            disabled={layerGroupSelection.length < 2}
+            onClick={() => {
+              engine.groupLayers(layerGroupSelection, 'Grupo');
+              clearLayerGroupSelection();
+            }}
+          >
+            <IconFolder size={18} />
+            <span>Agrupar ({layerGroupSelection.length})</span>
+          </button>
+          <button type="button" className="action" aria-label="Cancelar selección" onClick={clearLayerGroupSelection}>
+            <IconClose size={18} />
+            <span>Cancelar</span>
+          </button>
+        </div>
+      )}
+
       <ul className="layer-list">
-        {layers.map((layer) => {
-          const isActive = layer.id === engine.activeLayerId;
-          return (
-            <li
-              key={layer.id}
-              className={`layer ${isActive ? 'is-active' : ''} ${layer.clipToBelow ? 'is-clipped' : ''}`}
-              onClick={() => engine.setActiveLayer(layer.id)}
-            >
-              <LayerThumb engine={engine} layer={layer} />
-              <div className="layer__info">
-                <input
-                  className="layer__name"
-                  value={layer.name}
-                  onChange={(e) =>
-                    engine.setLayerPropLive(layer.id, 'name', e.target.value)
-                  }
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <div className="layer__meta">
-                  {layer.kind === 'reference' && <span className="layer__badge">Ref</span>}
-                  {BLEND_LABELS[layer.blend]} · {Math.round(layer.opacity * 100)}%
-                  {layer.cels.size > 0 &&
-                    ` · ${layer.cels.size} ${layer.kind === 'reference' ? 'fotogramas' : 'dib.'}`}
-                </div>
-              </div>
-              <div className="layer__buttons">
-                <button
-                  type="button"
-                  className={`layer__toggle ${layer.visible ? '' : 'is-off'}`}
-                  title={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
-                  aria-label={layer.visible ? 'Ocultar capa' : 'Mostrar capa'}
-                  aria-pressed={!layer.visible}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    engine.setLayerProp(layer.id, 'visible', !layer.visible, 'Visibilidad');
-                  }}
-                >
-                  {layer.visible ? <IconEye size={17} /> : <IconEyeOff size={17} />}
-                </button>
-                <button
-                  type="button"
-                  className={`layer__toggle ${layer.locked ? 'is-on' : ''}`}
-                  title={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
-                  aria-label={layer.locked ? 'Desbloquear capa' : 'Bloquear capa'}
-                  aria-pressed={layer.locked}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    engine.setLayerProp(layer.id, 'locked', !layer.locked, 'Bloqueo');
-                  }}
-                >
-                  <IconLock size={17} />
-                </button>
-              </div>
+        {rows.map((row) =>
+          row.type === 'layer' ? (
+            <LayerRow key={row.layer.id} engine={engine} layer={row.layer} />
+          ) : (
+            <li key={row.group.id} className="layer-group">
+              <LayerGroupHeader engine={engine} group={row.group} members={row.members} />
+              {!row.group.collapsed && (
+                <ul className="layer-group__members">
+                  {row.members.map((layer) => (
+                    <LayerRow key={layer.id} engine={engine} layer={layer} nested />
+                  ))}
+                </ul>
+              )}
             </li>
-          );
-        })}
+          ),
+        )}
       </ul>
 
       {active && (

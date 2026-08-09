@@ -104,6 +104,10 @@ interface UIState {
   /** Id del hueso que espera nuevo padre: el siguiente toque en el lienzo
    *  (otro hueso, o vacío para desengancharlo a raíz) decide cuál. */
   reparentingBoneId: string | null;
+  /** Capas marcadas con la casilla del panel para agruparlas en una
+   *  carpeta — vive aquí y no en el documento porque es un gesto de UI a
+   *  medias, no contenido. */
+  layerGroupSelection: string[];
 
   setEngine: (e: Engine | null) => void;
   setTool: (t: Tool) => void;
@@ -130,6 +134,8 @@ interface UIState {
   setFrameRange: (start: number | null, end: number | null) => void;
   setIkEnabled: (v: boolean) => void;
   setReparentingBoneId: (v: string | null) => void;
+  toggleLayerGroupSelection: (id: string) => void;
+  clearLayerGroupSelection: () => void;
 }
 
 /** Rueda de tonos uniformemente repartidos, mismo brillo y saturación. */
@@ -194,6 +200,7 @@ export const useUI = create<UIState>((set, get) => ({
   frameRangeEnd: null,
   ikEnabled: false,
   reparentingBoneId: null,
+  layerGroupSelection: [],
 
   setEngine: (engine) => set({ engine }),
   setSelectedBoneId: (selectedBoneId) => set({ selectedBoneId }),
@@ -273,6 +280,13 @@ export const useUI = create<UIState>((set, get) => ({
   setFrameRange: (frameRangeStart, frameRangeEnd) => set({ frameRangeStart, frameRangeEnd }),
   setIkEnabled: (ikEnabled) => set({ ikEnabled }),
   setReparentingBoneId: (reparentingBoneId) => set({ reparentingBoneId }),
+  toggleLayerGroupSelection: (id) =>
+    set((s) => ({
+      layerGroupSelection: s.layerGroupSelection.includes(id)
+        ? s.layerGroupSelection.filter((x) => x !== id)
+        : [...s.layerGroupSelection, id],
+    })),
+  clearLayerGroupSelection: () => set({ layerGroupSelection: [] }),
 }));
 
 if (import.meta.env.DEV) {

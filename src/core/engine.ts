@@ -17,6 +17,7 @@ import {
   uid,
   type Cel,
   type Layer,
+  type LayerGroup,
   type SpriteSwapCatalog,
   type SpriteSwapVariant,
   type TraceDocument,
@@ -545,6 +546,113 @@ export class Engine {
     const layer = this.doc.layers.find((l) => l.id === id);
     if (!layer) return;
     layer[key] = value;
+    this.touch();
+  }
+
+  /**
+   * Agrupa capas EXISTENTES bajo una carpeta nueva. Una carpeta es un tramo
+   * CONTIGUO de `doc.layers` (como `ClipGroup`, no un árbol aparte), así
+   * que agrupar reordena la pila: las capas elegidas se juntan donde
+   * estaba la más profunda de ellas, conservando su orden relativo entre
+   * sí — el resto de la pila no se mueve. Null si `layerIds` no llega a
+   * dos capas, alguna no existe, o alguna ya está en otra carpeta (anidar
+   * carpetas queda fuera de alcance por ahora).
+   */
+  groupLayers(layerIds: string[], name = 'Grupo'): string | null {
+    const ids = new Set(layerIds);
+    if (ids.size < 2) return null;
+    const before = this.doc.layers.slice();
+    const members = before.filter((l) => ids.has(l.id));
+    if (members.length !== ids.size || members.some((l) => l.groupId)) return null;
+
+    const insertAt = Math.min(...before.map((l, i) => (ids.has(l.id) ? i : Infinity)));
+    const rest = before.filter((l) => !ids.has(l.id));
+    const insertAtInRest = rest.filter((l) => before.indexOf(l) < insertAt).length;
+    const after = [...rest.slice(0, insertAtInRest), ...members, ...rest.slice(insertAtInRest)];
+    const group: LayerGroup = { id: uid('grp'), name, collapsed: false };
+
+    this.history.run({
+      label: 'Agrupar capas',
+      redo: () => {
+        for (const l of members) l.groupId = group.id;
+        this.doc.layerGroups.push(group);
+        this.doc.layers = after;
+        this.touch();
+      },
+      undo: () => {
+        for (const l of members) l.groupId = undefined;
+        this.doc.layerGroups = this.doc.layerGroups.filter((g) => g.id !== group.id);
+        this.doc.layers = before;
+        this.touch();
+      },
+    });
+    return group.id;
+  }
+
+  /** Disuelve la carpeta; las capas se quedan donde están (ya son contiguas). */
+  ungroupLayers(groupId: string) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const members = this.doc.layers.filter((l) => l.groupId === groupId);
+    this.history.run({
+      label: 'Desagrupar capas',
+      redo: () => {
+        for (const l of members) l.groupId = undefined;
+        this.doc.layerGroups = this.doc.layerGroups.filter((g) => g.id !== groupId);
+        this.touch();
+      },
+      undo: () => {
+        for (const l of members) l.groupId = groupId;
+        this.doc.layerGroups.push(group);
+        this.touch();
+      },
+    });
+  }
+
+  /** Muestra/oculta todas las capas de la carpeta a la vez, en un único
+   *  paso de deshacer — no una toggleada por capa. */
+  setLayerGroupVisible(groupId: string, visible: boolean) {
+    const members = this.doc.layers.filter((l) => l.groupId === groupId);
+    if (members.length === 0) return;
+    const before = members.map((l) => l.visible);
+    this.history.run({
+      label: visible ? 'Mostrar grupo' : 'Ocultar grupo',
+      redo: () => {
+        for (const l of members) l.visible = visible;
+        this.touch();
+      },
+      undo: () => {
+        members.forEach((l, i) => {
+          l.visible = before[i];
+        });
+        this.touch();
+      },
+    });
+  }
+
+  renameLayerGroup(groupId: string, name: string) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group || group.name === name) return;
+    const before = group.name;
+    this.history.run({
+      label: 'Renombrar grupo',
+      redo: () => {
+        group.name = name;
+        this.touch();
+      },
+      undo: () => {
+        group.name = before;
+        this.touch();
+      },
+    });
+  }
+
+  /** Colapsar/expandir es presentación pura del panel, no contenido del
+   *  documento — no entra en el historial, igual que `onion.enabled`. */
+  setLayerGroupCollapsed(groupId: string, collapsed: boolean) {
+    const group = this.doc.layerGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    group.collapsed = collapsed;
     this.touch();
   }
 

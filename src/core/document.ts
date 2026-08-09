@@ -184,6 +184,23 @@ export interface Layer {
    * por construcción en una capa con `swap`.
    */
   swap?: SpriteSwapCatalog;
+  /** Presente si esta capa vive dentro de una carpeta de `TraceDocument.layerGroups`. */
+  groupId?: string;
+}
+
+/**
+ * Carpeta organizativa del panel de capas: agrupa un tramo CONTIGUO de
+ * `TraceDocument.layers` bajo un mismo `groupId` — la misma idea que
+ * `ClipGroup` (agrupar por adyacencia en la lista plana), no un árbol
+ * nuevo. No afecta a la composición del lienzo en absoluto: mostrar/ocultar
+ * la carpeta entera es sólo aplicar `visible` a cada capa miembro, y
+ * `collapsed` sólo cambia cómo se ve el panel — el pipeline de render nunca
+ * necesita saber que existen las carpetas.
+ */
+export interface LayerGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;
 }
 
 export interface TraceDocument {
@@ -207,6 +224,8 @@ export interface TraceDocument {
   skeletons: Skeleton[];
   /** Mallas deformables, referenciadas por id desde `Layer.rig.meshId`. */
   meshes: Mesh[];
+  /** Carpetas del panel de capas — ver `LayerGroup`. */
+  layerGroups: LayerGroup[];
 }
 
 let idCounter = 0;
@@ -251,6 +270,7 @@ export function newDocument(
     modifiedAt: Date.now(),
     skeletons: [],
     meshes: [],
+    layerGroups: [],
   };
 }
 

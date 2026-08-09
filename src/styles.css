@@ -572,6 +572,68 @@ button:focus-visible {
   gap: 2px;
 }
 
+.layer__check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+/**
+ * Carpetas del panel de capas: una carpeta es un tramo contiguo de la
+ * misma lista, no un árbol nuevo (ver `LayerGroup` en document.ts), así
+ * que su CSS reutiliza `.layer`/`.layer__buttons` tal cual en vez de
+ * inventar un segundo juego de estilos.
+ */
+.layer-group {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.layer-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.layer-group__chevron {
+  flex: none;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+
+.layer-group__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.layer-group__count {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-group__members {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.layer.is-nested {
+  margin-left: 0;
+}
+
 .transform-row {
   display: flex;
   align-items: flex-start;

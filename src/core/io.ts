@@ -8,6 +8,7 @@ import {
   type Cel,
   type Channel,
   type Layer,
+  type LayerGroup,
   type LayerKind,
   type SpriteSwapCatalog,
   type TraceDocument,
@@ -34,6 +35,8 @@ interface SerializedLayer {
   rig?: LayerRig;
   /** El PNG de cada variante va aparte, bajo `swap/<layerId>/<variantId>.png`. */
   swap?: { variants: { id: string; label: string }[]; selected: Channel };
+  /** Ausente en capas fuera de una carpeta. */
+  groupId?: string;
 }
 
 interface SerializedBone {
@@ -85,6 +88,8 @@ interface SerializedDoc {
   /** Ausentes en proyectos anteriores al Módulo de Rigging — ver `normalizeSkeleton`/`normalizeMesh`. */
   skeletons?: SerializedSkeleton[];
   meshes?: SerializedMesh[];
+  /** Ausente en proyectos anteriores a las carpetas de capas. */
+  layerGroups?: LayerGroup[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -163,6 +168,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       transform: layer.transform,
       rig: layer.rig,
       swap,
+      groupId: layer.groupId,
     });
   }
 
@@ -181,6 +187,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     layers,
     skeletons: doc.skeletons,
     meshes: doc.meshes,
+    layerGroups: doc.layerGroups,
   };
   files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
 
@@ -207,6 +214,7 @@ export async function deserializeProject(
   doc.layers = [];
   doc.skeletons = normalizeSkeletons(meta.skeletons);
   doc.meshes = normalizeMeshes(meta.meshes);
+  doc.layerGroups = normalizeLayerGroups(meta.layerGroups);
 
   engine.renderer.setDocumentSize(doc.width, doc.height);
 
@@ -225,6 +233,7 @@ export async function deserializeProject(
       cels: new Map(),
       transform: normalizeTransform(sl.transform),
       rig: normalizeLayerRig(sl.rig),
+      groupId: sl.groupId,
     };
     for (const sc of sl.cels) {
       const cel: Cel = {
@@ -347,6 +356,15 @@ function normalizeMeshes(list: SerializedMesh[] | undefined): Mesh[] {
 function normalizeLayerRig(r: LayerRig | undefined): LayerRig | undefined {
   if (!r) return undefined;
   return { skeletonId: r.skeletonId, boneId: r.boneId ?? null, meshId: r.meshId ?? null };
+}
+
+function normalizeLayerGroups(list: LayerGroup[] | undefined): LayerGroup[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((g) => ({
+    id: g.id ?? uid('grp'),
+    name: g.name ?? 'Grupo',
+    collapsed: g.collapsed ?? false,
+  }));
 }
 
 /* ------------------------------------------------------------------ *

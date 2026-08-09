@@ -21,6 +21,7 @@
     "test:bone-ik": "node scripts/bone-ik.mjs",
     "test:bone-reparent": "node scripts/bone-reparent.mjs",
     "test:bone-onion": "node scripts/bone-onion.mjs",
+    "test:layer-groups": "node scripts/layer-groups.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",
