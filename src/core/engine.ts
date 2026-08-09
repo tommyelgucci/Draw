@@ -754,7 +754,13 @@ export class Engine {
   private commitStamps(stamps: Stamp[]) {
     if (stamps.length === 0 || !this.strokeCtx) return;
     const wet = this.renderer.scratch('wet');
-    this.renderer.drawStamps(wet, stamps, this.strokeCtx.color);
+    const texId = this.strokeCtx.brush.textureId;
+    this.renderer.drawStamps(
+      wet,
+      stamps,
+      this.strokeCtx.color,
+      texId ? this.renderer.getBrushTexture(texId) : undefined,
+    );
     for (const s of stamps) {
       expandRect(this.strokeRect, s.x, s.y, s.size * 0.75 + 2);
     }
@@ -961,7 +967,13 @@ export class Engine {
       if (this.predictedStamps.length > 0) {
         const predict = this.renderer.scratch('predict');
         this.renderer.clear(predict);
-        this.renderer.drawStamps(predict, this.predictedStamps, this.strokeCtx.color);
+        const texId = this.strokeCtx.brush.textureId;
+        this.renderer.drawStamps(
+          predict,
+          this.predictedStamps,
+          this.strokeCtx.color,
+          texId ? this.renderer.getBrushTexture(texId) : undefined,
+        );
         this.renderer.drawOver(
           combined,
           predict,
