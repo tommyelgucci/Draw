@@ -108,6 +108,29 @@ const inkPixels = () =>
 
 /* ------------------------------------------------------------------ */
 
+console.log('\n— Aro de dwell —');
+// El anillo comunica que la app está "esperando" — sin él el gesto es
+// invisible (ver el bug reportado con capturas sin ninguna señal). No se
+// comprueba que la animación interpole (en este Chromium headless el
+// productor de fotogramas se para en cuanto hay eventos de puntero
+// simulados, incluso con un bucle de rAF activo — se verificó aparte
+// disparando la transición directamente por script), sólo que el
+// mecanismo se arma en el sitio correcto y se apaga cuando toca.
+await page.mouse.move(cx - 150, cy - 80);
+await page.mouse.down();
+await page.mouse.move(cx - 50, cy - 40, { steps: 8 });
+await page.waitForTimeout(120);
+let ring = await page.evaluate(() => {
+  const el = document.querySelector('.dwell-ring');
+  return el ? { armed: el.classList.contains('is-armed'), left: el.style.left, top: el.style.top } : null;
+});
+check('el aro se arma cerca del último punto', ring?.armed === true, JSON.stringify(ring));
+await page.waitForTimeout(400);
+ring = await page.evaluate(() => document.querySelector('.dwell-ring').classList.contains('is-armed'));
+check('el aro se apaga tras completarse el dwell', ring === false);
+await release();
+await page.evaluate(() => window.__trace.cancelQuickShape());
+
 console.log('\n— Círculo —');
 await drawAndHold(circlePoints(cx - 200, cy - 100, 90));
 let s = await pendingShape();

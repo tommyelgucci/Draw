@@ -1223,6 +1223,42 @@ button:focus-visible {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
 
+/**
+ * Aro de QuickShape: crece durante el dwell (mantener el lápiz quieto al
+ * final de un trazo). Sin esta señal el gesto es invisible — nadie sabe
+ * cuánto hay que esperar ni si la app se enteró de que se quedó quieto.
+ * `transform`/`opacity` en vez de animar el propio tamaño porque son las
+ * únicas propiedades que se interpolan con fluidez en cualquier motor,
+ * iOS Safari incluido.
+ */
+.dwell-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border-radius: 50%;
+  border: 2.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+  z-index: 40;
+  opacity: 0;
+  transform: scale(0.3);
+  transition: none;
+}
+
+.dwell-ring.is-armed {
+  opacity: 0.9;
+  transform: scale(1);
+  transition-property: transform, opacity;
+  transition-timing-function: linear;
+  /* La duración real la fija CanvasView (DWELL_MS) para no duplicar el
+   * número en dos sitios; este valor es sólo el resguardo por si algo
+   * falla al ponerla. */
+  transition-duration: 380ms;
+}
+
 .sel-bar {
   position: absolute;
   z-index: 32;
