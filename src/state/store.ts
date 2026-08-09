@@ -43,6 +43,10 @@ interface UIState {
   selectionMode: SelectionMode;
   /** Un dedo dibuja; con lápiz conectado suele preferirse desactivado. */
   fingerDraws: boolean;
+  /** Mantener el lápiz quieto al final de un trazo lo convierte en una
+   * forma perfecta (línea, círculo, rectángulo...). Se puede apagar porque
+   * sin aviso previo un trazo lento se sentiría "corregido" sin permiso. */
+  quickShapeEnabled: boolean;
   showTimeline: boolean;
   busy: string | null;
 
@@ -57,6 +61,7 @@ interface UIState {
   setSelectionMode: (m: SelectionMode) => void;
   togglePanel: (p: Exclude<PanelId, null>) => void;
   setFingerDraws: (v: boolean) => void;
+  setQuickShapeEnabled: (v: boolean) => void;
   setShowTimeline: (v: boolean) => void;
   setBusy: (v: string | null) => void;
 }
@@ -112,6 +117,7 @@ export const useUI = create<UIState>((set, get) => ({
   panel: null,
   selectionMode: 'replace',
   fingerDraws: true,
+  quickShapeEnabled: true,
   showTimeline: true,
   busy: null,
 
@@ -149,6 +155,7 @@ export const useUI = create<UIState>((set, get) => ({
   setSelectionMode: (selectionMode) => set({ selectionMode }),
   togglePanel: (p) => set((s) => ({ panel: s.panel === p ? null : p })),
   setFingerDraws: (fingerDraws) => set({ fingerDraws }),
+  setQuickShapeEnabled: (quickShapeEnabled) => set({ quickShapeEnabled }),
   setShowTimeline: (showTimeline) => set({ showTimeline }),
   setBusy: (busy) => set({ busy }),
 }));

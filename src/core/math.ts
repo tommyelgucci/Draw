@@ -7,6 +7,9 @@ export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export const TAU = Math.PI * 2;
 
+/** Redondea un ángulo (radianes) al incremento `step` más cercano. */
+export const snapAngle = (angle: number, step: number) => Math.round(angle / step) * step;
+
 /* ------------------------------------------------------------------ *
  * Matriz 3x3 afín, column-major, lista para `uniformMatrix3fv`.
  * ------------------------------------------------------------------ */

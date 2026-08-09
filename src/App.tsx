@@ -4,6 +4,7 @@ import { Toolbar } from './ui/Toolbar';
 import { Timeline } from './ui/Timeline';
 import { BrushPanel, ColorPanel, ExportPanel, LayersPanel } from './ui/Panels';
 import { SelectionOverlay } from './ui/SelectionOverlay';
+import { QuickShapeOverlay } from './ui/QuickShapeOverlay';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -187,6 +188,7 @@ export default function App() {
     <div className={`app ${panel ? 'has-panel' : ''}`}>
       <CanvasView />
       {engine && <SelectionOverlay engine={engine} />}
+      {engine && <QuickShapeOverlay engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 
