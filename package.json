@@ -34,7 +34,8 @@
     "test:canvas-size": "node scripts/canvas-size.mjs",
     "test:new-project": "node scripts/new-project.mjs",
     "test:palettes": "node scripts/palettes.mjs",
-    "test:taper": "node scripts/taper.mjs"
+    "test:taper": "node scripts/taper.mjs",
+    "test:fill": "node scripts/fill.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",

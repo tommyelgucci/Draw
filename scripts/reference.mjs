@@ -193,6 +193,144 @@ if (videoResult.skipped) {
   await page.screenshot({ path: `${out}/ref-02-video.png` });
 }
 
+log('\n— Cancelar una importación de vídeo a medias —');
+const cancelResult = await page.evaluate(async () => {
+  const e = window.__trace;
+  const mod = await import('/src/core/io.ts');
+
+  const c = document.createElement('canvas');
+  c.width = 160;
+  c.height = 120;
+  const ctx = c.getContext('2d');
+  const stream = c.captureStream(10);
+  const mimeType = ['video/webm;codecs=vp8', 'video/webm'].find((t) =>
+    MediaRecorder.isTypeSupported(t),
+  );
+  if (!mimeType) return { skipped: true, reason: 'sin códec webm en este navegador' };
+
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const chunks = [];
+  recorder.ondataavailable = (ev) => ev.data.size > 0 && chunks.push(ev.data);
+  const stopped = new Promise((resolve) => (recorder.onstop = resolve));
+
+  recorder.start();
+  const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#fff', '#000'];
+  for (const col of colors) {
+    ctx.fillStyle = col;
+    ctx.fillRect(0, 0, c.width, c.height);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((t) => t.stop());
+
+  const blob = new Blob(chunks, { type: mimeType });
+  const file = new File([blob], 'cancel.webm', { type: mimeType });
+
+  const before = e.doc.layers.length;
+  const controller = new AbortController();
+  // Corta en cuanto llega el primer aviso de progreso: es lo más pronto que
+  // se puede cancelar una importación real desde la interfaz.
+  let firstProgress = false;
+  const promise = mod.importReferenceVideo(
+    e,
+    file,
+    () => {
+      if (!firstProgress) {
+        firstProgress = true;
+        controller.abort();
+      }
+    },
+    controller.signal,
+  );
+
+  let errName = null;
+  try {
+    await promise;
+  } catch (err) {
+    errName = err.name;
+  }
+
+  return { skipped: false, before, after: e.doc.layers.length, errName };
+});
+if (cancelResult.skipped) {
+  log(`  (saltado: ${cancelResult.reason})`);
+} else {
+  check('rechaza con AbortError, no con un error genérico', cancelResult.errName === 'AbortError', cancelResult.errName);
+  check(
+    'no deja una capa de referencia a medio importar',
+    cancelResult.after === cancelResult.before,
+    `${cancelResult.before} -> ${cancelResult.after}`,
+  );
+}
+
+log('\n— El botón "Cancelar" de la interfaz corta la importación de verdad —');
+const dialogs = [];
+page.on('dialog', (d) => {
+  dialogs.push(d.message());
+  d.dismiss();
+});
+const uiVideoBytes = await page.evaluate(async () => {
+  // Más grande y más largo que el de arriba a propósito: necesita tardar de
+  // verdad en extraerse (cada fotograma es un seek + subida a GPU de 720p)
+  // para que el clic en "Cancelar" tenga tiempo real de llegar antes de que
+  // termine sola — con el vídeo diminuto de la prueba anterior, la
+  // importación completa antes de que Playwright alcance a hacer clic.
+  const c = document.createElement('canvas');
+  c.width = 1280;
+  c.height = 720;
+  const ctx = c.getContext('2d');
+  const stream = c.captureStream(10);
+  const mimeType = ['video/webm;codecs=vp8', 'video/webm'].find((t) =>
+    MediaRecorder.isTypeSupported(t),
+  );
+  if (!mimeType) return null;
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const chunks = [];
+  recorder.ondataavailable = (ev) => ev.data.size > 0 && chunks.push(ev.data);
+  const stopped = new Promise((resolve) => (recorder.onstop = resolve));
+  recorder.start();
+  const colors = Array.from({ length: 30 }, (_, i) => `hsl(${(i * 37) % 360}, 80%, 50%)`);
+  for (const col of colors) {
+    ctx.fillStyle = col;
+    ctx.fillRect(0, 0, c.width, c.height);
+    await new Promise((r) => setTimeout(r, 180));
+  }
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((t) => t.stop());
+  const blob = new Blob(chunks, { type: mimeType });
+  const buf = await blob.arrayBuffer();
+  return Array.from(new Uint8Array(buf));
+});
+if (!uiVideoBytes) {
+  log('  (saltado: sin códec webm en este navegador)');
+} else {
+  const layersBefore = await page.evaluate(() => window.__trace.doc.layers.length);
+  await page.locator('.rail--top [aria-label="Capas"]').click();
+  await page.waitForTimeout(300);
+  await page
+    .locator('input[accept="video/*"]')
+    .setInputFiles({ name: 'cancel-ui.webm', mimeType: 'video/webm', buffer: Buffer.from(uiVideoBytes) });
+  const cancelBtn = page.getByRole('button', { name: 'Cancelar', exact: true });
+  await cancelBtn.waitFor({ state: 'visible', timeout: 10000 });
+  check('aparece el botón Cancelar mientras importa', true);
+  await cancelBtn.click({ timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(300);
+
+  // Nada de "sin capas de referencia" a secas: el escenario de vídeo de
+  // arriba ya dejó la suya sin deshacer. Lo que prueba que cancelar limpió
+  // bien es que el número de capas no cambió, no su tipo.
+  const layersAfter = await page.evaluate(() => window.__trace.doc.layers.length);
+  check(
+    'cancelar desde el botón no deja una capa a medio importar',
+    layersAfter === layersBefore,
+    `${layersBefore} -> ${layersAfter}`,
+  );
+  check('el progreso desaparece del panel', (await page.getByText('Extrayendo fotogramas').count()) === 0);
+  check('cancelar no dispara ningún alert()', dialogs.length === 0, dialogs.join(' | '));
+}
+
 log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 
