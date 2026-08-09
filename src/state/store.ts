@@ -27,6 +27,37 @@ export interface PaletteGroup {
   colors: RGB[];
 }
 
+/** Paleta creada por el usuario: a diferencia de `PaletteGroup` tiene `id`
+ * (el nombre es editable y no sirve como clave) y vive en `localStorage`,
+ * no en el documento — es una preferencia de la persona, no del dibujo. */
+export interface UserPalette {
+  id: string;
+  name: string;
+  colors: RGB[];
+}
+
+const USER_PALETTES_KEY = 'trace:paletas';
+
+function loadUserPalettes(): UserPalette[] {
+  try {
+    const raw = localStorage.getItem(USER_PALETTES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveUserPalettes(list: UserPalette[]) {
+  try {
+    localStorage.setItem(USER_PALETTES_KEY, JSON.stringify(list));
+  } catch {
+    // Cuota llena o almacenamiento bloqueado (navegación privada): la
+    // sesión sigue igual, sólo no sobrevive a un recargado.
+  }
+}
+
 interface UIState {
   engine: Engine | null;
   tool: Tool;
@@ -38,6 +69,7 @@ interface UIState {
   opacityOverride: number | null;
   color: RGB;
   paletteGroups: PaletteGroup[];
+  userPalettes: UserPalette[];
   recentColors: RGB[];
   panel: PanelId;
   /** Cómo combina el siguiente gesto de selección con la máscara actual. */
@@ -68,6 +100,11 @@ interface UIState {
   setSize: (v: number | null) => void;
   setOpacity: (v: number | null) => void;
   setColor: (c: RGB, remember?: boolean) => void;
+  createUserPalette: (name: string) => void;
+  renameUserPalette: (id: string, name: string) => void;
+  deleteUserPalette: (id: string) => void;
+  addColorToUserPalette: (id: string, color: RGB) => void;
+  removeColorFromUserPalette: (id: string, index: number) => void;
   setPanel: (p: PanelId) => void;
   setSelectionMode: (m: SelectionMode) => void;
   togglePanel: (p: Exclude<PanelId, null>) => void;
@@ -125,6 +162,7 @@ export const useUI = create<UIState>((set, get) => ({
   opacityOverride: null,
   color: { r: 0.07, g: 0.07, b: 0.09 },
   paletteGroups: DEFAULT_PALETTE_GROUPS,
+  userPalettes: loadUserPalettes(),
   recentColors: [],
   panel: null,
   selectionMode: 'replace',
@@ -165,6 +203,40 @@ export const useUI = create<UIState>((set, get) => ({
       const key = (c: RGB) => `${c.r.toFixed(3)}|${c.g.toFixed(3)}|${c.b.toFixed(3)}`;
       const recent = [color, ...s.recentColors.filter((c) => key(c) !== key(color))];
       return { color, recentColors: recent.slice(0, 12) };
+    }),
+  createUserPalette: (name) =>
+    set((s) => {
+      const userPalettes = [...s.userPalettes, { id: crypto.randomUUID(), name, colors: [] }];
+      saveUserPalettes(userPalettes);
+      return { userPalettes };
+    }),
+  renameUserPalette: (id, name) =>
+    set((s) => {
+      const userPalettes = s.userPalettes.map((p) => (p.id === id ? { ...p, name } : p));
+      saveUserPalettes(userPalettes);
+      return { userPalettes };
+    }),
+  deleteUserPalette: (id) =>
+    set((s) => {
+      const userPalettes = s.userPalettes.filter((p) => p.id !== id);
+      saveUserPalettes(userPalettes);
+      return { userPalettes };
+    }),
+  addColorToUserPalette: (id, color) =>
+    set((s) => {
+      const userPalettes = s.userPalettes.map((p) =>
+        p.id === id ? { ...p, colors: [...p.colors, color] } : p,
+      );
+      saveUserPalettes(userPalettes);
+      return { userPalettes };
+    }),
+  removeColorFromUserPalette: (id, index) =>
+    set((s) => {
+      const userPalettes = s.userPalettes.map((p) =>
+        p.id === id ? { ...p, colors: p.colors.filter((_, i) => i !== index) } : p,
+      );
+      saveUserPalettes(userPalettes);
+      return { userPalettes };
     }),
   setPanel: (panel) => set({ panel }),
   setSelectionMode: (selectionMode) => set({ selectionMode }),

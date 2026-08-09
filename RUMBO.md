@@ -129,10 +129,11 @@ las oportunidades están donde su arquitectura no le deja llegar.
    con nombre reutilizando los presets que ya existían para redimensionar.
    De paso corrigió una fuga real: "Abrir proyecto" cambiaba de documento
    sin soltar las superficies GPU del anterior.
-6. **Paletas de usuario con nombre.** Crear, nombrar y guardar paletas propias
-   (Procreate lo resuelve con una simple lista "+"). La gestión de color de
-   Trace ya casi llega ahí — sólo falta la capa "mis paletas" editable encima
-   de los grupos fijos actuales.
+6. **Paletas de usuario con nombre.** `hecho`. Sección "Mis paletas" en el
+   panel Color: crear, renombrar en línea, añadir el color activo, quitar un
+   color suelto y borrar la paleta entera (con confirmación, a diferencia de
+   quitar un color). Vive en `localStorage`, no en el `.trace`: es preferencia
+   de la persona, no del dibujo — por eso sobrevive a abrir otro proyecto.
 7. **Taper de extremo + rotación de estampa según dirección del trazo**, en el
    estudio de pincel. Encajan en el modelo de estampas instanciadas que ya
    existe, sin arquitectura nueva — de las mejoras con más impacto visual por

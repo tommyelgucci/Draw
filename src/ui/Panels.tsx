@@ -27,9 +27,10 @@ import {
   serializeProject,
 } from '../core/io';
 import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/video';
-import { useActiveBrush, useEngineRevision, useUI } from '../state/store';
+import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Slider } from './controls';
 import {
+  IconClose,
   IconCopy,
   IconDownload,
   IconEye,
@@ -624,7 +625,18 @@ function BrushPreview({ brush }: { brush: { hardness: number; aspect: number } }
 
 export function ColorPanel() {
   const setPanel = useUI((s) => s.setPanel);
-  const { color, setColor, paletteGroups, recentColors } = useUI();
+  const {
+    color,
+    setColor,
+    paletteGroups,
+    userPalettes,
+    createUserPalette,
+    renameUserPalette,
+    deleteUserPalette,
+    addColorToUserPalette,
+    removeColorFromUserPalette,
+    recentColors,
+  } = useUI();
   const hsv = useMemo(() => rgbToHsv(color), [color]);
   const [hue, setHue] = useState(hsv.h);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -698,6 +710,31 @@ export function ColorPanel() {
         </>
       )}
 
+      <div className="panel__subtitle-row">
+        <h3 className="panel__subtitle">Mis paletas</h3>
+        <IconButton
+          title="Nueva paleta"
+          className="icon-btn--ghost"
+          onClick={() => createUserPalette(`Paleta ${userPalettes.length + 1}`)}
+        >
+          <IconPlus size={16} />
+        </IconButton>
+      </div>
+      {userPalettes.length === 0 && (
+        <p className="hint">Crea una paleta propia y guarda ahí los colores que uses a menudo.</p>
+      )}
+      {userPalettes.map((p) => (
+        <UserPaletteBlock
+          key={p.id}
+          palette={p}
+          onPick={(c) => setColor(c, true)}
+          onRename={(name) => renameUserPalette(p.id, name)}
+          onDelete={() => deleteUserPalette(p.id)}
+          onAddCurrent={() => addColorToUserPalette(p.id, color)}
+          onRemoveColor={(i) => removeColorFromUserPalette(p.id, i)}
+        />
+      ))}
+
       {paletteGroups.map((group) => (
         <div key={group.name}>
           <h3 className="panel__subtitle">{group.name}</h3>
@@ -705,6 +742,97 @@ export function ColorPanel() {
         </div>
       ))}
     </Panel>
+  );
+}
+
+/**
+ * Paleta propia: nombre editable igual que `.layer__name`, un botón para
+ * añadir el color activo y una "x" por color para quitarlo — sin modo
+ * "editar" aparte, mismo criterio directo que el resto del panel. Borrar la
+ * paleta entera sí pide confirmación (calco de `NewProjectControls`): a
+ * diferencia de un color suelto, no hay forma de recuperarla después.
+ */
+function UserPaletteBlock({
+  palette,
+  onPick,
+  onRename,
+  onDelete,
+  onAddCurrent,
+  onRemoveColor,
+}: {
+  palette: UserPalette;
+  onPick: (c: RGB) => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+  onAddCurrent: () => void;
+  onRemoveColor: (index: number) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <div className="user-palette">
+      {confirming ? (
+        <div className="user-palette__confirm">
+          <span>¿Eliminar "{palette.name}"?</span>
+          <div className="field-row">
+            <button className="btn btn--danger" onClick={onDelete}>
+              Eliminar
+            </button>
+            <button className="btn btn--ghost" onClick={() => setConfirming(false)}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="user-palette__head">
+          <input
+            className="user-palette__name"
+            value={palette.name}
+            onChange={(e) => onRename(e.target.value)}
+            aria-label="Nombre de la paleta"
+          />
+          <IconButton
+            title="Eliminar paleta"
+            className="icon-btn--ghost"
+            onClick={() => setConfirming(true)}
+          >
+            <IconTrash size={15} />
+          </IconButton>
+        </div>
+      )}
+      <div className="swatches">
+        {palette.colors.map((c, i) => (
+          <div key={`${rgbToHex(c)}-${i}`} className="swatch-wrap">
+            <button
+              type="button"
+              className="swatch"
+              style={{ background: rgbToHex(c) }}
+              onClick={() => onPick(c)}
+              title={rgbToHex(c)}
+              aria-label={`Color ${rgbToHex(c)}`}
+            />
+            <button
+              type="button"
+              className="swatch-remove"
+              onClick={() => onRemoveColor(i)}
+              aria-label={`Quitar ${rgbToHex(c)} de "${palette.name}"`}
+              title="Quitar de la paleta"
+            >
+              <IconClose size={10} />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="swatch swatch--add"
+          onClick={onAddCurrent}
+          aria-label={`Añadir color activo a "${palette.name}"`}
+          title="Añadir color activo"
+        >
+          <IconPlus size={14} />
+        </button>
+      </div>
+    </div>
   );
 }
 
