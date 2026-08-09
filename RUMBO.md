@@ -53,15 +53,16 @@ exportar. Es utilizable de punta a punta.
 ### Fase 1 — Que aguante un proyecto real `en curso`
 
 El objetivo no es añadir features, es que un corto de 30 segundos no se caiga
-ni se vuelva lento. Lo que falta:
+ni se vuelva lento. Lo que falta ya no es código:
 
-- Exportar a MP4/WebM. El APNG sirve para compartir, no para editar después.
+- Dibujar en un iPad de verdad y ver qué molesta.
 - Perfilar con muchas capas y cientos de cels; medir el consumo de memoria en
-  un iPad de verdad, no en un emulador.
+  el dispositivo, no en un emulador.
 
 Ya resuelto en esta fase (ver `CHECKPOINT.md`): importar imágenes y vídeo
 como referencia para rotoscopia; texturas de punta de pincel; kit completo
-de 18 pinceles categorizados y paleta de colores en cuatro grupos.
+de 18 pinceles categorizados y paleta de colores en cuatro grupos; y
+exportación a vídeo con WebCodecs.
 
 ### Fase 2 — Instalable de verdad
 
