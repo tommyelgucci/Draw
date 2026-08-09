@@ -28,7 +28,16 @@ export type RecognizedShape =
 const MIN_POINTS = 5;
 const MIN_DIAGONAL = 6; // px de documento: trazos más pequeños no merecen forzarse
 const MIN_POLYGON_SIDES = 3;
-const MAX_POLYGON_SIDES = 10;
+// Cuantos más lados se le permiten a un "polígono", mejor aproxima cualquier
+// curva suave por pura definición — un decágono encaja en un círculo casi
+// tan bien como la propia elipse. Nadie dibuja a mano un eneágono a
+// propósito; por encima de 8 casi siempre es un círculo con manchas.
+const MAX_POLYGON_SIDES = 8;
+// Grados que puede girar el trazo abierto simplificado antes de dejar de
+// parecer una línea con temblor y empezar a parecer una esquina real (ver
+// `maxTurnAngle`). Un hexágono gira 60° por vértice; el temblor de mano
+// natural en un trazo que se pretende recto ronda un puñado de grados.
+const OPEN_TURN_LIMIT = (32 * Math.PI) / 180;
 
 /**
  * Cada umbral tiene un extremo laxo (precisión 0) y uno estricto
@@ -83,7 +92,29 @@ export function recognizeShape(points: Vec2[], precision = 0.6): RecognizedShape
   if (!closed) {
     const line = fitLine(points);
     if (line.error < threshold(THRESHOLDS.line, precision)) {
-      return { kind: 'line', a: line.a, b: line.b };
+      // El dwell puede disparar en una pausa natural entre vértices de un
+      // polígono que todavía se está dibujando (el trazo lleva una o dos
+      // esquinas y aún no ha vuelto a cerrar el lazo): ese recorrido
+      // parcial a veces también ajusta bien a una única recta por mínimos
+      // cuadrados si las esquinas son suaves. Contar cuántos puntos
+      // sobreviven a Douglas-Peucker no basta para distinguirlo de una
+      // línea con temblor de mano — el temblor también puede dejar un
+      // punto de más — así que se mide cuánto *gira* en cada uno: un
+      // tembleque gira unos pocos grados, una esquina real de polígono
+      // gira decenas.
+      // El temblor de un dedo real es ruido de alta frecuencia correlado
+      // (la mano no teleporta entre muestras); un suavizado ligero de
+      // ventana pequeña lo aplasta sin tocar un giro sostenido de verdad
+      // — que es justo lo que distingue una esquina real de un pico de
+      // ruido puntual en la trayectoria.
+      const smoothed = smoothPoints(points, 5);
+      const epsilon = Math.max(diag * threshold(THRESHOLDS.corner, precision), 3);
+      const openCorners = douglasPeucker(smoothed, epsilon);
+      const turn = maxTurnAngle(openCorners);
+      if (turn < OPEN_TURN_LIMIT) {
+        return { kind: 'line', a: line.a, b: line.b };
+      }
+      return null;
     }
     // Abierta y no es una línea recta: sin arcos ni polilíneas en esta
     // versión (ver CLAUDE.md / notas de alcance), se deja el trazo intacto.
@@ -111,11 +142,13 @@ export function recognizeShape(points: Vec2[], precision = 0.6): RecognizedShape
   const polyError = hasPolygon ? polygonFitError(points, corners) : Infinity;
   const polyOk = hasPolygon && polyError < tol;
   // Un triángulo o rectángulo real se distingue de un círculo a simple
-  // vista, así que basta con ganar por poco. Cuantos más lados tiene el
-  // polígono detectado, más se parece cualquier curva suave a esa forma por
-  // pura definición (un decágono aproxima un círculo casi tan bien como la
-  // propia elipse) — así que el margen exigido crece con `n`, no es fijo.
-  const polyMargin = n <= 4 ? 1 : lerp(0.85, 0.45, clamp((n - 5) / 5, 0, 1));
+  // vista, así que basta con ganar por poco. A partir de 5 lados, cuantos
+  // más tiene el polígono detectado, más se parece cualquier curva suave a
+  // esa forma por pura definición — así que el margen exigido crece rápido
+  // con `n`, no es fijo. El rango es corto (5 a `MAX_POLYGON_SIDES`) a
+  // propósito: por encima ya está descartado antes de llegar aquí.
+  const polyMargin =
+    n <= 4 ? 1 : lerp(0.85, 0.35, clamp((n - 5) / (MAX_POLYGON_SIDES - 5), 0, 1));
   const polyMustBeat = ellipse.error * polyMargin;
 
   if (!ellipseOk && !polyOk) return null;
@@ -466,6 +499,46 @@ function perpendicularDistance(p: Vec2, a: Vec2, b: Vec2): number {
   const len = Math.hypot(dx, dy);
   if (len < 1e-9) return dist(p, a);
   return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+}
+
+/** Media móvil simple sobre una ventana pequeña; conserva el nº de puntos
+ * (los bordes promedian con la ventana que quepa). */
+function smoothPoints(points: Vec2[], window: number): Vec2[] {
+  if (points.length <= window) return points.slice();
+  const half = Math.floor(window / 2);
+  return points.map((_, i) => {
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let k = -half; k <= half; k++) {
+      const idx = i + k;
+      if (idx < 0 || idx >= points.length) continue;
+      sx += points[idx].x;
+      sy += points[idx].y;
+      n++;
+    }
+    return { x: sx / n, y: sy / n };
+  });
+}
+
+/**
+ * Mayor giro (en radianes, siempre positivo) entre segmentos consecutivos
+ * de un tramo abierto ya simplificado. Un tramo de 2 puntos no tiene
+ * vértices interiores y da 0 — recto por definición.
+ */
+function maxTurnAngle(points: Vec2[]): number {
+  let maxAngle = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const c = points[i + 1];
+    const v1 = Math.atan2(b.y - a.y, b.x - a.x);
+    const v2 = Math.atan2(c.y - b.y, c.x - b.x);
+    let d = Math.abs(v2 - v1);
+    if (d > Math.PI) d = TAU - d;
+    if (d > maxAngle) maxAngle = d;
+  }
+  return maxAngle;
 }
 
 /**
