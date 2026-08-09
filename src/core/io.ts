@@ -2,6 +2,7 @@ import { unzipSync, zipSync } from 'fflate';
 import type { Engine } from './engine';
 import {
   celAt,
+  MAX_FRAME_COUNT,
   newDocument,
   newLayer,
   uid,
@@ -706,6 +707,7 @@ export async function importReferenceVideo(
   engine: Engine,
   file: File,
   onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const url = URL.createObjectURL(file);
   const video = document.createElement('video');
@@ -725,11 +727,15 @@ export async function importReferenceVideo(
       throw new Error('El vídeo no tiene una duración válida.');
     }
     const fps = engine.doc.fps;
-    const frameCount = Math.max(1, Math.min(2000, Math.round(duration * fps)));
+    const frameCount = Math.max(1, Math.min(MAX_FRAME_COUNT, Math.round(duration * fps)));
     const startFrame = engine.currentFrame;
 
     layer = engine.beginReferenceImport(baseName(file.name), true);
     for (let i = 0; i < frameCount; i++) {
+      // Cada fotograma es un `seek` + subida a GPU secuenciales: en un
+      // clip largo un cuadro de por medio no basta, hay que poder cortar
+      // a media importación en vez de esperar a que termine sola.
+      if (signal?.aborted) throw new DOMException('Importación cancelada', 'AbortError');
       const t = Math.min(i / fps, Math.max(0, duration - 1 / fps));
       await seekVideo(video, t);
       engine.addReferenceFrame(layer, startFrame + i, video, video.videoWidth, video.videoHeight);

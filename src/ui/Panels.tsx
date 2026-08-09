@@ -215,6 +215,7 @@ export function LayersPanel({ engine }: { engine: Engine }) {
   const videoInput = useRef<HTMLInputElement>(null);
   const audioInput = useRef<HTMLInputElement>(null);
   const [refProgress, setRefProgress] = useState<string | null>(null);
+  const videoAbort = useRef<AbortController | null>(null);
   const audio = engine.doc.audio;
 
   // Tramos contiguos de capas con el mismo `groupId` se pintan como una
@@ -443,20 +444,43 @@ export function LayersPanel({ engine }: { engine: Engine }) {
             const file = e.target.files?.[0];
             e.target.value = '';
             if (!file) return;
+            const controller = new AbortController();
+            videoAbort.current = controller;
             setRefProgress('0/0');
             setBusy('Extrayendo fotogramas de vídeo…');
             try {
-              await importReferenceVideo(engine, file, (d, t) => setRefProgress(`${d}/${t}`));
+              await importReferenceVideo(
+                engine,
+                file,
+                (d, t) => setRefProgress(`${d}/${t}`),
+                controller.signal,
+              );
             } catch (err) {
-              console.error(err);
-              alert(`No se pudo importar el vídeo: ${(err as Error).message}`);
+              // Cancelar no es un error: lo pidió quien dibuja, no hace
+              // falta ni un aviso ni un console.error por ello.
+              if ((err as Error).name !== 'AbortError') {
+                console.error(err);
+                alert(`No se pudo importar el vídeo: ${(err as Error).message}`);
+              }
             } finally {
+              videoAbort.current = null;
               setBusy(null);
               setRefProgress(null);
             }
           }}
         />
-        {refProgress && <p className="hint">Extrayendo fotogramas… {refProgress}</p>}
+        {refProgress && (
+          <p className="hint hint--row">
+            <span>Extrayendo fotogramas… {refProgress}</span>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => videoAbort.current?.abort()}
+            >
+              Cancelar
+            </button>
+          </p>
+        )}
         <p className="hint">
           Se añade como una capa de referencia: no se puede dibujar sobre ella y queda
           fuera de la exportación final. Un vídeo se trocea en un cel por fotograma del

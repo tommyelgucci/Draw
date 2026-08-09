@@ -230,6 +230,14 @@ export interface AudioTrack {
   muted: boolean;
 }
 
+/** Techo práctico de `frameCount`, no del motor (los cels viven en un `Map`
+ * disperso, así que un cuadro vacío no cuesta memoria): la línea de tiempo
+ * no está virtualizada, pinta una celda de DOM por cuadro y por capa —
+ * medido en navegador, más allá de esto ya se nota al abrir el panel. Un
+ * vídeo importado se trocea al mismo techo por la misma razón: sus cels
+ * también acaban ahí. */
+export const MAX_FRAME_COUNT = 6000;
+
 export interface TraceDocument {
   id: string;
   name: string;
