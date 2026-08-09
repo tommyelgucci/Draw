@@ -6,6 +6,7 @@ import {
   type BlendMode,
   type RGB,
 } from '../core/types';
+import { BUILTIN_TEXTURES, generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import {
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
@@ -465,8 +466,80 @@ export function BrushPanel() {
           format={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => updateBrush({ aspect: v })}
         />
+
+        <h3 className="panel__subtitle">Textura de punta</h3>
+        <div className="texture-grid">
+          <TextureSwatch
+            id={null}
+            label="Lisa"
+            active={brush.textureId === null}
+            onClick={() => updateBrush({ textureId: null })}
+          />
+          {BUILTIN_TEXTURES.map((t) => (
+            <TextureSwatch
+              key={t.id}
+              id={t.id}
+              label={t.label}
+              active={brush.textureId === t.id}
+              onClick={() => updateBrush({ textureId: t.id })}
+            />
+          ))}
+        </div>
+        <p className="hint">
+          Cada estampa lleva esta máscara de cobertura en vez de un círculo liso: es lo
+          que da la textura granulada del lápiz o la salpicadura del aerógrafo.
+        </p>
       </div>
     </Panel>
+  );
+}
+
+/** Miniatura de una textura de punta: dibuja el mismo buffer de píxeles que sube a la GPU. */
+function TextureSwatch({
+  id,
+  label,
+  active,
+  onClick,
+}: {
+  id: BuiltinTextureId | null;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const size = 40;
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, size, size);
+    if (!id) {
+      // "Lisa" no tiene máscara: un círculo sólido representa la punta de siempre.
+      ctx.fillStyle = '#f0f0f5';
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    const pixels = generateBrushTexturePixels(id, size);
+    ctx.putImageData(
+      new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), size, size),
+      0,
+      0,
+    );
+  }, [id]);
+
+  return (
+    <button
+      type="button"
+      className={`brush-chip ${active ? 'is-active' : ''}`}
+      onClick={onClick}
+      title={label}
+    >
+      <canvas className="texture-chip__canvas" ref={ref} width={size} height={size} />
+      <span>{label}</span>
+    </button>
   );
 }
 

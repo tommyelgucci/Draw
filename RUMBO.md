@@ -56,12 +56,11 @@ El objetivo no es añadir features, es que un corto de 30 segundos no se caiga
 ni se vuelva lento. Lo que falta:
 
 - Exportar a MP4/WebM. El APNG sirve para compartir, no para editar después.
-- Texturas de punta de pincel — el shader ya las soporta, falta la interfaz.
 - Perfilar con muchas capas y cientos de cels; medir el consumo de memoria en
   un iPad de verdad, no en un emulador.
 
-Ya resuelto en esta fase: importar imágenes y vídeo como referencia para
-rotoscopia (ver `CHECKPOINT.md`).
+Ya resuelto en esta fase (ver `CHECKPOINT.md`): importar imágenes y vídeo
+como referencia para rotoscopia; texturas de punta de pincel.
 
 ### Fase 2 — Instalable de verdad
 

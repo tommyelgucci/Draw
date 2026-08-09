@@ -15,8 +15,9 @@ npm run test:smoke        TODO EN VERDE   (17 comprobaciones)
 npm run test:selection    TODO EN VERDE   (14 comprobaciones)
 npm run test:responsive   iPhone y iPad sin desbordes ni controles fuera de pantalla
 npm run test:reference    TODO EN VERDE   (14 comprobaciones, imagen + vídeo real vía MediaRecorder)
+npm run test:brush-texture TODO EN VERDE  (8 comprobaciones)
 npx oxlint                sin warnings
-npm run build             315 kB / 99 kB gzip
+npm run build             319 kB / 101 kB gzip
 ```
 
 ## Funciona
@@ -33,6 +34,11 @@ npm run build             315 kB / 99 kB gzip
 - Bote de relleno que respeta líneas de otras capas, con crecimiento
   configurable contra la orla del antialias.
 - Cuentagotas sobre la imagen compuesta.
+- Texturas de punta: cuatro máscaras integradas (grano, tiza, lienzo,
+  salpicadura) además de la punta lisa de siempre, seleccionables por pincel.
+  El generador de píxeles (`core/brushTexture.ts`) es puro cálculo sin DOM:
+  el mismo buffer sube como textura a la GPU y pinta la miniatura del
+  selector en la interfaz, sin duplicar el algoritmo en dos sitios.
 
 ### Capas
 - Los 13 modos de fusión separables de la especificación de compositing,
@@ -128,10 +134,7 @@ Por orden, según `RUMBO.md` (Fase 1):
 
 1. **Exportar a MP4/WebM.** El APNG sirve para compartir, no para editar
    después en otro programa.
-2. **Texturas de punta de pincel.** El shader ya tiene el sampler y el
-   uniforme `uUseTexture`; falta generar o cargar las texturas y exponerlo en
-   el panel de pincel.
-3. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
+2. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
    memoria en un iPad físico, no en el emulador.
 
 ## Deuda conocida
@@ -156,3 +159,10 @@ Por orden, según `RUMBO.md` (Fase 1):
   progreso. Si el evento `seeked` no llega (pasa en algún navegador para un
   fotograma suelto), hay un plazo de 2 s que lo salta duplicando el anterior
   en vez de colgar la importación entera.
+- **Las texturas de punta se ven mal en pinceles muy pequeños.** El patrón de
+  128×128 se muestrea en todo el UV de la estampa sin importar cuántos
+  píxeles ocupe en pantalla: en un lápiz de pocos píxeles el resultado es una
+  línea casi invisible en vez de grano (por eso ningún pincel por defecto
+  lleva textura salvo "Pintura", que es lo bastante grande). Sólo se nota al
+  bajar mucho el tamaño; se arreglaría atenuando la textura por debajo de
+  cierto diámetro de estampa.

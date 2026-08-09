@@ -1,3 +1,4 @@
+import type { BuiltinTextureId } from './brushTexture';
 import { OneEuroFilter, clamp, lerp, TAU } from './math';
 import type { InputSample, Stamp } from './types';
 
@@ -34,6 +35,8 @@ export interface BrushPreset {
   aspect: number;
   /** Borra en vez de pintar. */
   erase: boolean;
+  /** Máscara de cobertura por estampa; `null` = punta lisa (el círculo de siempre). */
+  textureId: BuiltinTextureId | null;
 }
 
 export const DEFAULT_BRUSHES: BrushPreset[] = [
@@ -55,6 +58,10 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: true,
     aspect: 1,
     erase: false,
+    // Lisa por defecto: es el pincel activo al abrir la app y no debe
+    // cambiar el trazo de siempre. La textura queda disponible para quien
+    // la busque en el panel.
+    textureId: null,
   },
   {
     id: 'ink',
@@ -74,6 +81,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: true,
     aspect: 1,
     erase: false,
+    textureId: null,
   },
   {
     id: 'marker',
@@ -93,6 +101,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: true,
     aspect: 0.35,
     erase: false,
+    textureId: null,
   },
   {
     id: 'airbrush',
@@ -112,6 +121,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: false,
     aspect: 1,
     erase: false,
+    // Con flujo tan bajo, cualquier textura lo deja casi invisible: liso.
+    textureId: null,
   },
   {
     id: 'paint',
@@ -131,6 +142,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: true,
     aspect: 0.85,
     erase: false,
+    textureId: 'canvas',
   },
   {
     id: 'eraser',
@@ -150,6 +162,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: false,
     aspect: 1,
     erase: true,
+    textureId: null,
   },
 ];
 
