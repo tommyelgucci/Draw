@@ -5,7 +5,9 @@ const CACHE = 'trace-shell-v1';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(['/', '/manifest.webmanifest', '/icon.svg'])),
+    // Rutas relativas al propio script: en GitHub Pages la app no vive en
+    // la raíz del dominio y '/' apuntaría fuera del ámbito.
+    caches.open(CACHE).then((cache) => cache.addAll(['./', './manifest.webmanifest', './icon.svg'])),
   );
   self.skipWaiting();
 });
@@ -33,7 +35,9 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE).then((c) => c.put(request, copy));
           return res;
         })
-        .catch(() => caches.match(request).then((r) => r || caches.match('/'))),
+        .catch(() =>
+          caches.match(request).then((r) => r || caches.match(new URL('./', self.registration.scope).href)),
+        ),
     );
     return;
   }

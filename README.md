@@ -115,6 +115,37 @@ codificador de vídeo.
 | `Tab` | Ocultar la línea de tiempo |
 | `Ctrl/Cmd + Z` | Deshacer (con `Shift`, rehacer) |
 
+## Abrirlo en el iPad
+
+### Opción recomendada: GitHub Pages
+
+Cada empujón a la rama principal publica la app automáticamente
+(`.github/workflows/deploy.yml`). Sólo hay que activarlo una vez:
+
+1. En GitHub, **Settings → Pages**.
+2. En *Source*, elige **GitHub Actions**.
+3. Espera a que termine el flujo en la pestaña *Actions*.
+
+La app queda en `https://<usuario>.github.io/Draw/`. Ábrela en Safari,
+**Compartir → Añadir a pantalla de inicio**, y arranca a pantalla completa como
+una app más.
+
+Tiene que ser HTTPS y no es un capricho: sin contexto seguro el navegador
+desactiva el service worker (sin modo sin conexión ni instalación) y WebCodecs
+(la exportación de vídeo cae a grabación en tiempo real).
+
+### Opción local: misma red wifi
+
+Sirve para probar cambios sin publicar, con dos límites por ser HTTP:
+
+```bash
+npm run dev -- --host
+```
+
+Abre en el iPad la IP que imprime, por ejemplo `http://192.168.1.40:5173`. El
+dibujo, las capas y la animación van igual; lo que no tendrás es instalación en
+la pantalla de inicio ni la ruta rápida de exportación de vídeo.
+
 ## Desarrollo
 
 ```bash
