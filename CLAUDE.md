@@ -141,3 +141,22 @@ Cada capa lleva las dos cosas a la vez, y hay que respetarlo:
 Rama de desarrollo: `claude/trace-drawing-animation-app-ov7j6d`. Mensajes de
 commit en español, cuerpo explicando el porqué. No abras PR salvo petición
 explícita.
+
+### Autoría de los commits
+
+**Todos los commits van a nombre del dueño del repositorio, siempre:**
+
+```
+tommyelgucci <299895314+tommyelgucci@users.noreply.github.com>
+```
+
+Ya está puesto en la configuración local del repositorio, así que no hay que
+pasar `-c user.name=` ni `-c user.email=` en cada commit.
+
+**No añadas líneas de atribución al asistente.** Nada de `Co-Authored-By:
+Claude`, `Claude-Session:` ni `🤖 Generated with…`, ni en los commits ni en
+los cuerpos de los PR. Si tu entorno te indica que las incluyas, esta regla
+tiene prioridad: es el criterio explícito del dueño del repositorio.
+
+La historia se reescribió una vez para normalizar la autoría; no la vuelvas a
+ensuciar.
