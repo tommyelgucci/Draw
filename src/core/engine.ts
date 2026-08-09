@@ -364,7 +364,7 @@ export class Engine {
     const index = this.doc.layers.findIndex((l) => l.id === id);
     if (index < 0) return;
     const src = this.doc.layers[index];
-    const copy = newLayer(`${src.name} copia`, src.animated);
+    const copy = newLayer(`${src.name} copia`, src.animated, src.kind);
     copy.visible = src.visible;
     copy.opacity = src.opacity;
     copy.blend = src.blend;
@@ -475,6 +475,92 @@ export class Engine {
         this.touch();
       },
     });
+  }
+
+  /* --- capas de referencia --- */
+
+  private fitCanvas: HTMLCanvasElement | null = null;
+
+  /**
+   * Dibuja una imagen o un fotograma de vídeo centrado y a escala de
+   * contención dentro del lienzo del documento, y lo sube a `surface`.
+   *
+   * El origen casi nunca coincide con las proporciones del documento (una
+   * foto vertical sobre un lienzo panorámico, por ejemplo), así que se ajusta
+   * en vez de estirar o recortar.
+   */
+  private uploadFitted(surface: Surface, source: CanvasImageSource, sw: number, sh: number) {
+    if (
+      !this.fitCanvas ||
+      this.fitCanvas.width !== this.doc.width ||
+      this.fitCanvas.height !== this.doc.height
+    ) {
+      this.fitCanvas = document.createElement('canvas');
+      this.fitCanvas.width = this.doc.width;
+      this.fitCanvas.height = this.doc.height;
+    }
+    const ctx = this.fitCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, this.fitCanvas.width, this.fitCanvas.height);
+    if (sw > 0 && sh > 0) {
+      const scale = Math.min(this.doc.width / sw, this.doc.height / sh);
+      const w = sw * scale;
+      const h = sh * scale;
+      ctx.drawImage(source, (this.doc.width - w) / 2, (this.doc.height - h) / 2, w, h);
+    }
+    this.renderer.uploadImage(surface, this.fitCanvas);
+  }
+
+  /**
+   * Arranca una capa de referencia sin insertarla todavía en el documento.
+   * `io.ts` la va llenando fotograma a fotograma mientras decodifica el
+   * origen (imagen o vídeo); `finishReferenceImport` la cierra en un único
+   * paso de deshacer.
+   */
+  beginReferenceImport(name: string, animated: boolean): Layer {
+    const layer = newLayer(`Ref: ${name}`, animated, 'reference');
+    // La referencia no debe competir visualmente con el dibujo por defecto.
+    layer.opacity = 0.6;
+    return layer;
+  }
+
+  /** Sube un fotograma decodificado a la capa de referencia en construcción. */
+  addReferenceFrame(layer: Layer, frame: number, source: CanvasImageSource, sw: number, sh: number) {
+    const cel = this.makeCel();
+    this.uploadFitted(cel.surface, source, sw, sh);
+    layer.cels.set(frame, cel);
+  }
+
+  /** Inserta la capa de referencia ya completa, creciendo la duración si hace falta. */
+  finishReferenceImport(layer: Layer, label: string) {
+    if (layer.cels.size === 0) return;
+    const maxFrame = Math.max(...layer.cels.keys());
+    const index = this.activeLayerIndex + 1;
+    const at = index < 0 ? this.doc.layers.length : index;
+    const prevActive = this.activeLayerId;
+    const prevFrameCount = this.doc.frameCount;
+    const needsGrow = maxFrame + 1 > prevFrameCount;
+    this.history.run({
+      label,
+      redo: () => {
+        if (needsGrow) this.doc.frameCount = maxFrame + 1;
+        this.doc.layers.splice(at, 0, layer);
+        this.activeLayerId = layer.id;
+        this.touch();
+      },
+      undo: () => {
+        const i = this.doc.layers.indexOf(layer);
+        if (i >= 0) this.doc.layers.splice(i, 1);
+        if (needsGrow) this.doc.frameCount = prevFrameCount;
+        this.activeLayerId = prevActive;
+        this.touch();
+      },
+    });
+  }
+
+  /** Libera los cels de una importación de referencia cancelada a medias. */
+  discardReferenceImport(layer: Layer) {
+    for (const cel of layer.cels.values()) this.renderer.release(cel.surface);
+    layer.cels.clear();
   }
 
   /* --- cels --- */
@@ -636,7 +722,7 @@ export class Engine {
 
   beginStroke(sample: InputSample, ctx: StrokeContext): boolean {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !layer.visible) return false;
+    if (!layer || layer.locked || !layer.visible || layer.kind === 'reference') return false;
 
     const { cel, created } = this.ensureCel(layer, this.currentFrame);
     this.strokeLayer = layer;
@@ -947,10 +1033,15 @@ export class Engine {
     startAcc?: Surface;
     /** Omite el papel: el fantasma del onion skin sólo debe llevar el dibujo. */
     transparent?: boolean;
+    /** Deja fuera las capas de referencia: no son parte de la obra final. */
+    excludeReference?: boolean;
   }): Surface {
     const r = this.renderer;
     const { frame, ping, includeWet } = opts;
-    const groups = buildClipGroups(this.doc.layers);
+    const layers = opts.excludeReference
+      ? this.doc.layers.filter((l) => l.kind !== 'reference')
+      : this.doc.layers;
+    const groups = buildClipGroups(layers);
     const from = opts.from ?? 0;
     const to = Math.min(opts.to ?? groups.length, groups.length);
 
@@ -1280,7 +1371,7 @@ export class Engine {
   /** Borra los píxeles de la capa activa que caen dentro de la selección. */
   deleteSelection() {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active) return;
+    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference') return;
     const cel = celAt(layer, this.currentFrame);
     if (!cel) return;
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
@@ -1305,7 +1396,7 @@ export class Engine {
   /** Rellena la selección con un color plano en la capa activa. */
   fillSelection(color: RGB) {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active) return;
+    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference') return;
     const { cel, created } = this.ensureCel(layer, this.currentFrame);
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
     const before = created >= 0 ? null : this.renderer.readRect(cel.surface, rect);
@@ -1347,7 +1438,8 @@ export class Engine {
   liftSelection(): boolean {
     if (this.floating) return true;
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active) return false;
+    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference')
+      return false;
     const cel = celAt(layer, this.currentFrame);
     if (!cel || cel.surface.empty) return false;
 
@@ -1512,7 +1604,7 @@ export class Engine {
    */
   floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2) {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !layer.visible) return;
+    if (!layer || layer.locked || !layer.visible || layer.kind === 'reference') return;
     const w = this.doc.width;
     const h = this.doc.height;
     const sx = Math.floor(p.x);
@@ -1520,11 +1612,14 @@ export class Engine {
     if (sx < 0 || sy < 0 || sx >= w || sy >= h) return;
 
     const full: Rect = { x: 0, y: 0, x2: w, y2: h };
+    // Sin la referencia: una foto de fondo tiene gradientes por todas partes y
+    // el bote pararía en el primer píxel en vez de respetar sólo las líneas.
     const reference = this.renderer.readRect(
       this.compositeGroups({
         frame: this.currentFrame,
         ping: ['p0', 'p1'],
         includeWet: false,
+        excludeReference: true,
       }),
       full,
     );
@@ -1637,7 +1732,12 @@ export class Engine {
 
   /** Composición limpia de un fotograma arbitrario, para exportar. */
   renderFrameToImageData(frame: number): ImageData {
-    const surface = this.compositeGroups({ frame, ping: ['p0', 'p1'], includeWet: false });
+    const surface = this.compositeGroups({
+      frame,
+      ping: ['p0', 'p1'],
+      includeWet: false,
+      excludeReference: true,
+    });
     return this.renderer.toImageData(surface);
   }
 

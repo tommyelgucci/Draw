@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test:smoke": "node scripts/smoke.mjs",
     "test:responsive": "node scripts/responsive.mjs",
-    "test:selection": "node scripts/selection.mjs"
+    "test:selection": "node scripts/selection.mjs",
+    "test:reference": "node scripts/reference.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",

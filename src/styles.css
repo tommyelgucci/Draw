@@ -549,6 +549,19 @@ button:focus-visible {
   color: var(--text-dim);
 }
 
+.layer__badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
 .layer__buttons {
   display: flex;
   flex-direction: column;

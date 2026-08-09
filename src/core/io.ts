@@ -8,6 +8,7 @@ import {
   type Cel,
   type Channel,
   type Layer,
+  type LayerKind,
   type TraceDocument,
   type TransformTrack,
 } from './document';
@@ -18,6 +19,7 @@ const FORMAT_VERSION = 1;
 interface SerializedLayer {
   id: string;
   name: string;
+  kind?: LayerKind;
   visible: boolean;
   locked: boolean;
   opacity: number;
@@ -90,6 +92,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     layers.push({
       id: layer.id,
       name: layer.name,
+      kind: layer.kind,
       visible: layer.visible,
       locked: layer.locked,
       opacity: layer.opacity,
@@ -145,6 +148,8 @@ export async function deserializeProject(
     const layer: Layer = {
       id: sl.id,
       name: sl.name,
+      // Los proyectos anteriores a esta versión no llevan `kind`: son dibujo.
+      kind: sl.kind ?? 'draw',
       visible: sl.visible,
       locked: sl.locked,
       opacity: sl.opacity,
@@ -416,10 +421,107 @@ export function newProjectId(): string {
 /** Fotogramas que realmente tienen dibujo, para avisar antes de exportar. */
 export function documentIsEmpty(doc: TraceDocument): boolean {
   for (const layer of doc.layers) {
+    // Una capa de referencia no cuenta: no sale en la exportación.
+    if (layer.kind === 'reference') continue;
     for (let f = 0; f < doc.frameCount; f++) {
       const cel = celAt(layer, f);
       if (cel && !cel.surface.empty) return false;
     }
   }
   return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Importar imagen o vídeo de referencia (rotoscopia)
+ * ------------------------------------------------------------------ */
+
+function baseName(filename: string): string {
+  return filename.replace(/\.[^./]+$/, '') || filename;
+}
+
+/** Imagen suelta: una capa de referencia con un único cel sostenido. */
+export async function importReferenceImage(engine: Engine, file: File): Promise<void> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const layer = engine.beginReferenceImport(baseName(file.name), false);
+    engine.addReferenceFrame(layer, 0, bitmap, bitmap.width, bitmap.height);
+    engine.finishReferenceImport(layer, 'Importar imagen de referencia');
+  } finally {
+    bitmap.close();
+  }
+}
+
+/**
+ * Vídeo: una capa de referencia con un cel por fotograma del documento, para
+ * calcar cuadro por cuadro. Extrae buscando (`seek`) en vez de reproducir en
+ * tiempo real porque necesitamos fotogramas exactos, no lo que caiga a 60 Hz.
+ */
+export async function importReferenceVideo(
+  engine: Engine,
+  file: File,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  let layer: Layer | null = null;
+  try {
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error('No se pudo leer el vídeo.'));
+    });
+
+    const duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('El vídeo no tiene una duración válida.');
+    }
+    const fps = engine.doc.fps;
+    const frameCount = Math.max(1, Math.min(2000, Math.round(duration * fps)));
+    const startFrame = engine.currentFrame;
+
+    layer = engine.beginReferenceImport(baseName(file.name), true);
+    for (let i = 0; i < frameCount; i++) {
+      const t = Math.min(i / fps, Math.max(0, duration - 1 / fps));
+      await seekVideo(video, t);
+      engine.addReferenceFrame(layer, startFrame + i, video, video.videoWidth, video.videoHeight);
+      onProgress?.(i + 1, frameCount);
+    }
+    engine.finishReferenceImport(layer, 'Importar vídeo de referencia');
+  } catch (err) {
+    if (layer) engine.discardReferenceImport(layer);
+    throw err;
+  } finally {
+    video.src = '';
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Espera a que el vídeo tenga decodificado el fotograma en `t`.
+ *
+ * Si ya está ahí, `seeked` no llega a dispararse; y en algún navegador puede
+ * no llegar nunca. El plazo evita colgar la importación entera por un solo
+ * fotograma flojo — a cambio, en el peor caso ese fotograma sale duplicado.
+ */
+function seekVideo(video: HTMLVideoElement, t: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (Math.abs(video.currentTime - t) < 1 / 240 && video.readyState >= 2) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('seeked', finish);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, 2000);
+    video.addEventListener('seeked', finish);
+    video.currentTime = t;
+  });
 }
