@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import type { Engine } from '../core/engine';
 import { clamp } from '../core/math';
-import { evaluateSkinnedMeshPositions, type Bone } from '../core/rig';
+import { evaluatePoseWorldMatrices, evaluateSkinnedMeshPositions, type Bone } from '../core/rig';
 import type { Vec2 } from '../core/types';
 import { useEngineRevision, useUI } from '../state/store';
 import { IconKey } from './icons';
@@ -147,6 +147,48 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
     );
   }
 
+  // Fantasma del esqueleto en los cuadros vecinos — mismo alcance
+  // (`onion.before`/`after`) y mismo criterio de color que el papel cebolla
+  // de tinta (rojizo lo anterior, azulado lo posterior), para que se lea
+  // como la misma señal en vez de un elemento nuevo que aprender. Sólo
+  // pinta la POSE (cabeza→cola de cada hueso), no la malla deformada: para
+  // ver dónde caía la mano dos cuadros atrás sobra con eso.
+  let boneOnion: React.ReactNode = null;
+  if (engine.onion.enabled) {
+    const offsets: number[] = [];
+    for (let i = engine.onion.before; i >= 1; i--) offsets.push(-i);
+    for (let i = 1; i <= engine.onion.after; i++) offsets.push(i);
+    const segments: React.ReactNode[] = [];
+    for (const off of offsets) {
+      const f = engine.currentFrame + off;
+      if (f < 0 || f >= engine.doc.frameCount) continue;
+      const matrices = evaluatePoseWorldMatrices(skeleton, f);
+      for (const bone of skeleton.bones) {
+        const m = matrices.get(bone.id);
+        if (!m) continue;
+        const head = engine.docToScreen({ x: m[6], y: m[7] });
+        const tail = engine.docToScreen({ x: m[0] * bone.length + m[6], y: m[1] * bone.length + m[7] });
+        segments.push(
+          <line
+            key={`${off}-${bone.id}`}
+            x1={head.x}
+            y1={head.y}
+            x2={tail.x}
+            y2={tail.y}
+            className={off < 0 ? 'is-before' : 'is-after'}
+          />,
+        );
+      }
+    }
+    if (segments.length > 0) {
+      boneOnion = (
+        <svg className="bone-onion" aria-hidden="true">
+          {segments}
+        </svg>
+      );
+    }
+  }
+
   let handles: React.ReactNode = null;
   if (selected) {
     const headScreen = engine.docToScreen(selected.head);
@@ -263,6 +305,7 @@ export function BoneGizmoOverlay({ engine }: { engine: Engine }) {
 
   return (
     <div className="bone-overlay">
+      {boneOnion}
       {wireframe}
       <svg className="bone-outline" aria-hidden="true">
         {endpoints.map(({ bone, head, tail }) => {

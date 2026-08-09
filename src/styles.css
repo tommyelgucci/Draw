@@ -1575,6 +1575,34 @@ button:focus-visible {
   pointer-events: none;
 }
 
+/**
+ * Fantasma del esqueleto en cuadros vecinos — mismos colores que el papel
+ * cebolla de tinta (rojizo lo anterior, azulado lo posterior) para leerse
+ * como la misma señal. Va DEBAJO de `.bone-outline` en el DOM a propósito:
+ * la pose actual tiene que quedar encima, no perderse entre fantasmas.
+ */
+.bone-onion {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bone-onion line {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 4 3;
+}
+
+.bone-onion line.is-before {
+  stroke: color-mix(in srgb, #ff4053 65%, transparent);
+}
+
+.bone-onion line.is-after {
+  stroke: color-mix(in srgb, #40bfff 65%, transparent);
+}
+
 .bone-outline {
   position: absolute;
   inset: 0;
