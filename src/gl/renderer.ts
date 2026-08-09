@@ -432,12 +432,23 @@ export class Renderer {
     const gl = this.gl;
     const size = 128;
     const pixels = generateBrushTexturePixels(id, size);
+    const levels = Math.floor(Math.log2(size)) + 1;
 
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, size, size);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, size, size);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    // Sin mipmaps, una estampa pequeña en pantalla minifica el patrón de
+    // 128×128 con muestreo bilineal simple — aliasing, no un promedio del
+    // patrón — que es la causa más probable del grano casi invisible en
+    // puntas pequeñas (deuda conocida). Es la corrección de manual para
+    // minificación de texturas, sin contrapartida; en SwiftShader (las
+    // pruebas) el efecto no sale limpio de medir — dos umbrales de "cuánto
+    // se ve" distintos dieron resultados contradictorios entre sí, así que
+    // el test de abajo no afirma una mejora medida, sólo que sigue
+    // dejando grano visible.
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     // El UV de la estampa (vLocal*0.5+0.5) siempre cae en 0..1 exacto: no hay
     // que envolver el borde, así que CLAMP evita cualquier fuga entre bordes.

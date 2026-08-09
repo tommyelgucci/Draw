@@ -116,6 +116,71 @@ check(
   `${(defaultRatio * 100).toFixed(1)}%`,
 );
 
+/**
+ * Fracción de píxeles que se distinguen del papel en blanco, sin exigir que
+ * sean oscuros del todo: el grano de una punta pequeña es tenue por
+ * naturaleza, así que el umbral estricto de `inkRatio` (pensado para
+ * comparar cobertura opaca entre puntas) lo dejaría casi todo fuera. Aquí
+ * lo que importa es si el grano se ve, no cuánto oscurece.
+ */
+async function visibleRatio(centerY, halfHeight) {
+  return page.evaluate(
+    ({ cx, centerY, halfHeight }) => {
+      const c = document.querySelector('canvas');
+      const gl = c.getContext('webgl2');
+      const dpr = c.width / c.clientWidth;
+      const x0 = Math.max(0, Math.round((cx - 260) * dpr));
+      const x1 = Math.min(c.width, Math.round((cx + 260) * dpr));
+      const y0 = Math.max(0, Math.round((centerY - halfHeight) * dpr));
+      const y1 = Math.min(c.height, Math.round((centerY + halfHeight) * dpr));
+      const w = x1 - x0;
+      const h = y1 - y0;
+      const px = new Uint8Array(w * h * 4);
+      const glY0 = c.height - y1;
+      gl.readPixels(x0, glY0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      let visible = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250) visible++;
+      }
+      return visible / (w * h);
+    },
+    { cx, centerY, halfHeight },
+  );
+}
+
+log('\n— Textura con la punta pequeña (deuda conocida: se veía casi invisible) —');
+// Lienzo limpio: si no, el trazo de esta sección se superpone al del
+// escenario anterior en el mismo `cy` y la medición mezcla ambos.
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1000);
+await page.evaluate(() => {
+  const s = window.__uiStore.getState();
+  const i = s.brushes.findIndex((b) => b.id === 'graphite');
+  s.setBrushIndex(i);
+  // Por debajo de ~12px es donde se perdía el grano — ver CHECKPOINT.md.
+  // Sin dinámicas de presión/dispersión de por medio: aquí sólo importa el
+  // muestreo de la textura, no cuánto varía estampa a estampa.
+  s.updateBrush({
+    size: 8,
+    opacity: 1,
+    flow: 1,
+    hardness: 0.6,
+    pressureSize: 0,
+    pressureOpacity: 0,
+    jitterSize: 0,
+    scatter: 0,
+  });
+});
+await page.waitForTimeout(150);
+await strokeLine(cy);
+await page.screenshot({ path: `${out}/brush-tex-02-pequena.png` });
+const smallRatio = await visibleRatio(cy, 6);
+check(
+  'una punta texturizada pequeña deja el grano visible, no casi invisible',
+  smallRatio > 0.25,
+  `${(smallRatio * 100).toFixed(1)}%`,
+);
+
 log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 
