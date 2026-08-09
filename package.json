@@ -13,12 +13,15 @@
     "test:selection": "node scripts/selection.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",
-    "test:brushes": "node scripts/kit-sanity.mjs"
+    "test:brushes": "node scripts/kit-sanity.mjs",
+    "test:video": "node scripts/video.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
+    "mp4-muxer": "^5.2.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "webm-muxer": "^5.1.4",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

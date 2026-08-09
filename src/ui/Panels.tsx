@@ -26,6 +26,7 @@ import {
   importReferenceVideo,
   serializeProject,
 } from '../core/io';
+import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/video';
 import { useActiveBrush, useEngineRevision, useUI } from '../state/store';
 import { Field, IconButton, Panel, Slider } from './controls';
 import {
@@ -685,6 +686,23 @@ export function ExportPanel({ engine }: { engine: Engine }) {
   const setBusy = useUI((s) => s.setBusy);
   useEngineRevision(engine);
   const [progress, setProgress] = useState<string | null>(null);
+  const [videoQuality, setVideoQuality] = useState(0.7);
+  // Consultar los códecs es asíncrono, pero el resultado no cambia durante la
+  // sesión. Hasta que responde se muestra el botón deshabilitado.
+  const [videoSupport, setVideoSupport] = useState<VideoSupport>({
+    available: false,
+    realtime: false,
+    label: 'comprobando…',
+  });
+  useEffect(() => {
+    let cancelled = false;
+    describeVideoSupport(engine.doc.width, engine.doc.height, engine.doc.fps).then((s) => {
+      if (!cancelled) setVideoSupport(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [engine.doc.width, engine.doc.height, engine.doc.fps]);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const safeName = (engine.doc.name || 'trace').replace(/[^\w-]+/g, '_');
@@ -800,6 +818,40 @@ export function ExportPanel({ engine }: { engine: Engine }) {
 
       <h3 className="panel__subtitle">Exportar</h3>
       <button
+        className="btn"
+        disabled={!videoSupport.available}
+        onClick={() =>
+          run('Exportando vídeo…', async () => {
+            const result = await exportVideo(engine, {
+              quality: videoQuality,
+              onProgress: (d, t) => setProgress(`${d}/${t}`),
+            });
+            downloadBlob(result.blob, `${safeName}.${result.extension}`);
+          })
+        }
+      >
+        <IconDownload size={16} /> Vídeo · {videoSupport.label}
+      </button>
+      <div className="field-row">
+        <Field label="Calidad del vídeo">
+          <select
+            value={videoQuality}
+            onChange={(e) => setVideoQuality(Number(e.target.value))}
+          >
+            <option value={0.35}>Ligera</option>
+            <option value={0.7}>Normal</option>
+            <option value={1}>Alta</option>
+          </select>
+        </Field>
+      </div>
+      {videoSupport.realtime && (
+        <p className="hint">
+          Este navegador no expone WebCodecs, así que el vídeo se graba en tiempo real:
+          una animación de {(engine.doc.frameCount / engine.doc.fps).toFixed(1)} s tardará
+          eso mismo en exportarse. No cambies de pestaña mientras tanto.
+        </p>
+      )}
+      <button
         className="btn btn--ghost"
         onClick={() =>
           run('Exportando PNG…', async () => {
@@ -834,8 +886,9 @@ export function ExportPanel({ engine }: { engine: Engine }) {
       </button>
       {progress && <p className="hint">Fotograma {progress}</p>}
       <p className="hint">
-        El APNG conserva transparencia y color sin pérdida, y se reproduce en cualquier
-        navegador y en Fotos de iOS. Para editar en otro programa, usa la secuencia PNG.
+        El vídeo es lo que sirve para publicar y para montar en un editor. El APNG
+        conserva transparencia y color sin pérdida pero pesa mucho más; la secuencia de
+        PNG es la opción sin pérdidas para seguir trabajando en otro programa.
       </p>
 
       <h3 className="panel__subtitle">Copia local</h3>

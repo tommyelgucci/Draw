@@ -17,6 +17,7 @@ npm run test:responsive   iPhone y iPad sin desbordes ni controles fuera de pant
 npm run test:reference    TODO EN VERDE   (14 comprobaciones, imagen + vídeo real vía MediaRecorder)
 npm run test:brush-texture TODO EN VERDE  (8 comprobaciones)
 npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borran de verdad)
+npm run test:video        TODO EN VERDE   (13 comprobaciones; el vídeo se decodifica y se le ven los trazos)
 npx oxlint                sin warnings
 npm run build             323 kB / 101 kB gzip
 ```
@@ -94,8 +95,13 @@ npm run build             323 kB / 101 kB gzip
 - Formato `.trace` (zip con cels en PNG y estructura en JSON); ida y vuelta
   comprobada.
 - Autoguardado en IndexedDB cada dos minutos con recuperación al abrir.
-- Exportar: PNG del cuadro actual, APNG animado (con chunk `acTL` verificado),
-  secuencia de PNG en zip.
+- Exportar: **vídeo (MP4 H.264 o WebM VP9)**, PNG del cuadro actual, APNG
+  animado (con chunk `acTL` verificado) y secuencia de PNG en zip.
+- El vídeo se codifica con WebCodecs, que va tan rápido como pueda la máquina
+  y pone tiempos exactos por fotograma. Hay dos rutas de reserva encadenadas:
+  si falta el codificador H.264 se usa VP9 en WebM, y si no hay WebCodecs se
+  graba con `MediaRecorder` en tiempo real. La interfaz avisa cuál toca antes
+  de empezar, porque la última tarda lo que dure la animación.
 
 ### Interfaz
 - Gestos de Procreate: dos dedos navegan, toque de dos o tres dedos deshace o
@@ -135,6 +141,14 @@ Todos salieron de mirar capturas, no del compilador:
    de origen y destino.
 7. **Presupuesto de texturas por número en vez de por memoria**: 40 texturas
    son 13 MB en un lienzo de 512² y 670 MB en uno de 4K.
+9. **La ruta de vídeo suponía que WebCodecs implica H.264.** Chromium
+   compilado sin códecs propietarios —el de muchas distribuciones de Linux y
+   varios Android— decodifica H.264 pero no lo codifica: `isConfigSupported`
+   dice que no a los cinco perfiles AVC y sí a VP8, VP9 y AV1. La versión
+   inicial caía en silencio a la grabación en tiempo real (1855 ms para 1 s de
+   animación) teniendo WebCodecs delante. Con la ruta VP9/WebM añadida, el
+   mismo caso tarda 434 ms. Encontrado porque el test comprobaba *qué* ruta se
+   usó, no sólo que saliera un archivo.
 8. **`drawStamps` podía formar un feedback loop de WebGL y fallar en
    silencio.** Si un trazo anterior dejaba la textura del scratch `wet`
    enlazada en la unidad 0 (lo que hace `drawOver` al volcarlo sobre el cel)
@@ -151,12 +165,18 @@ Todos salieron de mirar capturas, no del compilador:
 
 ## Lo siguiente
 
-Por orden, según `RUMBO.md` (Fase 1):
+Con el vídeo exportando, la Fase 1 sólo tiene pendiente lo que no se puede
+hacer desde aquí:
 
-1. **Exportar a MP4/WebM.** El APNG sirve para compartir, no para editar
-   después en otro programa.
+1. **Probarlo en un iPad de verdad.** Todo está verificado con tests y
+   capturas, nunca dibujando. Es además la única forma de saber si la latencia
+   molesta, que es la decisión que gobierna el resto del rumbo.
 2. **Perfilar un proyecto real** —muchas capas, cientos de cels— y medir la
-   memoria en un iPad físico, no en el emulador.
+   memoria en el dispositivo, no en el emulador.
+3. **Verificar la ruta MP4.** El Chromium de las pruebas no codifica H.264, así
+   que sólo se ha ejercitado la ruta VP9/WebM. El código de MP4 compila y usa
+   un muxer probado, pero no se ha visto producir un archivo aquí; en Safari,
+   que sí trae H.264, debería tomar esa rama.
 
 ## Deuda conocida
 

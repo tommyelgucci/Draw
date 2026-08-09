@@ -83,8 +83,14 @@ durante 700 ms después de usar el lápiz.
 
 - Formato `.trace` (zip con los cels en PNG y la estructura en JSON).
 - Autoguardado en IndexedDB cada dos minutos, con recuperación al abrir.
-- Exportar el cuadro actual a PNG, la animación a APNG, o la secuencia
-  completa a un zip de PNG.
+- Exportar a vídeo (MP4 H.264 o WebM VP9), el cuadro actual a PNG, la
+  animación a APNG, o la secuencia completa a un zip de PNG.
+
+El vídeo usa WebCodecs, que codifica a la velocidad que dé la máquina en vez
+de grabar en tiempo real. Si el navegador tiene la API pero no el codificador
+H.264 —pasa en Chromium sin códecs propietarios— cambia a VP9 en WebM; y si no
+hay WebCodecs, graba con `MediaRecorder`. La interfaz dice qué ruta va a usar
+antes de empezar.
 
 El APNG se ensambla reempaquetando los chunks de los PNG que ya genera el
 canvas, así que conserva transparencia y color sin pérdida y sin arrastrar un
@@ -134,6 +140,7 @@ app de dibujo son visuales:
 ```bash
 npm run test:smoke        # dibujo, deshacer, sostenido, onion, capas, export
 npm run test:selection    # selección, recorte, transformación libre
+npm run test:video        # exportación de vídeo, decodificada y comprobada
 npm run test:responsive   # maquetación en iPhone e iPad
 ```
 
@@ -154,6 +161,7 @@ src/
     history.ts    pila de deshacer con presupuesto de memoria
     engine.ts     composición, trazos, reproducción, herramientas
     io.ts         .trace, PNG, APNG, IndexedDB
+    video.ts      exportación a MP4/WebM con WebCodecs
   gl/         la única parte específica de WebGL
     shaders.ts    GLSL ES 3.00
     renderer.ts   superficies, pool de texturas, pases de dibujo
