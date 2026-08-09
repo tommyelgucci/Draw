@@ -665,6 +665,14 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           format={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => updateBrush({ spacing: v })}
         />
+        <Slider
+          label="Afinado de extremos"
+          value={brush.taper}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => updateBrush({ taper: v })}
+        />
 
         <h3 className="panel__subtitle">Dinámicas</h3>
         <Slider

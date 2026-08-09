@@ -1,5 +1,5 @@
 import { Renderer, type Surface } from '../gl/renderer';
-import { StrokeBuilder, type BrushPreset } from './brush';
+import { StrokeBuilder, TAPER_LENGTH_FACTOR, taperScale, type BrushPreset } from './brush';
 import {
   buildClipGroups,
   celAt,
@@ -263,6 +263,15 @@ export class Engine {
    * que necesita el reconocedor de QuickShape; `StrokeBuilder` ya filtra y
    * suaviza el suyo, así que se lleva por separado sin tocarlo. */
   private strokeRawPoints: Vec2[] = [];
+  /** Estampas del extremo del trazo en curso que todavía podrían volver a
+   * escalarse: mientras la mano siga en movimiento, `rasterizeLayer` las
+   * redibuja cada fotograma contra la punta viva (igual que `predictedStamps`
+   * más abajo). Sólo se "queman" en `wet` cuando quedan a más de la longitud
+   * de afinado del pincel actual — así la cola nunca crece con el trazo
+   * entero, sólo con esa distancia fija. Vacío salvo pincel con `taper > 0`. */
+  private tailStamps: { stamp: Stamp; dist: number }[] = [];
+  private strokeLen = 0;
+  private lastTailPos: Vec2 | null = null;
 
   constructor(canvas: HTMLCanvasElement, doc?: TraceDocument) {
     this.renderer = new Renderer(canvas);
@@ -1699,6 +1708,9 @@ export class Engine {
     this.strokeRect = emptyRect();
     this.predictedStamps = [];
     this.strokeRawPoints = [{ x: sample.x, y: sample.y }];
+    this.tailStamps = [];
+    this.strokeLen = 0;
+    this.lastTailPos = null;
 
     this.renderer.clear(this.renderer.scratch('wet'));
     this.renderer.clear(this.renderer.scratch('predict'));
@@ -1745,18 +1757,69 @@ export class Engine {
 
   private commitStamps(stamps: Stamp[]) {
     if (stamps.length === 0 || !this.strokeCtx) return;
+    // El rectángulo sucio usa el tamaño sin afinar como cota (la versión
+    // afinada siempre es igual o más pequeña) y tiene que cubrir también las
+    // copias reflejadas de la simetría, o un trazo cerca de un eje dejaría
+    // su mitad reflejada fuera del área que se lee para deshacer.
+    const allForRect = [...stamps, ...this.mirrorStamps(stamps)];
+    for (const s of allForRect) {
+      expandRect(this.strokeRect, s.x, s.y, s.size * 0.75 + 2);
+    }
+
+    if (this.strokeCtx.brush.taper <= 0) {
+      this.drawToWet(stamps, this.strokeCtx);
+      return;
+    }
+
+    // Con afinado de cierre no se quema directo: cada estampa nueva entra a
+    // la cola y sólo se vuelca a `wet` cuando queda a más de la longitud de
+    // afinado de la punta viva — momento en el que su tamaño definitivo ya
+    // no puede cambiar. Lo que sigue en la cola se redibuja cada fotograma
+    // en `rasterizeLayer`, igual que las estampas especulativas.
+    const taperLen = this.strokeCtx.brush.size * TAPER_LENGTH_FACTOR * this.strokeCtx.brush.taper;
+    for (const s of stamps) {
+      if (this.lastTailPos) {
+        this.strokeLen += Math.hypot(s.x - this.lastTailPos.x, s.y - this.lastTailPos.y);
+      }
+      this.lastTailPos = { x: s.x, y: s.y };
+      this.tailStamps.push({ stamp: s, dist: this.strokeLen });
+    }
+    const promoted: Stamp[] = [];
+    while (this.tailStamps.length > 0 && this.strokeLen - this.tailStamps[0].dist > taperLen) {
+      promoted.push(this.tailStamps.shift()!.stamp);
+    }
+    if (promoted.length > 0) this.drawToWet(promoted, this.strokeCtx);
+  }
+
+  /** Único punto donde el trazo en curso llega a `wet`: quemado directo sin
+   * afinado, estampas promovidas de la cola, o el cierre en `finalizeTail`.
+   * Reflejar aquí, no en cada llamador, es lo que garantiza que la simetría
+   * cubra los tres caminos sin repetir el cálculo. */
+  private drawToWet(stamps: Stamp[], ctx: StrokeContext) {
+    if (stamps.length === 0) return;
     const wet = this.renderer.scratch('wet');
-    const texId = this.strokeCtx.brush.textureId;
+    const texId = ctx.brush.textureId;
     const allStamps = [...stamps, ...this.mirrorStamps(stamps)];
     this.renderer.drawStamps(
       wet,
       allStamps,
-      this.strokeCtx.color,
+      ctx.color,
       texId ? this.renderer.getBrushTexture(texId) : undefined,
     );
-    for (const s of allStamps) {
-      expandRect(this.strokeRect, s.x, s.y, s.size * 0.75 + 2);
-    }
+  }
+
+  /** Al soltar el lápiz ya se sabe la longitud real del trazo: lo que
+   * quedaba en la cola se quema en `wet` con su escala definitiva en vez de
+   * seguir esperando un fotograma más que no va a llegar. */
+  private finalizeTail() {
+    if (this.tailStamps.length === 0 || !this.strokeCtx) return;
+    const ctx = this.strokeCtx;
+    const final = this.tailStamps.map(({ stamp, dist }) => {
+      const ratio = taperScale(this.strokeLen - dist, ctx.brush);
+      return ratio >= 1 ? stamp : { ...stamp, size: stamp.size * ratio };
+    });
+    this.drawToWet(final, ctx);
+    this.tailStamps = [];
   }
 
   endStroke() {
@@ -1765,6 +1828,7 @@ export class Engine {
       return;
     }
     this.commitStamps(this.builder.end());
+    this.finalizeTail();
     this.predictedStamps = [];
     this.renderer.clear(this.renderer.scratch('predict'));
 
@@ -1826,6 +1890,9 @@ export class Engine {
     this.strokeLayer = null;
     this.createdCelFrame = -1;
     this.predictedStamps = [];
+    this.tailStamps = [];
+    this.strokeLen = 0;
+    this.lastTailPos = null;
     this.renderer.clear(this.renderer.scratch('wet'));
     this.renderer.clear(this.renderer.scratch('predict'));
     this.touch();
@@ -2296,6 +2363,27 @@ export class Engine {
         erase,
         mask,
       );
+      if (isStrokeTarget && this.tailStamps.length > 0) {
+        // Cola de afinado de cierre: no está quemada en `wet` todavía porque
+        // su escala definitiva depende de dónde termine cayendo la punta
+        // viva, así que se recalcula contra `this.strokeLen` actual en cada
+        // fotograma — mismo mecanismo que la especulación de abajo, sólo que
+        // aquí las estampas ya son reales, no extrapoladas.
+        const tail = this.renderer.scratch('tail');
+        this.renderer.clear(tail);
+        const texId = wetCtx.brush.textureId;
+        const scaled = this.tailStamps.map(({ stamp, dist }) => {
+          const ratio = taperScale(this.strokeLen - dist, wetCtx.brush);
+          return ratio >= 1 ? stamp : { ...stamp, size: stamp.size * ratio };
+        });
+        this.renderer.drawStamps(
+          tail,
+          [...scaled, ...this.mirrorStamps(scaled)],
+          wetCtx.color,
+          texId ? this.renderer.getBrushTexture(texId) : undefined,
+        );
+        this.renderer.drawOver(combined, tail, wetCtx.brush.opacity, undefined, erase, mask);
+      }
       if (isStrokeTarget && this.predictedStamps.length > 0) {
         const predict = this.renderer.scratch('predict');
         this.renderer.clear(predict);

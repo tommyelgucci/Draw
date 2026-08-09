@@ -45,6 +45,10 @@ export interface BrushPreset {
   scatter: number;
   /** La punta gira siguiendo la dirección del trazo. */
   followDirection: boolean;
+  /** Afina ambos extremos del trazo hasta un punto, 0 = sin afinar. La
+   * longitud real en píxeles escala con `size` (ver `taperScale`), así que
+   * el mismo valor se ve proporcional en una punta fina que en una gruesa. */
+  taper: number;
   /** Achatamiento fijo de la punta, 1 = círculo. */
   aspect: number;
   /** Borra en vez de pintar. */
@@ -72,6 +76,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.12,
     scatter: 0.05,
     followDirection: true,
+    taper: 0.3,
     aspect: 1,
     erase: false,
     // Lisa por defecto: es el pincel activo al abrir la app y no debe
@@ -96,6 +101,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.15,
     scatter: 0.08,
     followDirection: true,
+    taper: 0.15,
     aspect: 1,
     erase: false,
     // A este tamaño el grano ya se lee: por debajo de ~12px se pierde (ver
@@ -119,6 +125,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.1,
     scatter: 0.04,
     followDirection: true,
+    taper: 0.25,
     aspect: 0.9,
     erase: false,
     textureId: 'grain',
@@ -140,6 +147,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.2,
     scatter: 0.15,
     followDirection: true,
+    taper: 0.1,
     aspect: 0.7,
     erase: false,
     textureId: 'chalk',
@@ -163,6 +171,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    taper: 0.45,
     aspect: 1,
     erase: false,
     textureId: null,
@@ -186,6 +195,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    taper: 0.2,
     aspect: 1,
     erase: false,
     textureId: null,
@@ -209,6 +219,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    taper: 0.15,
     aspect: 0.15,
     erase: false,
     textureId: null,
@@ -230,6 +241,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    taper: 0,
     aspect: 0.35,
     erase: false,
     textureId: null,
@@ -253,6 +265,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.08,
     scatter: 0.12,
     followDirection: true,
+    taper: 0.15,
     aspect: 0.85,
     erase: false,
     textureId: 'canvas',
@@ -276,6 +289,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: false,
+    taper: 0.1,
     aspect: 1,
     erase: false,
     // La textura de tiza, a baja intensidad, se lee como el granulado del
@@ -299,6 +313,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.03,
     followDirection: true,
+    taper: 0.1,
     aspect: 0.9,
     erase: false,
     // Mate y opaco, sin grano: la acuarela ya cubre ese territorio.
@@ -321,6 +336,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: true,
+    taper: 0.1,
     aspect: 0.8,
     erase: false,
     textureId: 'canvas',
@@ -344,6 +360,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    taper: 0,
     aspect: 1,
     erase: false,
     // Con flujo tan bajo, cualquier textura lo deja casi invisible: liso.
@@ -368,6 +385,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0.1,
     followDirection: false,
+    taper: 0,
     aspect: 1,
     erase: false,
     textureId: 'splatter',
@@ -389,6 +407,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.2,
     scatter: 0.2,
     followDirection: false,
+    taper: 0,
     aspect: 0.7,
     erase: false,
     textureId: 'chalk',
@@ -410,6 +429,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: true,
+    taper: 0,
     aspect: 0.6,
     erase: false,
     textureId: 'canvas',
@@ -433,6 +453,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    taper: 0,
     aspect: 1,
     erase: true,
     textureId: null,
@@ -456,6 +477,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    taper: 0,
     aspect: 1,
     erase: true,
     textureId: null,
@@ -489,6 +511,11 @@ export class StrokeBuilder {
   private emittedUpTo = 0;
   private speed = 0;
   private lastEmit: { x: number; y: number } | null = null;
+  /** Distancia recorrida desde el primer punto del trazo: es lo único que
+   * hace falta para el afinado de arranque, que por eso se resuelve aquí en
+   * caliente. El de cierre no puede — no se sabe cuánto falta para soltar el
+   * lápiz — y lo resuelve `Engine` reescalando la cola en cada fotograma. */
+  private distFromStart = 0;
 
   private brush: BrushPreset;
 
@@ -514,12 +541,13 @@ export class StrokeBuilder {
     this.emittedUpTo = 0;
     this.speed = 0;
     this.lastEmit = null;
+    this.distFromStart = 0;
     this.configureFilters();
     this.addAnchor(sample);
     // Un toque sin arrastre debe dejar una marca: emitimos la primera estampa ya.
     const a = this.anchors[0];
     this.lastEmit = { x: a.x, y: a.y };
-    return [this.makeStamp(a, 0)];
+    return [this.makeStamp(a, 0, 0)];
   }
 
   /** Añade una muestra real y devuelve las estampas nuevas confirmadas. */
@@ -644,7 +672,7 @@ export class StrokeBuilder {
       };
       const spacingPx = Math.max(
         0.5,
-        this.stampSize(interp) * this.brush.spacing,
+        this.stampSize(interp, this.distFromStart) * this.brush.spacing,
       );
 
       let travelled = 0;
@@ -658,7 +686,10 @@ export class StrokeBuilder {
         const dir = this.lastEmit
           ? Math.atan2(sy - this.lastEmit.y, sx - this.lastEmit.x)
           : 0;
-        out.push(this.makeStamp({ ...interp, x: sx, y: sy }, dir));
+        if (this.lastEmit) {
+          this.distFromStart += Math.hypot(sx - this.lastEmit.x, sy - this.lastEmit.y);
+        }
+        out.push(this.makeStamp({ ...interp, x: sx, y: sy }, dir, this.distFromStart));
         this.lastEmit = { x: sx, y: sy };
       }
       this.leftover += segLen - travelled;
@@ -667,7 +698,7 @@ export class StrokeBuilder {
     }
   }
 
-  private stampSize(a: Anchor): number {
+  private stampSize(a: Anchor, distFromStart: number): number {
     const b = this.brush;
     let size = b.size;
 
@@ -679,12 +710,13 @@ export class StrokeBuilder {
       const norm = clamp(a.speed / 2.5, 0, 1);
       size *= 1 - b.velocitySize * norm;
     }
+    if (b.taper > 0) size *= taperScale(distFromStart, b);
     return Math.max(0.4, size);
   }
 
-  private makeStamp(a: Anchor, direction: number): Stamp {
+  private makeStamp(a: Anchor, direction: number, distFromStart: number): Stamp {
     const b = this.brush;
-    let size = this.stampSize(a);
+    let size = this.stampSize(a, distFromStart);
 
     if (b.jitterSize > 0) {
       size *= 1 - b.jitterSize * Math.random();
@@ -736,4 +768,31 @@ function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): 
       (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
       (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
   );
+}
+
+/** A `taper = 1` afina a lo largo de esta cantidad de diámetros de la punta:
+ * así el afinado se ve proporcional al tamaño del pincel en vez de a un
+ * número fijo de píxeles que resultaría invisible en una punta gruesa o
+ * desproporcionado en una fina. */
+export const TAPER_LENGTH_FACTOR = 6;
+
+/** El extremo nunca cierra a tamaño cero: un pincel real deja de tocar el
+ * papel antes de desaparecer del todo, y en píxeles un 0 exacto además
+ * dispara el `Math.max(0.4, size)` de `stampSize`, que rompería la curva. */
+const TAPER_MIN_SCALE = 0.1;
+
+/**
+ * Factor 0..1 según qué tan cerca está una estampa de un extremo que se
+ * afina. `dist` es la distancia en píxeles de documento a ese extremo —
+ * desde el arranque para la punta inicial, desde el final para la de
+ * cierre — así que la misma función sirve para ambas.
+ */
+export function taperScale(dist: number, brush: BrushPreset): number {
+  if (brush.taper <= 0) return 1;
+  const len = brush.size * TAPER_LENGTH_FACTOR * brush.taper;
+  if (len <= 0) return 1;
+  const t = clamp(dist / len, 0, 1);
+  // Ease-out: crece rápido nada más despegar del punto y se estabiliza
+  // pronto, como la punta real de un lápiz apoyándose en el papel.
+  return TAPER_MIN_SCALE + (1 - TAPER_MIN_SCALE) * (1 - (1 - t) * (1 - t));
 }
