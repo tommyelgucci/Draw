@@ -52,6 +52,7 @@ import {
   type Skeleton,
 } from './rig';
 import {
+  rasterizeMask,
   rasterizeSelection,
   rectCorners,
   shapeBounds,
@@ -152,6 +153,26 @@ export interface PendingLasso {
   mode: SelectionMode;
 }
 
+/**
+ * Selección "varita mágica" en marcha: la referencia compuesta se lee UNA
+ * vez al empezar (coste fijo caro, por GPU) y se cachea aquí — arrastrar
+ * para ajustar la tolerancia sólo repite el flood-fill en CPU sobre esta
+ * misma referencia, sin volver a leer la GPU en cada muestra de arrastre.
+ */
+export interface PendingWand {
+  reference: Uint8Array;
+  w: number;
+  h: number;
+  sx: number;
+  sy: number;
+  tolerance: number;
+  mode: SelectionMode;
+  /** Límites de la última vista previa — para acotar el escaneo de
+   *  `commitSelectionCanvas` al soltar, en vez de recorrer todo el
+   *  documento otra vez. */
+  lastRect: Rect;
+}
+
 /** Píxeles levantados de UN cel dentro de una transformación flotante. */
 export interface FloatingCel {
   /** Fotograma donde empieza este cel de origen. */
@@ -224,8 +245,13 @@ export class Engine {
   floating: FloatingSelection | null = null;
   pendingQuickShape: PendingQuickShape | null = null;
   pendingLasso: PendingLasso | null = null;
+  pendingWand: PendingWand | null = null;
   private selectionCanvas: HTMLCanvasElement | null = null;
   private selectionBackup: HTMLCanvasElement | null = null;
+  /** Límites de `selectionBackup` en el momento de guardarlo — lo que hacía
+   *  falta para poder acotar `commitSelectionCanvas` a la zona realmente
+   *  tocada en vez de escanear el documento entero cada vez. */
+  private selectionBackupBounds: Rect = emptyRect();
   /** Arrastre de IK de 2 huesos en marcha — `bendSign` se fija al empezar y
    *  se mantiene todo el gesto, ver `bendSignFor` en `rig.ts`. */
   private ikDrag: {
@@ -2725,28 +2751,55 @@ export class Engine {
     return this.selectionCanvas;
   }
 
-  /** Sube la máscara rasterizada a GPU y recalcula sus límites reales. */
-  private commitSelectionCanvas() {
-    const canvas = this.selectionSurfaceCanvas();
+  /** Limpia la máscara de GPU y la resube desde el canvas 2D — el paso que
+   *  comparten `commitSelectionCanvas` y cualquier atajo que ya conozca los
+   *  límites de sobra y no necesite escanear nada. */
+  private uploadSelectionMask() {
     const mask = this.selectionMask;
     this.renderer.clear(mask);
-    this.renderer.uploadImage(mask, canvas);
+    this.renderer.uploadImage(mask, this.selectionSurfaceCanvas());
+  }
 
-    const data = canvas
-      .getContext('2d')!
-      .getImageData(0, 0, canvas.width, canvas.height).data;
+  /**
+   * Sube la máscara rasterizada a GPU y recalcula sus límites reales.
+   *
+   * `scanRect`, si se da, acota dónde puede haber cambiado algo: componer
+   * con replace/add/subtract sólo puede tocar píxeles dentro de la forma
+   * nueva o, como mucho, dentro de la unión con lo que ya hubiera
+   * seleccionado antes — nunca más allá. Escanear sólo esa caja en vez del
+   * documento entero es la diferencia entre recorrer unos cientos de miles
+   * de píxeles y varios millones en un lienzo grande, y no es una
+   * aproximación: da exactamente el mismo resultado porque fuera de esa
+   * caja no hay nada que pueda haber cambiado. Sin `scanRect` (invertir
+   * selección, que sí puede tocar cualquier píxel) se escanea todo.
+   */
+  private commitSelectionCanvas(scanRect?: Rect) {
+    const canvas = this.selectionSurfaceCanvas();
+    this.uploadSelectionMask();
+
+    const region = scanRect
+      ? clampRect(scanRect, canvas.width, canvas.height)
+      : { x: 0, y: 0, x2: canvas.width, y2: canvas.height };
+    const rw = region.x2 - region.x;
+    const rh = region.y2 - region.y;
+
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (let y = 0; y < canvas.height; y++) {
-      const row = y * canvas.width;
-      for (let x = 0; x < canvas.width; x++) {
-        if (data[(row + x) * 4 + 3] > 8) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
+    if (rw > 0 && rh > 0) {
+      const data = canvas.getContext('2d')!.getImageData(region.x, region.y, rw, rh).data;
+      for (let y = 0; y < rh; y++) {
+        const row = y * rw;
+        for (let x = 0; x < rw; x++) {
+          if (data[(row + x) * 4 + 3] > 8) {
+            const docX = region.x + x;
+            const docY = region.y + y;
+            if (docX < minX) minX = docX;
+            if (docX > maxX) maxX = docX;
+            if (docY < minY) minY = docY;
+            if (docY > maxY) maxY = docY;
+          }
         }
       }
     }
@@ -2784,6 +2837,7 @@ export class Engine {
     const ctx = this.selectionBackup.getContext('2d')!;
     ctx.clearRect(0, 0, src.width, src.height);
     ctx.drawImage(src, 0, 0);
+    this.selectionBackupBounds = this.selection.active ? this.selection.bounds : emptyRect();
   }
 
   private restoreSelectionBackup() {
@@ -2818,7 +2872,13 @@ export class Engine {
     if (points.length === 0) return;
     this.restoreSelectionBackup();
     rasterizeSelection(this.selectionSurfaceCanvas(), shape, points, mode);
-    this.commitSelectionCanvas();
+    const newBounds = shapeBounds(shape, points, this.doc.width, this.doc.height);
+    // "replace" empieza limpiando el canvas: todo lo de fuera de la forma
+    // nueva ya es transparente, así que no hace falta la unión con lo
+    // anterior. add/subtract sí pueden dejar contenido fuera de la forma
+    // nueva (lo que ya hubiera antes), de ahí la unión.
+    const scanRect = mode === 'replace' ? newBounds : unionRect(this.selectionBackupBounds, newBounds);
+    this.commitSelectionCanvas(scanRect);
   }
 
   /**
@@ -2869,7 +2929,88 @@ export class Engine {
     if (!this.pendingLasso) return;
     this.pendingLasso = null;
     this.restoreSelectionBackup();
-    this.commitSelectionCanvas();
+    // Tras restaurar, el contenido es exactamente el de antes del gesto:
+    // sus límites de entonces ya acotan dónde puede haber algo.
+    this.commitSelectionCanvas(this.selectionBackupBounds);
+  }
+
+  /**
+   * Arranca una selección "varita mágica": semilla + tolerancia inicial.
+   * Lee la referencia compuesta una sola vez — ver `PendingWand` — y deja
+   * ya la primera vista previa, igual que tocar sin arrastrar en Procreate.
+   */
+  beginSelectWand(p: Vec2, mode: SelectionMode, tolerance = 0.15): boolean {
+    const w = this.doc.width;
+    const h = this.doc.height;
+    const sx = Math.floor(p.x);
+    const sy = Math.floor(p.y);
+    if (sx < 0 || sy < 0 || sx >= w || sy >= h) return false;
+
+    this.beginSelectionDrag();
+    // Misma referencia que `floodFill`: el documento compuesto, no una capa
+    // suelta, para que la selección respete líneas que estén en otra capa.
+    const reference = this.renderer.readRect(
+      this.compositeGroups({
+        frame: this.currentFrame,
+        ping: ['p0', 'p1'],
+        includeWet: false,
+        excludeReference: true,
+      }),
+      { x: 0, y: 0, x2: w, y2: h },
+    );
+    this.pendingWand = { reference, w, h, sx, sy, tolerance: clamp(tolerance, 0, 1), mode, lastRect: emptyRect() };
+    this.previewSelectWand();
+    return true;
+  }
+
+  /** Reajusta la tolerancia (0..1) mientras se sigue arrastrando — el
+   *  "arrastra hacia la izquierda o derecha" de la varita de Procreate. */
+  updateSelectWandTolerance(tolerance: number) {
+    if (!this.pendingWand) return;
+    this.pendingWand.tolerance = clamp(tolerance, 0, 1);
+    this.previewSelectWand();
+  }
+
+  /** Vista previa: recorre de nuevo el flood-fill en CPU sobre la
+   *  referencia ya cacheada, no vuelve a leer la GPU. */
+  private previewSelectWand() {
+    const pending = this.pendingWand;
+    if (!pending) return;
+    const { filled, minX, minY, maxX, maxY } = this.floodMatch(
+      pending.reference,
+      pending.w,
+      pending.h,
+      pending.sx,
+      pending.sy,
+      pending.tolerance,
+    );
+    this.restoreSelectionBackup();
+    const rect: Rect = minX <= maxX ? { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 } : emptyRect();
+    rasterizeMask(this.selectionSurfaceCanvas(), filled, pending.w, rect, pending.mode);
+    pending.lastRect = rect;
+    this.uploadSelectionMask();
+    this.selection = { active: !rectIsEmpty(rect), bounds: rect };
+    this.touch(false);
+  }
+
+  /** Cierra el gesto y calcula los límites reales de la máscara. */
+  endSelectWand() {
+    const pending = this.pendingWand;
+    if (!pending) return;
+    this.pendingWand = null;
+    const scanRect =
+      pending.mode === 'replace'
+        ? pending.lastRect
+        : unionRect(this.selectionBackupBounds, pending.lastRect);
+    this.commitSelectionCanvas(scanRect);
+  }
+
+  /** Descarta la selección en marcha y vuelve a la previa al gesto. */
+  cancelSelectWand() {
+    if (!this.pendingWand) return;
+    this.pendingWand = null;
+    this.restoreSelectionBackup();
+    this.commitSelectionCanvas(this.selectionBackupBounds);
   }
 
   selectAll() {
@@ -2879,7 +3020,11 @@ export class Engine {
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    this.commitSelectionCanvas();
+    // Todo el lienzo queda seleccionado sin ambigüedad — no hace falta
+    // escanear nada para saber los límites, ya se conocen de sobra.
+    this.uploadSelectionMask();
+    this.selection = { active: true, bounds: { x: 0, y: 0, x2: this.doc.width, y2: this.doc.height } };
+    this.touch();
   }
 
   invertSelection() {
@@ -3199,6 +3344,73 @@ export class Engine {
   }
 
   /**
+   * Región conexa por semejanza de color desde `(sx,sy)` sobre `reference`
+   * (RGBA, `w`×`h`), con relleno por líneas de barrido — mucho menos
+   * tráfico de pila que el recursivo por píxel, que en un lienzo grande
+   * revienta. Compartido entre `floodFill` (pinta la región) y
+   * `beginSelectWand`/`updateSelectWandTolerance` (la seleccionan): ambos
+   * necesitan exactamente la misma región, sólo cambia qué se hace con
+   * ella después.
+   */
+  private floodMatch(
+    reference: Uint8Array,
+    w: number,
+    h: number,
+    sx: number,
+    sy: number,
+    tolerance: number,
+  ): { filled: Uint8Array; minX: number; minY: number; maxX: number; maxY: number } {
+    const start = (sy * w + sx) * 4;
+    const sr = reference[start];
+    const sg = reference[start + 1];
+    const sb = reference[start + 2];
+    const sa = reference[start + 3];
+    const tol = tolerance * 255;
+
+    const matches = (i: number) =>
+      Math.abs(reference[i] - sr) <= tol &&
+      Math.abs(reference[i + 1] - sg) <= tol &&
+      Math.abs(reference[i + 2] - sb) <= tol &&
+      Math.abs(reference[i + 3] - sa) <= tol;
+
+    const filled = new Uint8Array(w * h);
+    const stack: number[] = [sx, sy];
+    let minX = sx;
+    let minY = sy;
+    let maxX = sx;
+    let maxY = sy;
+
+    while (stack.length > 0) {
+      const y = stack.pop()!;
+      const x = stack.pop()!;
+      if (filled[y * w + x]) continue;
+
+      let left = x;
+      while (left > 0 && !filled[y * w + left - 1] && matches((y * w + left - 1) * 4)) left--;
+      let right = x;
+      while (right < w - 1 && !filled[y * w + right + 1] && matches((y * w + right + 1) * 4))
+        right++;
+
+      for (let i = left; i <= right; i++) filled[y * w + i] = 1;
+      if (left < minX) minX = left;
+      if (right > maxX) maxX = right;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+
+      for (const ny of [y - 1, y + 1]) {
+        if (ny < 0 || ny >= h) continue;
+        for (let i = left; i <= right; i++) {
+          if (!filled[ny * w + i] && matches((ny * w + i) * 4)) {
+            stack.push(i, ny);
+          }
+        }
+      }
+    }
+
+    return { filled, minX, minY, maxX, maxY };
+  }
+
+  /**
    * Relleno por difusión sobre el cel activo.
    *
    * La referencia es el documento compuesto, no el cel: al colorear una
@@ -3231,54 +3443,7 @@ export class Engine {
     const target = this.renderer.readRect(cel.surface, full);
     const before = created >= 0 ? null : target.slice();
 
-    const start = (sy * w + sx) * 4;
-    const sr = reference[start];
-    const sg = reference[start + 1];
-    const sb = reference[start + 2];
-    const sa = reference[start + 3];
-    const tol = tolerance * 255;
-
-    const matches = (i: number) =>
-      Math.abs(reference[i] - sr) <= tol &&
-      Math.abs(reference[i + 1] - sg) <= tol &&
-      Math.abs(reference[i + 2] - sb) <= tol &&
-      Math.abs(reference[i + 3] - sa) <= tol;
-
-    const filled = new Uint8Array(w * h);
-    const stack: number[] = [sx, sy];
-    let minX = sx;
-    let minY = sy;
-    let maxX = sx;
-    let maxY = sy;
-
-    // Relleno por líneas de barrido: mucho menos tráfico de pila que el
-    // recursivo por píxel, que en un lienzo grande revienta.
-    while (stack.length > 0) {
-      const y = stack.pop()!;
-      const x = stack.pop()!;
-      if (filled[y * w + x]) continue;
-
-      let left = x;
-      while (left > 0 && !filled[y * w + left - 1] && matches((y * w + left - 1) * 4)) left--;
-      let right = x;
-      while (right < w - 1 && !filled[y * w + right + 1] && matches((y * w + right + 1) * 4))
-        right++;
-
-      for (let i = left; i <= right; i++) filled[y * w + i] = 1;
-      if (left < minX) minX = left;
-      if (right > maxX) maxX = right;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-
-      for (const ny of [y - 1, y + 1]) {
-        if (ny < 0 || ny >= h) continue;
-        for (let i = left; i <= right; i++) {
-          if (!filled[ny * w + i] && matches((ny * w + i) * 4)) {
-            stack.push(i, ny);
-          }
-        }
-      }
-    }
+    let { filled, minX, minY, maxX, maxY } = this.floodMatch(reference, w, h, sx, sy, tolerance);
 
     // Un par de píxeles de crecimiento evita la orla blanca que deja el
     // antialias de la línea entre el relleno y el trazo. Cada pasada sólo

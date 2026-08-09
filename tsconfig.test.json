@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    // DOM hace falta aunque los tests no toquen el DOM: document.ts importa
+    // el tipo `Surface` de gl/renderer.ts, que sí usa tipos DOM/WebGL — para
+    // comprobar ese import de tipos, tsc necesita poder resolver todo lo que
+    // renderer.ts declara, aunque el test nunca ejecute ese archivo.
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode — igual que tsconfig.app.json: el núcleo que importan
+       estos tests (math.ts, document.ts, selection.ts) usa imports sin
+       extensión, resueltos así en todo el resto del proyecto. */
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*.test.ts"]
+}

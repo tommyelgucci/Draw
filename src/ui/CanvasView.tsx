@@ -23,6 +23,10 @@ import { useActiveBrush, useUI } from '../state/store';
  */
 const DWELL_MS = 380;
 const DWELL_SPEED = 0.3;
+/** 300px de arrastre de la varita mágica recorren toda la tolerancia 0..1 —
+ *  en píxeles de pantalla, no de documento, para que el zoom no cambie la
+ *  sensibilidad del gesto. */
+const WAND_DRAG_RANGE = 300;
 
 interface TrackedPointer {
   id: number;
@@ -97,6 +101,11 @@ export function CanvasView() {
   const lassoGestureId = useRef<number | null>(null);
   const lassoGestureStart = useRef<{ sample: Vec2; local: Vec2 } | null>(null);
   const lassoDragging = useRef(false);
+  /** Varita mágica: arrastrar en horizontal reajusta la tolerancia, como en
+   *  Procreate — se mide en píxeles de pantalla (`clientX`), no en espacio
+   *  documento, para que la sensibilidad no cambie con el zoom. */
+  const wandId = useRef<number | null>(null);
+  const wandStart = useRef<{ clientX: number; tolerance: number } | null>(null);
 
   const setEngine = useUI((s) => s.setEngine);
   const brush = useActiveBrush();
@@ -429,6 +438,15 @@ export function CanvasView() {
         selectingId.current = null;
         selectPath.current = null;
       }
+      if (wandId.current !== null) {
+        // A diferencia del lazo, aquí no hay nada que retomar con un dedo
+        // menos: un segundo dedo revierte el gesto entero, más predecible
+        // que dejarlo a medio ajustar sin forma de terminarlo.
+        engine.cancelSelectWand();
+        wandId.current = null;
+        wandStart.current = null;
+        uiRef.current.setBusy(null);
+      }
       if (lassoGestureId.current !== null) {
         // Un segundo dedo aterrizando es un gesto de vista, no el fin del
         // lazo: sólo se suelta el seguimiento del toque actual.
@@ -474,6 +492,17 @@ export function CanvasView() {
       lassoGestureId.current = e.pointerId;
       lassoGestureStart.current = { sample: { x: sample.x, y: sample.y }, local };
       lassoDragging.current = false;
+      return;
+    }
+
+    if (tool === 'selectWand') {
+      const tolerance = uiRef.current.wandTolerance;
+      const started = engine.beginSelectWand({ x: sample.x, y: sample.y }, uiRef.current.selectionMode, tolerance);
+      if (started) {
+        wandId.current = e.pointerId;
+        wandStart.current = { clientX: e.clientX, tolerance };
+        uiRef.current.setBusy(`Tolerancia: ${Math.round(tolerance * 100)}%`);
+      }
       return;
     }
 
@@ -583,6 +612,14 @@ export function CanvasView() {
       return;
     }
 
+    if (wandId.current === e.pointerId && wandStart.current) {
+      const start = wandStart.current;
+      const tolerance = clamp(start.tolerance + (e.clientX - start.clientX) / WAND_DRAG_RANGE, 0, 1);
+      engine.updateSelectWandTolerance(tolerance);
+      uiRef.current.setBusy(`Tolerancia: ${Math.round(tolerance * 100)}%`);
+      return;
+    }
+
     if (selectingId.current === e.pointerId && selectPath.current) {
       const path = selectPath.current;
       const s = toSample(e);
@@ -649,6 +686,15 @@ export function CanvasView() {
       // combinan tramos poligonales y de mano alzada en el mismo lazo. El
       // arrastre ya fue añadiendo sus propios puntos durante el move.
       if (!wasDragging) engine.lassoAddVertex(start.sample);
+    }
+    if (wandId.current === e.pointerId && wandStart.current) {
+      wandId.current = null;
+      wandStart.current = null;
+      // La tolerancia con la que se soltó queda de salida para el próximo
+      // toque, como en Procreate — no vuelve a empezar siempre en la misma.
+      uiRef.current.setWandTolerance(engine.pendingWand?.tolerance ?? uiRef.current.wandTolerance);
+      engine.endSelectWand();
+      uiRef.current.setBusy(null);
     }
     if (selectingId.current === e.pointerId) {
       const path = selectPath.current;

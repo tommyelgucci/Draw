@@ -143,6 +143,23 @@ las oportunidades están donde su arquitectura no le deja llegar.
    afinado, no por el trazo entero) y las reescala en vivo cada fotograma
    contra la punta actual — mismo mecanismo que ya existía para las estampas
    especulativas de predicción. Slider "Afinado de extremos" por pincel.
+8. **Varita mágica (selección por semejanza de color).** `hecho`, fuera del
+   repaso del PDF. De la lista de funciones "lápiz mágico" de Procreate (los
+   pinceles de ajuste con varita, los pinceles de luminosidad, licuar y la
+   selección automática), la única que no tenía ya equivalente directo en
+   Trace era la de "Selección automática": tocar un color
+   selecciona la región conexa que se le parece, arrastrar el dedo hacia un
+   lado u otro reajusta la tolerancia en vivo — igual gesto que Procreate.
+   Reutiliza el `floodFill` ya existente (compartido vía `Engine.floodMatch`,
+   extraído para no duplicar el barrido de líneas) pero escribe en la máscara
+   de selección en vez de pintar: la referencia compuesta se lee una sola vez
+   al tocar y se cachea, así que reajustar la tolerancia arrastrando sólo
+   repite el flood-fill barato en CPU, sin otra lectura de GPU por muestra de
+   arrastre. Se integra en el mismo sistema de selección de siempre
+   (`rasterizeMask` en `selection.ts`, mismo criterio add/subtract/replace
+   que las formas geométricas), así que el resto del motor —transformar,
+   levantar, contorno animado— no distingue una selección por forma de una
+   por color.
 
 Los tres últimos salieron de un repaso más amplio (no sólo Procreate: también
 Artstudio Pro y una app de dibujo vectorial sin identificar con certeza,

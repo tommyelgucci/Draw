@@ -213,6 +213,15 @@ export const IconLasso = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Selección por semejanza de color: la varita con el destello en la punta. */
+export const IconWand = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4.5 19.5 14 10" />
+    <path d="M18 3v3.4M16.3 4.7h3.4" />
+    <path d="M20.5 9v2M19.5 10h2" />
+  </svg>
+);
+
 export const IconImage = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
