@@ -3,6 +3,7 @@ import { CanvasView } from './ui/CanvasView';
 import { Toolbar } from './ui/Toolbar';
 import { Timeline } from './ui/Timeline';
 import { BrushPanel, ColorPanel, ExportPanel, LayersPanel } from './ui/Panels';
+import { PoseLibraryPanel } from './ui/PoseLibraryPanel';
 import { SelectionOverlay } from './ui/SelectionOverlay';
 import { QuickShapeOverlay } from './ui/QuickShapeOverlay';
 import { BoneGizmoOverlay } from './ui/BoneGizmoOverlay';
@@ -198,6 +199,7 @@ export default function App() {
       {panel === 'brush' && <BrushPanel />}
       {panel === 'color' && <ColorPanel />}
       {engine && panel === 'export' && <ExportPanel engine={engine} />}
+      {engine && panel === 'poses' && <PoseLibraryPanel engine={engine} />}
 
       {busy && (
         <div className="busy" role="status">

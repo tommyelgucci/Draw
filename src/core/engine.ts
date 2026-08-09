@@ -4,10 +4,12 @@ import {
   buildClipGroups,
   celAt,
   celStartFrame,
+  channel,
   clampFrame,
   hasAnyKeyframes,
   newDocument,
   newLayer,
+  pickVariant,
   sampleChannel,
   setKeyframe,
   sortedCelFrames,
@@ -15,6 +17,8 @@ import {
   uid,
   type Cel,
   type Layer,
+  type SpriteSwapCatalog,
+  type SpriteSwapVariant,
   type TraceDocument,
 } from './document';
 import { History } from './history';
@@ -623,6 +627,145 @@ export class Engine {
     layer.cels.clear();
   }
 
+  /* --- intercambio de sprites (poses/visemas) --- */
+
+  /**
+   * Capa-nodo de intercambio de sprites (ojos, cejas, boca...): un catálogo
+   * de variantes en vez de `cels` — `pickVariant()` decide cuál se ve en
+   * cada fotograma según el canal discreto `selected`. Sigue siendo una
+   * capa normal a efectos de composición (opacidad, blend, orden en la
+   * pila); sólo cambia de dónde sale la superficie a componer.
+   */
+  createSwapNode(name: string): Layer {
+    const layer = newLayer(name, false);
+    layer.swap = { variants: [], selected: channel(0) };
+    const index = this.activeLayerIndex + 1;
+    const at = index < 0 ? this.doc.layers.length : index;
+    const prevActive = this.activeLayerId;
+    this.history.run({
+      label: 'Crear nodo de intercambio',
+      redo: () => {
+        this.doc.layers.splice(at, 0, layer);
+        this.activeLayerId = layer.id;
+        this.touch();
+      },
+      undo: () => {
+        const i = this.doc.layers.indexOf(layer);
+        if (i >= 0) this.doc.layers.splice(i, 1);
+        this.activeLayerId = prevActive;
+        this.touch();
+      },
+    });
+    return layer;
+  }
+
+  /** Añade una variante vacía y la selecciona — a partir de ahí, cualquier
+   *  trazo en esta capa pinta sobre ella (ver `resolveStrokeCel`). */
+  addSwapVariant(layerId: string, label: string): SpriteSwapVariant | null {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer?.swap) return null;
+    const catalog = layer.swap;
+    const variant: SpriteSwapVariant = {
+      id: uid('swap'),
+      label,
+      surface: this.renderer.createSurface('swap'),
+    };
+    const index = catalog.variants.length;
+    const prevBase = catalog.selected.base;
+    const prevKeys = catalog.selected.keys.slice();
+    this.history.run({
+      label: 'Añadir variante',
+      redo: () => {
+        catalog.variants.push(variant);
+        this.setSwapSelection(catalog, index);
+        this.touch();
+      },
+      undo: () => {
+        catalog.variants = catalog.variants.filter((v) => v.id !== variant.id);
+        catalog.selected.base = prevBase;
+        catalog.selected.keys = prevKeys.slice();
+        this.touch();
+      },
+    });
+    return variant;
+  }
+
+  /** Quita una variante del catálogo. Si algún keyframe de `selected`
+   *  apuntaba a su índice, `pickVariant` cae a la variante 0 sin más —
+   *  reordenar los índices de los keyframes existentes queda para cuando
+   *  haga falta de verdad. */
+  removeSwapVariant(layerId: string, variantId: string) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    const catalog = layer?.swap;
+    if (!catalog) return;
+    const index = catalog.variants.findIndex((v) => v.id === variantId);
+    if (index < 0) return;
+    const variant = catalog.variants[index];
+    this.history.run({
+      label: 'Quitar variante',
+      redo: () => {
+        catalog.variants = catalog.variants.filter((v) => v.id !== variantId);
+        this.touch();
+      },
+      undo: () => {
+        catalog.variants.splice(index, 0, variant);
+        this.touch();
+      },
+    });
+  }
+
+  /**
+   * Cambia qué variante se ve en el fotograma actual. Sin `history.run` a
+   * propósito, igual que `setTransformValue`/`setBonePose`: es lo que
+   * dispara tocar una miniatura del picker, no un paso que tenga sentido
+   * deshacer suelto.
+   */
+  selectSwapVariant(layerId: string, variantIndex: number) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer?.swap) return;
+    this.setSwapSelection(layer.swap, variantIndex);
+    this.touch();
+  }
+
+  /**
+   * Marca qué variante se ve en el fotograma actual, forzando SIEMPRE
+   * easing `'hold'` — es la disciplina que hace que `sampleChannel` salte
+   * entre variantes en vez de interpolar sus índices, y vive aquí (no en
+   * el tipo) para que sea imposible crear un keyframe de `selected` con
+   * otro easing por error.
+   *
+   * A diferencia de `setTransformValue`/`setBonePose`, aquí SIEMPRE se crea
+   * un keyframe, sin el "auto-key sólo si el canal ya tiene alguno": elegir
+   * una variante es un clic deliberado, no una muestra de un arrastre
+   * continuo, así que no hay avalancha de keyframes que evitar. Con un
+   * único keyframe (el caso normal antes de animar nada) `sampleChannel`
+   * devuelve ese mismo valor en cualquier fotograma — se comporta exacto
+   * igual que si sólo se hubiera tocado `base`.
+   */
+  private setSwapSelection(catalog: SpriteSwapCatalog, variantIndex: number) {
+    setKeyframe(catalog.selected, this.currentFrame, variantIndex, 'hold');
+  }
+
+  /** Índice de variante visible en el fotograma actual, para resaltarlo en el picker. */
+  getSwapSelection(layer: Layer): number {
+    return layer.swap ? sampleChannel(layer.swap.selected, this.currentFrame) : 0;
+  }
+
+  /** Miniatura de una variante, cacheada por versión — mismo mecanismo que
+   *  `celThumbnail`, para el mini-picker visual de la librería de poses. */
+  swapVariantThumbnail(layer: Layer, variantIndex: number, maxSize = 64): HTMLCanvasElement | null {
+    const variant = layer.swap?.variants[variantIndex];
+    if (!variant || variant.surface.empty) return null;
+    const key = `${variant.id}@${maxSize}`;
+    const cached = this.thumbCache.get(key);
+    if (cached && cached.version === variant.surface.version) return cached.canvas;
+    const canvas = this.renderer.downscaleToCanvas(variant.surface, maxSize);
+    if (!canvas) return null;
+    if (this.thumbCache.size > 200) this.thumbCache.clear();
+    this.thumbCache.set(key, { canvas, version: variant.surface.version });
+    return canvas;
+  }
+
   /* --- cels --- */
 
   /** Cel dibujable en el fotograma actual, creándolo si hace falta. */
@@ -639,6 +782,22 @@ export class Engine {
     const cel = this.makeCel();
     layer.cels.set(frame, cel);
     return { cel, created: frame };
+  }
+
+  /**
+   * Cel a dibujar cuando empieza un trazo — para un nodo de intercambio de
+   * sprites es la variante seleccionada, no un cel de `layer.cels` (que ni
+   * siquiera se usa en ese tipo de capa). Aparte de `beginStroke`, nada más
+   * necesita esta distinción: `SpriteSwapVariant` ya tiene la misma forma
+   * que `Cel` (id + surface + label), así que el resto del trazo —
+   * `drawOver`, `readRect`, `writeRect` en `endStroke` — no ve diferencia.
+   */
+  private resolveStrokeCel(layer: Layer, frame: number): { cel: Cel; created: number } | null {
+    if (layer.swap) {
+      const variant = pickVariant(layer, frame);
+      return variant ? { cel: variant, created: -1 } : null;
+    }
+    return this.ensureCel(layer, frame);
   }
 
   addCel(layerId: string, frame: number, copyPrevious = false) {
@@ -1062,7 +1221,9 @@ export class Engine {
     // de Procreate: seguir dibujando la da por buena.
     if (this.pendingQuickShape) this.commitQuickShape();
 
-    const { cel, created } = this.ensureCel(layer, this.currentFrame);
+    const resolved = this.resolveStrokeCel(layer, this.currentFrame);
+    if (!resolved) return false;
+    const { cel, created } = resolved;
     this.strokeLayer = layer;
     this.strokeCel = cel;
     this.strokeCtx = ctx;
@@ -1502,7 +1663,11 @@ export class Engine {
    * se está dibujando y su transformación animada si no es la identidad.
    */
   private rasterizeLayer(layer: Layer, frame: number, includeWet: boolean): Surface | null {
-    const cel = celAt(layer, frame);
+    // Un nodo de intercambio de sprites saca su superficie del catálogo de
+    // variantes en vez de `cels` — todo lo demás (trazo húmedo, transform,
+    // rig, composición) sigue viendo "una superficie del tamaño del
+    // documento", así que no hace falta ramificar el resto de la función.
+    const cel = layer.swap ? pickVariant(layer, frame) : celAt(layer, frame);
     const isStrokeTarget =
       includeWet && this.builder !== null && this.strokeLayer?.id === layer.id;
     // Mientras hay una forma QuickShape pendiente, `wet` guarda su contorno

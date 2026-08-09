@@ -3,6 +3,7 @@ import type { Engine } from '../core/engine';
 import {
   celHoldLength,
   frameToTimecode,
+  sampleChannel,
   sortedCelFrames,
   TRANSFORM_PROPS,
   type Layer,
@@ -279,6 +280,10 @@ function TrackRow({
   dragCel: { layerId: string; from: number } | null;
   setDragCel: (v: { layerId: string; from: number } | null) => void;
 }) {
+  // Un nodo de intercambio no tiene cels: su pista es una fila de
+  // escalones (qué variante se ve en cada tramo), no dibujos sueltos.
+  if (layer.swap) return <SwapTrackRow engine={engine} layer={layer} frames={frames} />;
+
   const celFrames = new Set(sortedCelFrames(layer));
   const keyframeFrames = new Set<number>();
   for (const prop of TRANSFORM_PROPS) {
@@ -325,6 +330,50 @@ function TrackRow({
           >
             {isCel && <span className="cel-dot" />}
             {keyframeFrames.has(f) && <span className="key-dot" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Pista de un nodo de intercambio: un escalón por variante, no una curva.
+ * Coherente con que todos los keyframes de `selected` son `'hold'`
+ * (ver `Engine.setSwapSelection`) — aquí sólo se lee ese salto, nunca se
+ * dibuja nada a medio camino entre dos variantes.
+ */
+function SwapTrackRow({
+  engine,
+  layer,
+  frames,
+}: {
+  engine: Engine;
+  layer: Layer;
+  frames: number[];
+}) {
+  const catalog = layer.swap!;
+  const isActive = layer.id === engine.activeLayerId;
+  const keyFrames = new Set(catalog.selected.keys.map((k) => k.frame));
+
+  return (
+    <div className={`track ${isActive ? 'is-active' : ''}`} style={{ height: ROW_H }}>
+      {frames.map((f) => {
+        const variant = catalog.variants[Math.round(sampleChannel(catalog.selected, f))];
+        const isKey = keyFrames.has(f);
+        return (
+          <div
+            key={f}
+            className={`cell is-held ${isKey ? 'is-swap-key' : ''} ${f === engine.currentFrame ? 'is-current' : ''}`}
+            style={{ width: FRAME_W }}
+            onPointerDown={() => {
+              engine.setActiveLayer(layer.id);
+              engine.setFrame(f);
+            }}
+            title={variant ? `${variant.label} (fotograma ${f})` : `Fotograma ${f}`}
+          >
+            {isKey && <span className="key-dot" />}
+            {isKey && variant && <span className="swap-label">{variant.label}</span>}
           </div>
         );
       })}
