@@ -143,9 +143,55 @@ las oportunidades están donde su arquitectura no le deja llegar.
    fuente de fotogramas es un array de lienzos ya capturados, no algo que se
    pueda expresar como la `FrameSource` de la animación (que renderiza
    cuadro a cuadro bajo demanda).
-4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
-   quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
-   que el cambio queda contenido en `gl/renderer.ts`.
+4. **Capas en disco (OPFS).** `hecho`, parcial y a propósito — resultó ser un
+   problema más fino que "cambiar `Uint8Array` por archivos en
+   `gl/renderer.ts`", que es como se describía aquí antes.
+
+   `ensureResident` (la subida a GPU) se llama de forma SÍNCRONA en decenas
+   de sitios de `engine.ts` — cada trazo, cada deshacer/rehacer, un lote de
+   transformación, redimensionar. Leer OPFS es necesariamente asíncrono (no
+   hay API síncrona desde el hilo principal, sólo desde un Worker con
+   `FileSystemSyncAccessHandle`, que exige cabeceras COOP/COEP en toda la
+   app). Un respaldo "en disco" genérico para `Surface` habría dejado
+   superficies a medio cargar visibles para deshacer/rehacer: `writeRect`
+   (lo que reproduce cada paso del historial) parchea un rectángulo pequeño
+   asumiendo que el resto del cel ya es correcto — si `ensureResident`
+   devolviera un lienzo en blanco mientras carga de fondo, el parche se
+   escribiría sobre ese blanco y el resto del dibujo se perdería de verdad,
+   sin forma de detectarlo desde `writeRect` (a diferencia de una
+   sobreescritura completa, donde `Surface.version` sí basta para descartar
+   una carga de disco que llegó tarde).
+
+   Alcance elegido en su lugar, deliberadamente menor pero seguro de
+   verdad: OPFS sólo entra en juego dentro de `serializeProject`
+   (`core/io.ts` — cubre tanto ".trace" manual como el autoguardado, que es
+   el camino con más probabilidad de disparar el fallo porque corre solo
+   cada dos minutos). Cada cel/máscara/variante se suelta de la GPU/RAM
+   justo después de codificarse a PNG (`spillAfterEncode`, volcando una
+   copia cruda a un archivo de usar-y-tirar) y TODAS se restauran a RAM
+   antes de que la función devuelva el control — nunca queda nada a medio
+   cargar cuando el resto de la app puede volver a tocar el documento. Esa
+   garantía depende de que nada más toque el documento mientras dura: el
+   guardado bloquea atajos de teclado (`App.tsx`) y el lienzo
+   (`CanvasView.tsx`) mientras `busy` está activo — algo que antes no
+   bloqueaba nada (la misma laguna que permitía el bote de relleno
+   concurrente, ver más abajo) — y `engine.whenIdle()` espera a que un
+   trazo en curso termine antes de activar el candado, en vez de cortarlo a
+   la mitad o saltarse el guardado dos minutos enteros.
+
+   Resuelve el fallo más grave y más fácil de disparar (guardar/exportar un
+   proyecto grande se queda sin memoria porque la expulsión de GPU no tenía
+   techo en RAM) sin arriesgar la integridad de deshacer/rehacer. Lo que NO
+   resuelve: el techo de RAM mientras se dibuja en un proyecto grande
+   todavía abierto sigue siendo el de siempre — eso necesitaría o (a)
+   aislamiento COOP/COEP + un Worker dedicado para lectura realmente
+   síncrona desde cualquier punto (deshacer incluido), o (b) repensar cómo
+   se ejecutan los comandos del historial para tolerar reproducción
+   asíncrona. Cualquiera de las dos es un cambio de infraestructura mayor,
+   deliberado y aparte — no algo para colar en el mismo lote. Se revisita
+   si medir con un proyecto real (siguiente punto de `CHECKPOINT.md`)
+   muestra que el techo en vivo es de verdad un problema, no sólo el de
+   guardar.
 5. **Presets de lienzo con nombre y tipo de proyecto.** `hecho`. Botón
    "Nuevo proyecto" en el panel Proyecto, con confirmación: tipo
    (Animación/Pintura, sólo decide valores por defecto — cuadros y si la

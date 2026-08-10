@@ -399,6 +399,12 @@ export function CanvasView() {
   const onPointerDown = (e: React.PointerEvent) => {
     const engine = engineRef.current;
     if (!engine) return;
+    // Con un guardado en curso el documento puede tener superficies sueltas
+    // de la GPU/RAM a propósito (ver `serializeProject` en `core/io.ts`):
+    // dibujar encima justo en ese instante las repondría con contenido
+    // equivocado en cuanto termine de restaurarlas. El candado se levanta
+    // solo al terminar — no hace falta que quien dibuja haga nada.
+    if (uiRef.current.busy) return;
     const canvas = canvasRef.current!;
     canvas.setPointerCapture(e.pointerId);
     if (e.pointerType === 'pen') lastPenAt.current = performance.now();

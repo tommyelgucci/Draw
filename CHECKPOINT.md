@@ -26,6 +26,7 @@ npm run test:unit         TODO EN VERDE   (89 casos: math.ts, document.ts, selec
 npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
 npm run test:timelapse    TODO EN VERDE   (grabación periódica del proceso de dibujo, exporta un WebM válido)
 npm run test:thumbnail-crop TODO EN VERDE (miniatura recortada a la caja del dibujo, no al documento entero)
+npm run test:opfs-spill  TODO EN VERDE   (guardar suelta cels a OPFS y los restaura sin perder un píxel; candado de entrada)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
 ```
@@ -285,8 +286,13 @@ que no se puede hacer desde aquí:
    que sólo se ha ejercitado la ruta VP9/WebM. El código de MP4 compila y usa
    un muxer probado, pero no se ha visto producir un archivo aquí; en Safari,
    que sí trae H.264, debería tomar esa rama.
-4. **Capas en disco (OPFS)**, según `RUMBO.md` — el historial ya persiste
-   (ver deuda conocida, resuelta).
+4. **Techo de RAM mientras se dibuja** (no al guardar, ya resuelto — ver
+   deuda conocida) en un proyecto con muchas capas y cientos de cels. Ligado
+   al punto 2 (perfilar en dispositivo real): si resulta ser un problema de
+   verdad y no sólo teórico, la vía es aislamiento COOP/COEP + un Worker con
+   lectura síncrona de OPFS, o repensar cómo se ejecutan los comandos del
+   historial — ver la entrada "Capas en disco (OPFS)" de `RUMBO.md` para el
+   porqué no es un cambio contenido en un solo archivo.
 
 ## Deuda conocida
 
@@ -328,6 +334,21 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   completa. Corrección de manual, sin contrapartida; el efecto no salió
   limpio de medir en el Chromium de pruebas (SwiftShader), así que el test
   es una comprobación de sanidad, no una comparación antes/después.
+- ~~Guardar/exportar un proyecto grande se queda sin memoria~~. Parcial y a
+  propósito — ver `RUMBO.md`, oportunidad 4 ("Capas en disco (OPFS)"), para
+  el porqué del alcance: sólo cubre guardar/autoguardado, deliberadamente
+  NO el techo de RAM mientras se dibuja (ver "Todavía abierta" más abajo).
+  `serializeProject` (`core/io.ts`) suelta cada cel a OPFS justo después de
+  codificarlo a PNG y restaura TODO antes de devolver el control —
+  transaccional, invisible para el resto de la app— lo que sólo es seguro
+  porque el guardado bloquea atajos de teclado y el lienzo mientras dura
+  (`busy`, en `App.tsx`/`CanvasView.tsx`) y `engine.whenIdle()` espera a que
+  termine un trazo en curso antes de activar ese candado, en vez de
+  cortarlo o saltarse el guardado dos minutos enteros. Test en
+  `scripts/opfs-spill.mjs` (`npm run test:opfs-spill`): identidad de
+  píxeles tras el vaivén, cero archivos huérfanos en OPFS, y que el candado
+  de verdad bloquea dibujar y deshacer/rehacer (confirmado que ambas
+  comprobaciones fallan si se retira el candado).
 - ~~Historial persistente~~. Parcial y a propósito — ver `RUMBO.md`,
   oportunidad 2, para el porqué del alcance. `historyOps.ts` +
   `Engine.loadHistoryOps` + `serializeProject`/`deserializeProject` en
@@ -352,9 +373,9 @@ Todavía abierta:
 - **El rendimiento sólo está medido con SwiftShader**, que es correcto pero
   lento. Los números absolutos de un iPad están sin tomar — no se puede
   resolver desde aquí, hace falta el dispositivo real.
-- **Capas en disco (OPFS)**, de `RUMBO.md` — cambia el respaldo de
-  `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
-  de expulsión ya existe, así que el cambio queda contenido en
-  `gl/renderer.ts`.
+- **Techo de RAM mientras se dibuja** en un proyecto grande todavía abierto
+  (guardar/exportar ya no lo tiene, ver arriba) — ver el punto 4 de "Lo
+  siguiente" y la entrada "Capas en disco (OPFS)" de `RUMBO.md` para el
+  porqué no es un cambio contenido en un solo archivo.
 - ~~Lote de transformación + selección rectangular: aviso de WebGL en
   consola.~~ Resuelto — ver el punto 16 de "Bugs encontrados y corregidos".

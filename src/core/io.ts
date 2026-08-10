@@ -1,5 +1,7 @@
 import { unzipSync, zipSync, type ZipOptions } from 'fflate';
 import type { Engine } from './engine';
+import { deleteSpillBytes, readSpillBytes, writeSpillBytes } from '../gl/opfsCache';
+import type { Surface } from '../gl/renderer';
 import { historyOpByteLength, type HistoryOp } from './historyOps';
 import {
   celAt,
@@ -284,105 +286,163 @@ function unpackHistory(
  * Proyecto .trace
  * ------------------------------------------------------------------ */
 
+/**
+ * Suelta `surface` de la GPU/RAM justo después de codificarse a PNG,
+ * volcando una copia cruda (premultiplicada, para poder re-subirla tal
+ * cual) a un archivo de usar-y-tirar en OPFS. Es lo único que evita que
+ * `serializeProject` acumule en RAM los píxeles de TODOS los cels de un
+ * proyecto grande: sin esto, cada cel que la presión de GPU expulsa
+ * durante el recorrido se queda en `Surface.backing` sin límite, y un
+ * proyecto de cientos de cels puede agotar la memoria del proceso durante
+ * el propio guardado — justo el fallo que más probabilidad tiene de
+ * dispararse, porque el autoguardado corre solo cada dos minutos.
+ *
+ * Si `writeSpillBytes` falla (sin soporte de OPFS, cuota agotada...) no
+ * hace nada: la superficie se queda tal cual, exactamente el
+ * comportamiento de antes de este cambio, sin regresión.
+ *
+ * Deliberadamente NO usa el mecanismo de expulsión de `gl/renderer.ts`
+ * (`Surface.backing`/`ensureResident`): esto es un vaivén transaccional,
+ * de usar y tirar dentro de esta misma llamada — `spilled` se restaura
+ * por completo antes de que `serializeProject` termine (ver el `finally`
+ * más abajo), así que ninguna otra parte de la app llega a ver una
+ * superficie a medio cargar. Eso es justo lo que hace seguro no tocar
+ * `ensureResident`: deshacer/rehacer siguen siendo síncronos sin ninguna
+ * superficie que puedan pisar a medias — el guardado bloquea la entrada
+ * mientras dura (ver `App.tsx`) precisamente para que esa garantía no
+ * dependa de una carrera de tiempos.
+ */
+async function spillAfterEncode(
+  engine: Engine,
+  surface: Surface,
+  spilled: { surface: Surface; key: string }[],
+) {
+  const full = { x: 0, y: 0, x2: engine.doc.width, y2: engine.doc.height };
+  const raw = engine.renderer.readRect(surface, full);
+  const key = uid('spill');
+  const ok = await writeSpillBytes(key, raw);
+  if (!ok) return;
+  engine.renderer.release(surface, false);
+  spilled.push({ surface, key });
+}
+
 export async function serializeProject(engine: Engine): Promise<Uint8Array> {
   const doc = engine.doc;
   const files: Record<string, Uint8Array> = {};
+  const spilled: { surface: Surface; key: string }[] = [];
 
-  const layers: SerializedLayer[] = [];
-  for (const layer of doc.layers) {
-    const cels: SerializedLayer['cels'] = [];
-    for (const [frame, cel] of [...layer.cels].sort((a, b) => a[0] - b[0])) {
-      cels.push({ frame, celId: cel.id, label: cel.label });
-      if (!cel.surface.empty) {
-        const data = engine.renderer.toImageData(
-          engine.renderer.ensureResident(cel.surface),
-        );
-        files[`cels/${cel.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
-      }
-    }
-
-    let swap: SerializedLayer['swap'];
-    if (layer.swap) {
-      const variants: { id: string; label: string }[] = [];
-      for (const variant of layer.swap.variants) {
-        variants.push({ id: variant.id, label: variant.label });
-        if (!variant.surface.empty) {
+  try {
+    const layers: SerializedLayer[] = [];
+    for (const layer of doc.layers) {
+      const cels: SerializedLayer['cels'] = [];
+      for (const [frame, cel] of [...layer.cels].sort((a, b) => a[0] - b[0])) {
+        cels.push({ frame, celId: cel.id, label: cel.label });
+        if (!cel.surface.empty) {
           const data = engine.renderer.toImageData(
-            engine.renderer.ensureResident(variant.surface),
+            engine.renderer.ensureResident(cel.surface),
           );
-          files[`swap/${layer.id}/${variant.id}.png`] = await canvasToPngBytes(
-            canvasFromImageData(data),
-          );
+          files[`cels/${cel.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
+          await spillAfterEncode(engine, cel.surface, spilled);
         }
       }
-      swap = { variants, selected: layer.swap.selected };
+
+      let swap: SerializedLayer['swap'];
+      if (layer.swap) {
+        const variants: { id: string; label: string }[] = [];
+        for (const variant of layer.swap.variants) {
+          variants.push({ id: variant.id, label: variant.label });
+          if (!variant.surface.empty) {
+            const data = engine.renderer.toImageData(
+              engine.renderer.ensureResident(variant.surface),
+            );
+            files[`swap/${layer.id}/${variant.id}.png`] = await canvasToPngBytes(
+              canvasFromImageData(data),
+            );
+            await spillAfterEncode(engine, variant.surface, spilled);
+          }
+        }
+        swap = { variants, selected: layer.swap.selected };
+      }
+
+      let hasMask = false;
+      if (layer.mask) {
+        hasMask = true;
+        const data = engine.renderer.toImageData(engine.renderer.ensureResident(layer.mask.surface));
+        files[`mask/${layer.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
+        await spillAfterEncode(engine, layer.mask.surface, spilled);
+      }
+
+      layers.push({
+        id: layer.id,
+        name: layer.name,
+        kind: layer.kind,
+        visible: layer.visible,
+        locked: layer.locked,
+        opacity: layer.opacity,
+        blend: layer.blend,
+        clipToBelow: layer.clipToBelow,
+        alphaLock: layer.alphaLock,
+        animated: layer.animated,
+        cels,
+        transform: layer.transform,
+        rig: layer.rig,
+        swap,
+        groupId: layer.groupId,
+        hasMask,
+        text: layer.text,
+        adjustment: layer.adjustment,
+      });
     }
 
-    let hasMask = false;
-    if (layer.mask) {
-      hasMask = true;
-      const data = engine.renderer.toImageData(engine.renderer.ensureResident(layer.mask.surface));
-      files[`mask/${layer.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
+    if (doc.audio && engine.audioBytes) {
+      files[`audio/${doc.audio.id}`] = engine.audioBytes;
     }
 
-    layers.push({
-      id: layer.id,
-      name: layer.name,
-      kind: layer.kind,
-      visible: layer.visible,
-      locked: layer.locked,
-      opacity: layer.opacity,
-      blend: layer.blend,
-      clipToBelow: layer.clipToBelow,
-      alphaLock: layer.alphaLock,
-      animated: layer.animated,
-      cels,
-      transform: layer.transform,
-      rig: layer.rig,
-      swap,
-      groupId: layer.groupId,
-      hasMask,
-      text: layer.text,
-      adjustment: layer.adjustment,
-    });
+    const { steps: historySteps, patches: historyPatches } = packHistory(engine);
+
+    const meta: SerializedDoc = {
+      version: FORMAT_VERSION,
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+      fps: doc.fps,
+      frameCount: doc.frameCount,
+      paper: doc.paper,
+      paperAlpha: doc.paperAlpha,
+      createdAt: doc.createdAt,
+      modifiedAt: Date.now(),
+      layers,
+      skeletons: doc.skeletons,
+      meshes: doc.meshes,
+      layerGroups: doc.layerGroups,
+      audio: doc.audio,
+      history: historySteps.length > 0 ? historySteps : undefined,
+    };
+    files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
+
+    // Los PNG ya están comprimidos; recomprimirlos sólo gasta tiempo. Los
+    // parches de historial son bytes de píxel crudos (sin comprimir), así
+    // que sí les compensa deflate — a diferencia del resto, van con su
+    // propio nivel en vez del 0 global.
+    const zipInput: Record<string, Uint8Array | [Uint8Array, ZipOptions]> = { ...files };
+    if (historySteps.length > 0) {
+      zipInput['history/patches.bin'] = [historyPatches, { level: 6 }];
+    }
+    return zipSync(zipInput, { level: 0 });
+  } finally {
+    // Pase lo que pase (incluido un error a medio camino): ninguna
+    // superficie del documento se queda sólo en disco. `serializeProject`
+    // es la única que sabe que esto pasó, así que también es la única
+    // responsable de deshacerlo antes de devolver el control — el resto de
+    // la app (bloqueada mientras tanto, ver `App.tsx`) no tiene por qué
+    // saber que hubo un vaivén por OPFS de por medio.
+    for (const { surface, key } of spilled) {
+      const bytes = await readSpillBytes(key);
+      if (bytes) surface.backing = bytes;
+      await deleteSpillBytes(key);
+    }
   }
-
-  if (doc.audio && engine.audioBytes) {
-    files[`audio/${doc.audio.id}`] = engine.audioBytes;
-  }
-
-  const { steps: historySteps, patches: historyPatches } = packHistory(engine);
-
-  const meta: SerializedDoc = {
-    version: FORMAT_VERSION,
-    id: doc.id,
-    name: doc.name,
-    width: doc.width,
-    height: doc.height,
-    fps: doc.fps,
-    frameCount: doc.frameCount,
-    paper: doc.paper,
-    paperAlpha: doc.paperAlpha,
-    createdAt: doc.createdAt,
-    modifiedAt: Date.now(),
-    layers,
-    skeletons: doc.skeletons,
-    meshes: doc.meshes,
-    layerGroups: doc.layerGroups,
-    audio: doc.audio,
-    history: historySteps.length > 0 ? historySteps : undefined,
-  };
-  files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
-
-  // Los PNG ya están comprimidos; recomprimirlos sólo gasta tiempo. Los
-  // parches de historial son bytes de píxel crudos (sin comprimir), así que
-  // sí les compensa deflate — a diferencia del resto, van con su propio
-  // nivel en vez del 0 global.
-  const zipInput: Record<string, Uint8Array | [Uint8Array, ZipOptions]> = { ...files };
-  if (historySteps.length > 0) {
-    zipInput['history/patches.bin'] = [historyPatches, { level: 6 }];
-  }
-  return zipSync(zipInput, { level: 0 });
 }
 
 export interface DeserializedProject {
