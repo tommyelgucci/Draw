@@ -663,17 +663,33 @@ export class Renderer {
     dst.version++;
   }
 
-  /** Enlaza la textura fuente y, si la hay, la máscara de recorte. */
+  /**
+   * Enlaza la textura fuente y, si la hay, la máscara de recorte.
+   *
+   * `uMask` está declarado sin condición en el shader `copy` (se lee dentro
+   * de un `if (uUseMask > 0.5)`, pero eso no lo saca de la lista de samplers
+   * activos del programa enlazado): WebGL valida el feedback loop
+   * framebuffer/textura contra CUALQUIER unidad que el programa pueda
+   * muestrear, sin mirar si la rama que la usa se ejecuta de verdad. Sin
+   * máscara hay que dejar la unidad 1 explícitamente desenlazada — si se
+   * deja tal cual, conserva la textura de la última llamada que sí pasó
+   * máscara, y si esa textura resulta ser la misma que el framebuffer de
+   * destino de una llamada posterior sin máscara, salta "Feedback loop
+   * formed between Framebuffer and active Texture" en consola aunque el
+   * resultado sea correcto (ver CHECKPOINT.md).
+   */
   private bindSource(p: ProgramInfo, src: Surface, mask?: Surface | null) {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, src.tex);
     gl.uniform1i(p.uniforms.uSource, 0);
+    gl.activeTexture(gl.TEXTURE1);
     if (mask) {
       this.ensureResident(mask);
-      gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, mask.tex);
       gl.uniform1i(p.uniforms.uMask, 1);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, null);
     }
     gl.uniform1f(p.uniforms.uUseMask, mask ? 1 : 0);
   }
