@@ -1094,6 +1094,105 @@ export class Engine {
     this.touch();
   }
 
+  /* ---------------------------------------------------------------- *
+   * Time-lapse del proceso de dibujo
+   * ---------------------------------------------------------------- */
+
+  timelapseRecording = false;
+  private timelapseFrames: HTMLCanvasElement[] = [];
+  private timelapseCaptureIntervalMs = 1000;
+  private lastTimelapseCaptureAt = 0;
+  private timelapseLastRevision = -1;
+  private unsubscribeTimelapse: (() => void) | null = null;
+
+  private static readonly TIMELAPSE_MAX_FRAMES = 600;
+  private static readonly TIMELAPSE_CAPTURE_WIDTH = 480;
+
+  get timelapseFrameCount(): number {
+    return this.timelapseFrames.length;
+  }
+
+  /** Empieza a capturar fotogramas periódicos mientras se dibuja — la
+   *  captura de verdad ocurre en `captureTimelapseFrame`, enganchada a
+   *  `onAfterRender` en vez de a un `setInterval` propio: así sólo se
+   *  intenta cuando el lienzo cambió de verdad, no a ciegas cada segundo. */
+  startTimelapseRecording() {
+    if (this.timelapseRecording) return;
+    this.timelapseRecording = true;
+    this.timelapseFrames = [];
+    this.timelapseCaptureIntervalMs = 1000;
+    this.lastTimelapseCaptureAt = 0;
+    this.timelapseLastRevision = -1;
+    this.unsubscribeTimelapse = this.onAfterRender(() => this.captureTimelapseFrame());
+    this.touch();
+  }
+
+  /** Deja de capturar, conservando lo grabado hasta ahora para exportar. */
+  stopTimelapseRecording() {
+    if (!this.timelapseRecording) return;
+    this.timelapseRecording = false;
+    this.unsubscribeTimelapse?.();
+    this.unsubscribeTimelapse = null;
+    this.touch();
+  }
+
+  /** Descarta la grabación en marcha o ya parada. */
+  discardTimelapse() {
+    this.stopTimelapseRecording();
+    this.timelapseFrames = [];
+    this.touch();
+  }
+
+  /** Lienzos capturados, en orden — sólo para `exportImageSequenceAsVideo`. */
+  get timelapseFramesSnapshot(): readonly HTMLCanvasElement[] {
+    return this.timelapseFrames;
+  }
+
+  private captureTimelapseFrame() {
+    const now = performance.now();
+    if (now - this.lastTimelapseCaptureAt < this.timelapseCaptureIntervalMs) return;
+    // Nada cambió desde la última captura: no merece un fotograma repetido
+    // (dejaría tramos "congelados" en el vídeo sin aportar nada).
+    if (this.revision === this.timelapseLastRevision) return;
+    this.lastTimelapseCaptureAt = now;
+    this.timelapseLastRevision = this.revision;
+
+    // `renderFrameToImageData` — el mismo camino determinista que usa la
+    // exportación normal — en vez de copiar del lienzo interactivo: éste
+    // lleva el zoom/giro/paneo que tenga puesto el usuario en ese instante,
+    // y el time-lapse tiene que verse siempre encuadrado igual, no dando
+    // saltos de cámara cada vez que alguien mueve la vista mientras dibuja.
+    const data = this.renderFrameToImageData(this.currentFrame);
+    const full = document.createElement('canvas');
+    full.width = data.width;
+    full.height = data.height;
+    full.getContext('2d')!.putImageData(data, 0, 0);
+
+    const targetW = Math.min(Engine.TIMELAPSE_CAPTURE_WIDTH, data.width);
+    const targetH = Math.max(1, Math.round(targetW * (data.height / data.width)));
+    const small = document.createElement('canvas');
+    small.width = targetW;
+    small.height = targetH;
+    const sctx = small.getContext('2d')!;
+    // Fondo blanco antes de copiar: `renderFrameToImageData` puede llevar
+    // alfa parcial si el papel es transparente, y un vídeo no tiene canal
+    // alfa — igual que hace `drawFrame` en video.ts para la exportación
+    // normal.
+    sctx.fillStyle = '#ffffff';
+    sctx.fillRect(0, 0, targetW, targetH);
+    sctx.drawImage(full, 0, 0, targetW, targetH);
+
+    this.timelapseFrames.push(small);
+    if (this.timelapseFrames.length > Engine.TIMELAPSE_MAX_FRAMES) {
+      // Diezmado: en una sesión larga, en vez de crecer sin límite se queda
+      // con la mitad (una de cada dos) y dobla el intervalo de captura, para
+      // que el ritmo futuro siga siendo coherente con lo ya grabado.
+      this.timelapseFrames = this.timelapseFrames.filter((_, i) => i % 2 === 0);
+      this.timelapseCaptureIntervalMs *= 2;
+    }
+    this.touch(false);
+  }
+
   /* --- intercambio de sprites (poses/visemas) --- */
 
   /**
