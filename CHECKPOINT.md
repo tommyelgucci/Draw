@@ -20,9 +20,9 @@ npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borr
 npm run test:video        TODO EN VERDE   (13 comprobaciones; el vídeo se decodifica y se le ven los trazos)
 npm run test:canvas-size  TODO EN VERDE   (redimensionar sin perder tinta, controles legibles en tablet)
 npm run test:quickshape   TODO EN VERDE   (24 comprobaciones: línea, elipse, rectángulo, triángulo, polígono)
-npm run test:fill         TODO EN VERDE   (bote de relleno, acotado a la caja tocada)
+npm run test:fill         TODO EN VERDE   (bote de relleno; el barrido en CPU corre en un worker)
 npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tolerancia, sumar/restar)
-npm run test:unit         TODO EN VERDE   (83 casos: math.ts, document.ts, selection.ts — núcleo puro, sin navegador)
+npm run test:unit         TODO EN VERDE   (89 casos: math.ts, document.ts, selection.ts, flood.ts — núcleo puro, sin navegador)
 npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
@@ -275,9 +275,25 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   camino (subida de la máscara a GPU, restaurar el respaldo del canvas 2D),
   que sigue siendo O(lienzo).
 - ~~`floodFill` recorre el lienzo entero para el crecimiento y el color~~.
-  Acotado a la caja de lo rellenado. Sigue leyendo el lienzo completo por
-  GPU dos veces como referencia (coste fijo, no depende del tamaño del
-  relleno) — moverlo a un worker sigue pendiente, ver abajo.
+  Acotado a la caja de lo rellenado.
+- ~~`floodFill` bloquea el hilo principal mientras rellena~~. El barrido de
+  líneas, el crecimiento y pintar el color —la parte en CPU, extraída a
+  `core/flood.ts`, puro— corren ahora en `workers/floodFill.worker.ts`. Las
+  dos lecturas de GPU (la referencia compuesta y el cel) siguen en el hilo
+  principal a la fuerza: hace falta el contexto WebGL vivo, que no existe
+  en un Worker sin transferirle el canvas entero (`OffscreenCanvas`), lo
+  que habría sido un cambio mucho mayor para lo que hacía falta. `Engine.
+  floodFill` pasó a ser `async`; la varita mágica reutiliza las mismas
+  funciones puras pero SIN worker (`beginSelectWand`/
+  `updateSelectWandTolerance` necesitan responder en cada muestra de un
+  arrastre en vivo, así que un viaje de ida y vuelta ahí sería más lento,
+  no menos). Verificado con rAF: el hilo principal sigue despachando
+  fotogramas durante un relleno grande (antes, cero, la única forma
+  posible de estar realmente bloqueado). El tiempo TOTAL de un relleno no
+  bajó — subió, de hecho, por el coste fijo de transferir los búferes de
+  referencia y cel al worker — la mejora es que ese tiempo ya no bloquea
+  nada más, no que sea más corto; medido y documentado así en
+  `scripts/fill.mjs`, sin convertirlo en una aserción de rendimiento.
 - ~~Importar un vídeo largo no se puede cancelar~~. Botón "Cancelar" +
   `AbortSignal`. Sigue siendo lento en proporción a la duración (`seek` +
   subida a GPU secuenciales, sin cambiar) — cancelar no acelera la
@@ -304,9 +320,6 @@ Todavía abierta:
 - **El rendimiento sólo está medido con SwiftShader**, que es correcto pero
   lento. Los números absolutos de un iPad están sin tomar — no se puede
   resolver desde aquí, hace falta el dispositivo real.
-- **`floodFill` sigue bloqueando el hilo** mientras rellena (la lectura de
-  referencia por GPU, ver arriba). En un lienzo grande se nota; hay un
-  indicador de ocupado, pero lo correcto sería un worker.
 - **Capas en disco (OPFS)**, de `RUMBO.md` — cambia el respaldo de
   `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
   de expulsión ya existe, así que el cambio queda contenido en

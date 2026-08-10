@@ -513,10 +513,13 @@ export function CanvasView() {
     }
     if (tool === 'fill') {
       uiRef.current.setBusy('Rellenando…');
-      // Un frame de respiro para que se pinte el indicador antes de bloquear.
+      // Un frame de respiro para que se pinte el indicador antes de la
+      // lectura de GPU (bloquea el hilo; el barrido en sí ya no — corre en
+      // un worker, ver Engine.floodFill).
       requestAnimationFrame(() => {
-        engine.floodFill({ x: sample.x, y: sample.y }, uiRef.current.color);
-        uiRef.current.setBusy(null);
+        engine.floodFill({ x: sample.x, y: sample.y }, uiRef.current.color).then(() => {
+          uiRef.current.setBusy(null);
+        });
       });
       return;
     }

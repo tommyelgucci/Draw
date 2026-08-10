@@ -26,8 +26,10 @@ import {
   type TextLayerProps,
   type TraceDocument,
 } from './document';
+import { extractRect, floodMatch } from './flood';
 import { History } from './history';
 import { rehydrateHistoryOp, type HistoryOp } from './historyOps';
+import type { FloodFillResponse } from '../workers/floodFill.worker';
 import {
   bendSignFor,
   boneRestFromDrag,
@@ -3590,7 +3592,7 @@ export class Engine {
   private previewSelectWand() {
     const pending = this.pendingWand;
     if (!pending) return;
-    const { filled, minX, minY, maxX, maxY } = this.floodMatch(
+    const { filled, minX, minY, maxX, maxY } = floodMatch(
       pending.reference,
       pending.w,
       pending.h,
@@ -3991,71 +3993,45 @@ export class Engine {
     return { r: px[0] / 255 / a, g: px[1] / 255 / a, b: px[2] / 255 / a };
   }
 
-  /**
-   * Región conexa por semejanza de color desde `(sx,sy)` sobre `reference`
-   * (RGBA, `w`×`h`), con relleno por líneas de barrido — mucho menos
-   * tráfico de pila que el recursivo por píxel, que en un lienzo grande
-   * revienta. Compartido entre `floodFill` (pinta la región) y
-   * `beginSelectWand`/`updateSelectWandTolerance` (la seleccionan): ambos
-   * necesitan exactamente la misma región, sólo cambia qué se hace con
-   * ella después.
-   */
-  private floodMatch(
+  /** Worker perezoso para la parte en CPU de `floodFill` — un solo hilo
+   *  para la vida del `Engine`, no uno por relleno; el worker no guarda
+   *  nada entre mensajes. */
+  private floodWorker: Worker | null = null;
+  private getFloodWorker(): Worker {
+    if (!this.floodWorker) {
+      this.floodWorker = new Worker(new URL('../workers/floodFill.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+    }
+    return this.floodWorker;
+  }
+
+  private runFloodFillWorker(
     reference: Uint8Array,
+    target: Uint8Array,
     w: number,
     h: number,
     sx: number,
     sy: number,
     tolerance: number,
-  ): { filled: Uint8Array; minX: number; minY: number; maxX: number; maxY: number } {
-    const start = (sy * w + sx) * 4;
-    const sr = reference[start];
-    const sg = reference[start + 1];
-    const sb = reference[start + 2];
-    const sa = reference[start + 3];
-    const tol = tolerance * 255;
-
-    const matches = (i: number) =>
-      Math.abs(reference[i] - sr) <= tol &&
-      Math.abs(reference[i + 1] - sg) <= tol &&
-      Math.abs(reference[i + 2] - sb) <= tol &&
-      Math.abs(reference[i + 3] - sa) <= tol;
-
-    const filled = new Uint8Array(w * h);
-    const stack: number[] = [sx, sy];
-    let minX = sx;
-    let minY = sy;
-    let maxX = sx;
-    let maxY = sy;
-
-    while (stack.length > 0) {
-      const y = stack.pop()!;
-      const x = stack.pop()!;
-      if (filled[y * w + x]) continue;
-
-      let left = x;
-      while (left > 0 && !filled[y * w + left - 1] && matches((y * w + left - 1) * 4)) left--;
-      let right = x;
-      while (right < w - 1 && !filled[y * w + right + 1] && matches((y * w + right + 1) * 4))
-        right++;
-
-      for (let i = left; i <= right; i++) filled[y * w + i] = 1;
-      if (left < minX) minX = left;
-      if (right > maxX) maxX = right;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-
-      for (const ny of [y - 1, y + 1]) {
-        if (ny < 0 || ny >= h) continue;
-        for (let i = left; i <= right; i++) {
-          if (!filled[ny * w + i] && matches((ny * w + i) * 4)) {
-            stack.push(i, ny);
-          }
-        }
-      }
-    }
-
-    return { filled, minX, minY, maxX, maxY };
+    expand: number,
+    color: RGB,
+    alphaLock: boolean,
+  ): Promise<FloodFillResponse> {
+    return new Promise((resolve) => {
+      const worker = this.getFloodWorker();
+      worker.addEventListener(
+        'message',
+        (e: MessageEvent<FloodFillResponse>) => resolve(e.data),
+        { once: true },
+      );
+      // Se transfieren los dos buffers (no se copian): ya no hacen falta
+      // aquí — `before` es una copia aparte, tomada antes de esto.
+      worker.postMessage(
+        { reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock },
+        [reference.buffer, target.buffer],
+      );
+    });
   }
 
   /**
@@ -4064,8 +4040,15 @@ export class Engine {
    * La referencia es el documento compuesto, no el cel: al colorear una
    * animación quieres que el bote respete las líneas aunque estén en otra
    * capa. La escritura sí va al cel activo.
+   *
+   * El barrido de líneas y sus dos pasadas siguientes (crecer el borde,
+   * pintar el color) corren en un Worker — ver `workers/floodFill.worker.ts`
+   * y `core/flood.ts` para el porqué está partido así. Las dos lecturas de
+   * GPU (la referencia compuesta y el cel) siguen aquí, en el hilo
+   * principal: son la parte que de verdad no se puede mover, porque hace
+   * falta el contexto WebGL vivo para leerlas.
    */
-  floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2) {
+  async floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2): Promise<void> {
     const layer = this.activeLayer;
     if (!layer || layer.locked || !layer.visible || layer.kind !== 'draw') return;
     const w = this.doc.width;
@@ -4091,62 +4074,18 @@ export class Engine {
     const target = this.renderer.readRect(cel.surface, full);
     const before = created >= 0 ? null : target.slice();
 
-    let { filled, minX, minY, maxX, maxY } = this.floodMatch(reference, w, h, sx, sy, tolerance);
-
-    // Un par de píxeles de crecimiento evita la orla blanca que deja el
-    // antialias de la línea entre el relleno y el trazo. Cada pasada sólo
-    // puede alcanzar un píxel más allá de lo ya lleno, así que tras `expand`
-    // pasadas nada fuera de este margen puede haber cambiado — acotar los
-    // dos bucles a esta caja, en vez de recorrer el lienzo entero, es la
-    // diferencia entre 8 millones de comprobaciones y unos pocos miles en un
-    // documento 4K con un relleno pequeño.
-    const boundMinX = Math.max(0, minX - expand);
-    const boundMinY = Math.max(0, minY - expand);
-    const boundMaxX = Math.min(w - 1, maxX + expand);
-    const boundMaxY = Math.min(h - 1, maxY + expand);
-
-    for (let pass = 0; pass < expand; pass++) {
-      const grown = filled.slice();
-      for (let y = boundMinY; y <= boundMaxY; y++) {
-        for (let x = boundMinX; x <= boundMaxX; x++) {
-          if (filled[y * w + x]) continue;
-          const up = y > 0 && filled[(y - 1) * w + x];
-          const down = y < h - 1 && filled[(y + 1) * w + x];
-          const lf = x > 0 && filled[y * w + x - 1];
-          const rt = x < w - 1 && filled[y * w + x + 1];
-          if (up || down || lf || rt) grown[y * w + x] = 1;
-        }
-      }
-      filled.set(grown);
-    }
-    minX = boundMinX;
-    minY = boundMinY;
-    maxX = boundMaxX;
-    maxY = boundMaxY;
-
-    const cr = Math.round(color.r * 255);
-    const cg = Math.round(color.g * 255);
-    const cb = Math.round(color.b * 255);
-    // Con bloqueo de alfa, el bote sólo puede recolorear tinta que ya
-    // existía en esta capa — nunca ensanchar su contorno. `target[o + 3]`
-    // todavía es el alfa ORIGINAL en este punto: cada píxel se escribe una
-    // sola vez en este bucle, así que leerlo justo antes de sobrescribirlo
-    // es seguro.
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const i = y * w + x;
-        if (!filled[i]) continue;
-        const o = i * 4;
-        if (layer.alphaLock && target[o + 3] === 0) continue;
-        target[o] = cr;
-        target[o + 1] = cg;
-        target[o + 2] = cb;
-        target[o + 3] = 255;
-      }
-    }
-
-    const rect: Rect = { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 };
-    const sub = extractRect(target, w, rect);
+    const { sub, rect } = await this.runFloodFillWorker(
+      reference,
+      target,
+      w,
+      h,
+      sx,
+      sy,
+      tolerance,
+      expand,
+      color,
+      layer.alphaLock,
+    );
     const prev = before ? extractRect(before, w, rect) : new Uint8Array(sub.length);
 
     const label = 'Rellenar';
@@ -4437,18 +4376,6 @@ function spliceRect(dst: Uint8Array, dstRect: Rect, src: Uint8Array, srcRect: Re
     const from = y * srcW * 4;
     dst.set(src.subarray(from, from + srcW * 4), (dy * dstW + dx) * 4);
   }
-}
-
-/** Recorta un sub-rectángulo de un buffer RGBA de ancho `stride` píxeles. */
-function extractRect(src: Uint8Array, stride: number, r: Rect): Uint8Array {
-  const w = r.x2 - r.x;
-  const h = r.y2 - r.y;
-  const out = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    const from = ((r.y + y) * stride + r.x) * 4;
-    out.set(src.subarray(from, from + w * 4), y * w * 4);
-  }
-  return out;
 }
 
 function structuredCloneTransform(t: Layer['transform']): Layer['transform'] {
