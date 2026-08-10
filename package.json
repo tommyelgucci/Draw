@@ -31,6 +31,8 @@
     "test:layer-mask": "node scripts/layer-mask.mjs",
     "test:text-layer": "node scripts/text-layer.mjs",
     "test:adjustment-layer": "node scripts/adjustment-layer.mjs",
+    "test:perspective-guide": "node scripts/perspective-guide.mjs",
+    "test:timelapse": "node scripts/timelapse.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",

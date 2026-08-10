@@ -156,6 +156,17 @@ export interface PendingLasso {
   mode: SelectionMode;
 }
 
+export type PerspectiveMode = '1pt' | '2pt' | '3pt';
+
+/** Ver `Engine.perspectiveGuide`. */
+export interface PerspectiveGuide {
+  enabled: boolean;
+  mode: PerspectiveMode;
+  vp1: Vec2;
+  vp2: Vec2;
+  vp3: Vec2;
+}
+
 /**
  * Selección "varita mágica" en marcha: la referencia compuesta se lee UNA
  * vez al empezar (coste fijo caro, por GPU) y se cachea aquí — arrastrar
@@ -237,6 +248,20 @@ export class Engine {
     vertical: false,
     horizontal: false,
     radial: 0,
+  };
+  /**
+   * Guía(s) de perspectiva — asistente visual y de encaje de trazo, no se
+   * guarda con el documento (como `symmetry`): es preferencia de sesión de
+   * dibujo, no parte de la obra. `vp2`/`vp3` sólo se usan en 2/3 puntos.
+   * Los puntos se recentran cuando cambia el tamaño del documento — ver
+   * `centerPerspectiveGuide`.
+   */
+  perspectiveGuide: PerspectiveGuide = {
+    enabled: false,
+    mode: '1pt',
+    vp1: { x: 960, y: 540 },
+    vp2: { x: 100, y: 540 },
+    vp3: { x: 960, y: 100 },
   };
 
   playing = false;
@@ -327,6 +352,7 @@ export class Engine {
     } else {
       this.activeLayerId = this.doc.layers[this.doc.layers.length - 1].id;
     }
+    this.centerPerspectiveGuide();
     this.resetView();
     this.startLoop();
   }
@@ -1066,6 +1092,105 @@ export class Engine {
     if (!layer?.adjustment) return;
     layer.adjustment = { ...layer.adjustment, ...patch };
     this.touch();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Time-lapse del proceso de dibujo
+   * ---------------------------------------------------------------- */
+
+  timelapseRecording = false;
+  private timelapseFrames: HTMLCanvasElement[] = [];
+  private timelapseCaptureIntervalMs = 1000;
+  private lastTimelapseCaptureAt = 0;
+  private timelapseLastRevision = -1;
+  private unsubscribeTimelapse: (() => void) | null = null;
+
+  private static readonly TIMELAPSE_MAX_FRAMES = 600;
+  private static readonly TIMELAPSE_CAPTURE_WIDTH = 480;
+
+  get timelapseFrameCount(): number {
+    return this.timelapseFrames.length;
+  }
+
+  /** Empieza a capturar fotogramas periódicos mientras se dibuja — la
+   *  captura de verdad ocurre en `captureTimelapseFrame`, enganchada a
+   *  `onAfterRender` en vez de a un `setInterval` propio: así sólo se
+   *  intenta cuando el lienzo cambió de verdad, no a ciegas cada segundo. */
+  startTimelapseRecording() {
+    if (this.timelapseRecording) return;
+    this.timelapseRecording = true;
+    this.timelapseFrames = [];
+    this.timelapseCaptureIntervalMs = 1000;
+    this.lastTimelapseCaptureAt = 0;
+    this.timelapseLastRevision = -1;
+    this.unsubscribeTimelapse = this.onAfterRender(() => this.captureTimelapseFrame());
+    this.touch();
+  }
+
+  /** Deja de capturar, conservando lo grabado hasta ahora para exportar. */
+  stopTimelapseRecording() {
+    if (!this.timelapseRecording) return;
+    this.timelapseRecording = false;
+    this.unsubscribeTimelapse?.();
+    this.unsubscribeTimelapse = null;
+    this.touch();
+  }
+
+  /** Descarta la grabación en marcha o ya parada. */
+  discardTimelapse() {
+    this.stopTimelapseRecording();
+    this.timelapseFrames = [];
+    this.touch();
+  }
+
+  /** Lienzos capturados, en orden — sólo para `exportImageSequenceAsVideo`. */
+  get timelapseFramesSnapshot(): readonly HTMLCanvasElement[] {
+    return this.timelapseFrames;
+  }
+
+  private captureTimelapseFrame() {
+    const now = performance.now();
+    if (now - this.lastTimelapseCaptureAt < this.timelapseCaptureIntervalMs) return;
+    // Nada cambió desde la última captura: no merece un fotograma repetido
+    // (dejaría tramos "congelados" en el vídeo sin aportar nada).
+    if (this.revision === this.timelapseLastRevision) return;
+    this.lastTimelapseCaptureAt = now;
+    this.timelapseLastRevision = this.revision;
+
+    // `renderFrameToImageData` — el mismo camino determinista que usa la
+    // exportación normal — en vez de copiar del lienzo interactivo: éste
+    // lleva el zoom/giro/paneo que tenga puesto el usuario en ese instante,
+    // y el time-lapse tiene que verse siempre encuadrado igual, no dando
+    // saltos de cámara cada vez que alguien mueve la vista mientras dibuja.
+    const data = this.renderFrameToImageData(this.currentFrame);
+    const full = document.createElement('canvas');
+    full.width = data.width;
+    full.height = data.height;
+    full.getContext('2d')!.putImageData(data, 0, 0);
+
+    const targetW = Math.min(Engine.TIMELAPSE_CAPTURE_WIDTH, data.width);
+    const targetH = Math.max(1, Math.round(targetW * (data.height / data.width)));
+    const small = document.createElement('canvas');
+    small.width = targetW;
+    small.height = targetH;
+    const sctx = small.getContext('2d')!;
+    // Fondo blanco antes de copiar: `renderFrameToImageData` puede llevar
+    // alfa parcial si el papel es transparente, y un vídeo no tiene canal
+    // alfa — igual que hace `drawFrame` en video.ts para la exportación
+    // normal.
+    sctx.fillStyle = '#ffffff';
+    sctx.fillRect(0, 0, targetW, targetH);
+    sctx.drawImage(full, 0, 0, targetW, targetH);
+
+    this.timelapseFrames.push(small);
+    if (this.timelapseFrames.length > Engine.TIMELAPSE_MAX_FRAMES) {
+      // Diezmado: en una sesión larga, en vez de crecer sin límite se queda
+      // con la mitad (una de cada dos) y dobla el intervalo de captura, para
+      // que el ritmo futuro siga siendo coherente con lo ya grabado.
+      this.timelapseFrames = this.timelapseFrames.filter((_, i) => i % 2 === 0);
+      this.timelapseCaptureIntervalMs *= 2;
+    }
+    this.touch(false);
   }
 
   /* --- intercambio de sprites (poses/visemas) --- */
@@ -1959,7 +2084,15 @@ export class Engine {
     return this.builder !== null;
   }
 
-  beginStroke(sample: InputSample, ctx: StrokeContext): boolean {
+  /** Encaja la posición de una muestra a la guía de perspectiva si está
+   *  activa — sin tocar el resto de campos (presión, inclinación...). */
+  private snapSample(s: InputSample): InputSample {
+    if (!this.perspectiveGuide.enabled) return s;
+    const p = this.snapToPerspective({ x: s.x, y: s.y });
+    return { ...s, x: p.x, y: p.y };
+  }
+
+  beginStroke(rawSample: InputSample, ctx: StrokeContext): boolean {
     const layer = this.activeLayer;
     if (!layer || layer.locked || !layer.visible || layer.kind !== 'draw') return false;
 
@@ -1968,6 +2101,7 @@ export class Engine {
     // de Procreate: seguir dibujando la da por buena.
     if (this.pendingQuickShape) this.commitQuickShape();
 
+    const sample = this.snapSample(rawSample);
     const resolved = this.resolveStrokeCel(layer, this.currentFrame);
     if (!resolved) return false;
     const { cel, created } = resolved;
@@ -1992,8 +2126,10 @@ export class Engine {
     return true;
   }
 
-  moveStroke(samples: InputSample[], predicted: InputSample[] = []) {
+  moveStroke(rawSamples: InputSample[], rawPredicted: InputSample[] = []) {
     if (!this.builder) return;
+    const samples = this.perspectiveGuide.enabled ? rawSamples.map((s) => this.snapSample(s)) : rawSamples;
+    const predicted = this.perspectiveGuide.enabled ? rawPredicted.map((s) => this.snapSample(s)) : rawPredicted;
     const stamps: Stamp[] = [];
     for (const s of samples) {
       stamps.push(...this.builder.push(s));
@@ -2045,6 +2181,60 @@ export class Engine {
     if (horizontal) out.push(...stamps.map(mirrorH));
     if (vertical && horizontal) out.push(...stamps.map((s) => mirrorH(mirrorV(s))));
     return out;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Guía de perspectiva
+   * ---------------------------------------------------------------- */
+
+  private centerPerspectiveGuide() {
+    const w = this.doc.width;
+    const h = this.doc.height;
+    this.perspectiveGuide.vp1 = { x: w / 2, y: h / 2 };
+    this.perspectiveGuide.vp2 = { x: w * 0.08, y: h / 2 };
+    this.perspectiveGuide.vp3 = { x: w / 2, y: h * 0.08 };
+  }
+
+  setPerspectiveGuide(patch: Partial<Omit<PerspectiveGuide, 'vp1' | 'vp2' | 'vp3'>>) {
+    this.perspectiveGuide = { ...this.perspectiveGuide, ...patch };
+    this.touch();
+  }
+
+  setPerspectiveVanishingPoint(which: 'vp1' | 'vp2' | 'vp3', p: Vec2) {
+    this.perspectiveGuide[which] = p;
+    this.touch();
+  }
+
+  /**
+   * Encaja `p` a la línea radial más cercana de cualquiera de los puntos de
+   * fuga activos — cada punto de fuga tiene radios imaginarios cada 7.5°
+   * (48 por vuelta, bastante fino para no notarse como "escalones" al
+   * trazar una curva suave). Se prueban todos los puntos de fuga del modo
+   * activo y se queda con el que menos desplaza `p` — así una línea que
+   * apunta claramente a un punto de fuga no se encaja al otro por
+   * casualidad sólo por estar más cerca en línea recta.
+   */
+  private snapToPerspective(p: Vec2): Vec2 {
+    const g = this.perspectiveGuide;
+    if (!g.enabled) return p;
+    const vps = g.mode === '1pt' ? [g.vp1] : g.mode === '2pt' ? [g.vp1, g.vp2] : [g.vp1, g.vp2, g.vp3];
+    const step = (Math.PI * 2) / 48;
+    let best = p;
+    let bestDelta = Infinity;
+    for (const vp of vps) {
+      const dx = p.x - vp.x;
+      const dy = p.y - vp.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1) continue;
+      const angle = Math.round(Math.atan2(dy, dx) / step) * step;
+      const candidate = { x: vp.x + Math.cos(angle) * dist, y: vp.y + Math.sin(angle) * dist };
+      const delta = Math.hypot(candidate.x - p.x, candidate.y - p.y);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   private commitStamps(stamps: Stamp[]) {
@@ -3999,6 +4189,7 @@ export class Engine {
     this.selection = { active: false, bounds: emptyRect() };
     this.history.clear();
     this.thumbCache.clear();
+    this.centerPerspectiveGuide();
     this.resetView();
     this.touch();
   }

@@ -28,7 +28,7 @@ import {
   importReferenceVideo,
   serializeProject,
 } from '../core/io';
-import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/video';
+import { describeVideoSupport, exportImageSequenceAsVideo, exportVideo, type VideoSupport } from '../core/video';
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
@@ -1054,6 +1054,36 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           real — como dibujar los dos lados de una cara a la vez. La radial reparte el
           trazo en corona alrededor del centro del documento, como un mandala.
         </p>
+
+        <h3 className="panel__subtitle">Guía de perspectiva</h3>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={engine?.perspectiveGuide.enabled ?? false}
+            disabled={!engine}
+            onChange={(e) => engine?.setPerspectiveGuide({ enabled: e.target.checked })}
+          />
+          <span>Activar</span>
+        </label>
+        {engine?.perspectiveGuide.enabled && (
+          <>
+            <Field label="Puntos de fuga">
+              <Segmented
+                value={engine.perspectiveGuide.mode}
+                options={[
+                  { value: '1pt', label: '1 punto' },
+                  { value: '2pt', label: '2 puntos' },
+                  { value: '3pt', label: '3 puntos' },
+                ]}
+                onChange={(mode) => engine.setPerspectiveGuide({ mode })}
+              />
+            </Field>
+            <p className="hint">
+              Arrastra los puntos de fuga sobre el lienzo para moverlos. Al dibujar cerca de
+              uno de sus radios, el trazo se endereza hacia él solo.
+            </p>
+          </>
+        )}
       </div>
     </Panel>
   );
@@ -1795,6 +1825,47 @@ export function ExportPanel({ engine }: { engine: Engine }) {
         El vídeo es lo que sirve para publicar y para montar en un editor. El APNG
         conserva transparencia y color sin pérdida pero pesa mucho más; la secuencia de
         PNG es la opción sin pérdidas para seguir trabajando en otro programa.
+      </p>
+
+      <h3 className="panel__subtitle">Time-lapse</h3>
+      {!engine.timelapseRecording && engine.timelapseFrameCount === 0 && (
+        <button className="btn btn--ghost" onClick={() => engine.startTimelapseRecording()}>
+          Empezar a grabar
+        </button>
+      )}
+      {engine.timelapseRecording && (
+        <button className="btn" onClick={() => engine.stopTimelapseRecording()}>
+          Detener · {engine.timelapseFrameCount} fotogramas
+        </button>
+      )}
+      {!engine.timelapseRecording && engine.timelapseFrameCount > 0 && (
+        <>
+          <p className="hint">{engine.timelapseFrameCount} fotogramas grabados.</p>
+          <button
+            className="btn"
+            onClick={() =>
+              run('Exportando time-lapse…', async () => {
+                const result = await exportImageSequenceAsVideo(
+                  [...engine.timelapseFramesSnapshot],
+                  24,
+                  videoQuality,
+                  (d, t) => setProgress(`${d}/${t}`),
+                );
+                downloadBlob(result.blob, `${safeName}_timelapse.${result.extension}`);
+              })
+            }
+          >
+            <IconDownload size={16} /> Exportar time-lapse
+          </button>
+          <button className="btn btn--ghost" onClick={() => engine.discardTimelapse()}>
+            Descartar y empezar de nuevo
+          </button>
+        </>
+      )}
+      <p className="hint">
+        Graba capturas periódicas mientras dibujas y expórtalas como un vídeo acelerado —
+        como el time-lapse de Procreate. No se guarda con el proyecto: se pierde si cierras
+        o recargas la página.
       </p>
 
       <h3 className="panel__subtitle">Copia local</h3>

@@ -319,6 +319,186 @@ async function exportWithRecorder(
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Time-lapse: mismo par de rutas de codificación que `exportVideo`, pero
+ * la fuente es una lista de lienzos ya renderizados (capturas periódicas
+ * mientras se dibuja — ver `Engine.timelapseFrames`) en vez del documento
+ * animado. Se duplica el cuerpo de `exportWithWebCodecs`/`exportWithRecorder`
+ * en vez de generalizarlos: la fuente de fotogramas de la exportación
+ * normal (`drawFrame`, ligada a `engine.doc`) y la del time-lapse (una
+ * lista ya en memoria) son lo bastante distintas como para que forzar un
+ * parámetro común complique más de lo que ahorra, y así la ruta de
+ * exportación normal —ya probada— no se toca en absoluto.
+ * ------------------------------------------------------------------ */
+
+async function exportSequenceWithWebCodecs(
+  frames: HTMLCanvasElement[],
+  fps: number,
+  quality: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<VideoExportResult | null> {
+  const [w, h] = evenSize(frames[0].width, frames[0].height);
+  const bitrate = bitrateFor(w, h, fps, quality);
+
+  const picked = await pickEncoding(w, h, fps, bitrate);
+  if (!picked) return null;
+  const { codec, container } = picked;
+
+  const mp4Muxer =
+    container === 'mp4'
+      ? new Muxer({
+          target: new ArrayBufferTarget(),
+          video: { codec: 'avc', width: w, height: h, frameRate: fps },
+          fastStart: 'in-memory',
+        })
+      : null;
+  const webmMuxer =
+    container === 'webm'
+      ? new WebMMuxer({
+          target: new WebMTarget(),
+          video: {
+            codec: codec.startsWith('vp09') ? 'V_VP9' : 'V_VP8',
+            width: w,
+            height: h,
+            frameRate: fps,
+          },
+        })
+      : null;
+
+  let failure: Error | null = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => {
+      if (mp4Muxer) mp4Muxer.addVideoChunk(chunk, meta);
+      else webmMuxer!.addVideoChunk(chunk, meta);
+    },
+    error: (e) => {
+      failure = e instanceof Error ? e : new Error(String(e));
+    },
+  });
+  encoder.configure({ codec, width: w, height: h, bitrate, framerate: fps });
+
+  const canvas = makeFrameCanvas(w, h);
+  const ctx = canvas.getContext('2d')!;
+  const frameDuration = 1_000_000 / fps;
+
+  for (let i = 0; i < frames.length; i++) {
+    if (failure) break;
+    ctx.drawImage(frames[i], 0, 0, w, h);
+
+    const videoFrame = new VideoFrame(canvas, {
+      timestamp: Math.round(i * frameDuration),
+      duration: Math.round(frameDuration),
+    });
+    encoder.encode(videoFrame, { keyFrame: i % Math.max(1, fps * 2) === 0 });
+    videoFrame.close();
+
+    onProgress?.(i + 1, frames.length);
+    if (encoder.encodeQueueSize > 8) {
+      await new Promise<void>((resolve) => {
+        const wait = () =>
+          encoder.encodeQueueSize > 4 ? setTimeout(wait, 8) : resolve();
+        wait();
+      });
+    } else {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  await encoder.flush();
+  encoder.close();
+  if (failure) throw failure;
+
+  if (mp4Muxer) {
+    mp4Muxer.finalize();
+    return {
+      blob: new Blob([(mp4Muxer.target as ArrayBufferTarget).buffer], { type: 'video/mp4' }),
+      extension: 'mp4',
+      method: 'webcodecs',
+      codec,
+    };
+  }
+  webmMuxer!.finalize();
+  return {
+    blob: new Blob([(webmMuxer!.target as WebMTarget).buffer], { type: 'video/webm' }),
+    extension: 'webm',
+    method: 'webcodecs',
+    codec,
+  };
+}
+
+async function exportSequenceWithRecorder(
+  frames: HTMLCanvasElement[],
+  fps: number,
+  quality: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<VideoExportResult> {
+  if (typeof MediaRecorder === 'undefined') {
+    throw new Error('Este navegador no puede exportar vídeo.');
+  }
+  const mimeType = RECORDER_TYPES.find((t) => MediaRecorder.isTypeSupported(t));
+  if (!mimeType) throw new Error('Este navegador no ofrece ningún formato de vídeo.');
+
+  const [w, h] = evenSize(frames[0].width, frames[0].height);
+  const canvas = makeFrameCanvas(w, h);
+  const ctx = canvas.getContext('2d')!;
+
+  const stream = canvas.captureStream(0) as MediaStream;
+  const track = stream.getVideoTracks()[0] as CaptureTrack;
+  const manual = typeof track.requestFrame === 'function';
+  const timedStream = manual ? stream : (canvas.captureStream(fps) as MediaStream);
+
+  const chunks: BlobPart[] = [];
+  const recorder = new MediaRecorder(timedStream, {
+    mimeType,
+    videoBitsPerSecond: bitrateFor(w, h, fps, quality),
+  });
+  recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
+
+  const finished = new Promise<void>((resolve, reject) => {
+    recorder.onstop = () => resolve();
+    recorder.onerror = () => reject(new Error('Falló la grabación del vídeo.'));
+  });
+
+  recorder.start();
+  const step = 1000 / fps;
+  for (let i = 0; i < frames.length; i++) {
+    ctx.drawImage(frames[i], 0, 0, w, h);
+    if (manual) track.requestFrame!();
+    onProgress?.(i + 1, frames.length);
+    await new Promise((r) => setTimeout(r, step));
+  }
+  recorder.stop();
+  await finished;
+
+  const extension = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+  return {
+    blob: new Blob(chunks, { type: mimeType }),
+    extension,
+    method: 'mediarecorder',
+    codec: mimeType,
+  };
+}
+
+/** Exporta las capturas de un time-lapse como vídeo — mismo par de rutas
+ *  que `exportVideo`, fuente distinta. */
+export async function exportImageSequenceAsVideo(
+  frames: HTMLCanvasElement[],
+  fps: number,
+  quality: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<VideoExportResult> {
+  if (frames.length === 0) throw new Error('No hay fotogramas que exportar.');
+  if (hasWebCodecs()) {
+    try {
+      const result = await exportSequenceWithWebCodecs(frames, fps, quality, onProgress);
+      if (result) return result;
+    } catch (err) {
+      console.warn('WebCodecs falló, se intenta con MediaRecorder', err);
+    }
+  }
+  return exportSequenceWithRecorder(frames, fps, quality, onProgress);
+}
+
 /**
  * Exporta la animación como vídeo.
  *
