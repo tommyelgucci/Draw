@@ -17,6 +17,11 @@ import type { Rect } from '../core/types';
  * arrastrar un tsconfig aparte sólo por este archivo.
  */
 interface FloodFillRequest {
+  /** Ecoado tal cual en la respuesta: el hilo principal reutiliza un único
+   *  worker para todos los rellenos y puede tener varias peticiones en
+   *  vuelo a la vez (nada bloquea el lienzo mientras se espera), así que
+   *  hace falta para emparejar cada respuesta con quien la pidió. */
+  id: number;
   reference: Uint8Array;
   target: Uint8Array;
   w: number;
@@ -32,6 +37,7 @@ interface FloodFillRequest {
 }
 
 export interface FloodFillResponse {
+  id: number;
   sub: Uint8Array;
   rect: Rect;
 }
@@ -44,11 +50,11 @@ type WorkerLike = {
 const ctx = self as unknown as WorkerLike;
 
 ctx.onmessage = (e) => {
-  const { reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock } = e.data;
+  const { id, reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock } = e.data;
   const match = floodMatch(reference, w, h, sx, sy, tolerance);
   const bounds = growFilled(match.filled, w, h, match, expand);
   applyFillColor(target, w, match.filled, bounds, color, alphaLock);
   const rect: Rect = { x: bounds.minX, y: bounds.minY, x2: bounds.maxX + 1, y2: bounds.maxY + 1 };
   const sub = extractRect(target, w, rect);
-  ctx.postMessage({ sub, rect }, [sub.buffer]);
+  ctx.postMessage({ id, sub, rect }, [sub.buffer]);
 };

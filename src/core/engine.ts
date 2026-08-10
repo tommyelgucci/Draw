@@ -3997,11 +3997,28 @@ export class Engine {
    *  para la vida del `Engine`, no uno por relleno; el worker no guarda
    *  nada entre mensajes. */
   private floodWorker: Worker | null = null;
+  /** Un bote de relleno puede lanzarse mientras el anterior sigue en vuelo
+   *  (doble toque rápido: nada bloquea el lienzo mientras se espera al
+   *  worker, sólo hay un indicador visual). `addEventListener('message',
+   *  ..., {once:true})` por llamada no vale aquí: TODOS los listeners
+   *  registrados se disparan con el PRIMER mensaje que llega, así que dos
+   *  rellenos pendientes acababan resolviendo ambos con la misma respuesta
+   *  y la segunda de verdad se perdía sin que nadie la recogiera. Cada
+   *  petición lleva un id y un único handler fijo la reparte. */
+  private floodPending = new Map<number, (r: FloodFillResponse) => void>();
+  private floodRequestId = 0;
   private getFloodWorker(): Worker {
     if (!this.floodWorker) {
-      this.floodWorker = new Worker(new URL('../workers/floodFill.worker.ts', import.meta.url), {
+      const worker = new Worker(new URL('../workers/floodFill.worker.ts', import.meta.url), {
         type: 'module',
       });
+      worker.onmessage = (e: MessageEvent<FloodFillResponse>) => {
+        const resolve = this.floodPending.get(e.data.id);
+        if (!resolve) return;
+        this.floodPending.delete(e.data.id);
+        resolve(e.data);
+      };
+      this.floodWorker = worker;
     }
     return this.floodWorker;
   }
@@ -4020,15 +4037,12 @@ export class Engine {
   ): Promise<FloodFillResponse> {
     return new Promise((resolve) => {
       const worker = this.getFloodWorker();
-      worker.addEventListener(
-        'message',
-        (e: MessageEvent<FloodFillResponse>) => resolve(e.data),
-        { once: true },
-      );
+      const id = ++this.floodRequestId;
+      this.floodPending.set(id, resolve);
       // Se transfieren los dos buffers (no se copian): ya no hacen falta
       // aquí — `before` es una copia aparte, tomada antes de esto.
       worker.postMessage(
-        { reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock },
+        { id, reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock },
         [reference.buffer, target.buffer],
       );
     });
