@@ -1582,6 +1582,43 @@ button:focus-visible {
   stroke-dasharray: 3 5;
 }
 
+/** Radios y tiradores de la guía de perspectiva — activa con cualquier
+ * herramienta puesta (no sólo con una dedicada), así que va siempre encima
+ * del lienzo cuando `perspectiveGuide.enabled` es cierto. */
+.perspective-overlay__lines {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.perspective-overlay__lines line {
+  stroke: color-mix(in srgb, var(--accent) 35%, transparent);
+  stroke-width: 1;
+}
+
+.perspective-overlay__vp {
+  position: absolute;
+  z-index: 33;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.perspective-overlay__vp:active {
+  cursor: grabbing;
+}
+
 /** Aviso de que el trazo va a la máscara de la capa, no a su dibujo — ver
  * `MaskEditBanner`. Arriba centrado, fuera del área de dibujo, para no
  * tapar nunca lo que se está pintando. */

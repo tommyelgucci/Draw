@@ -1054,6 +1054,36 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           real — como dibujar los dos lados de una cara a la vez. La radial reparte el
           trazo en corona alrededor del centro del documento, como un mandala.
         </p>
+
+        <h3 className="panel__subtitle">Guía de perspectiva</h3>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={engine?.perspectiveGuide.enabled ?? false}
+            disabled={!engine}
+            onChange={(e) => engine?.setPerspectiveGuide({ enabled: e.target.checked })}
+          />
+          <span>Activar</span>
+        </label>
+        {engine?.perspectiveGuide.enabled && (
+          <>
+            <Field label="Puntos de fuga">
+              <Segmented
+                value={engine.perspectiveGuide.mode}
+                options={[
+                  { value: '1pt', label: '1 punto' },
+                  { value: '2pt', label: '2 puntos' },
+                  { value: '3pt', label: '3 puntos' },
+                ]}
+                onChange={(mode) => engine.setPerspectiveGuide({ mode })}
+              />
+            </Field>
+            <p className="hint">
+              Arrastra los puntos de fuga sobre el lienzo para moverlos. Al dibujar cerca de
+              uno de sus radios, el trazo se endereza hacia él solo.
+            </p>
+          </>
+        )}
       </div>
     </Panel>
   );
