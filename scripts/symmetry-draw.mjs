@@ -156,6 +156,78 @@ symState = await page.evaluate(() => window.__trace.symmetry);
 check('las dos quedan desactivadas', symState.vertical === false && symState.horizontal === false, JSON.stringify(symState));
 check('sin ejes activos, no hay línea guía', (await page.locator('.symmetry-overlay line').count()) === 0);
 
+async function docToPage(p) {
+  const s = await page.evaluate((pt) => window.__trace.docToScreen(pt), p);
+  return { x: s.x + box.x, y: s.y + box.y };
+}
+
+console.log('\n— Simetría radial —');
+const radialBtn = page.locator('.panel__actions .action', { hasText: /^Radial/ });
+check('el botón de simetría radial existe', (await radialBtn.count()) === 1);
+
+await radialBtn.click();
+await page.waitForTimeout(100);
+symState = await page.evaluate(() => window.__trace.symmetry);
+check('un toque activa radial ×4', symState.radial === 4 && !symState.vertical && !symState.horizontal, JSON.stringify(symState));
+const guideLinesRadial = await page.locator('.symmetry-overlay line').count();
+check('se ven 4 radios guía', guideLinesRadial === 4, `${guideLinesRadial}`);
+
+const docCenter = await page.evaluate(() => ({ x: window.__trace.doc.width / 2, y: window.__trace.doc.height / 2 }));
+const r = 150;
+// Con radial×4 y el ángulo que usa `mirrorStamps`, un punto a la derecha del
+// centro se repite abajo, a la izquierda y arriba — un rombo, no una cruz
+// alineada a los ejes por casualidad: es la rotación real la que lo coloca ahí.
+const east = { x: docCenter.x + r, y: docCenter.y };
+const south = { x: docCenter.x, y: docCenter.y + r };
+const west = { x: docCenter.x - r, y: docCenter.y };
+const north = { x: docCenter.x, y: docCenter.y - r };
+
+const eastPage = await docToPage(east);
+await drag([eastPage.x - 15, eastPage.y], [eastPage.x + 15, eastPage.y]);
+
+const rectAt = async (p) => docRectAround((await docToPage(p)).x, (await docToPage(p)).y, 40);
+const inkEast = await inkInRect(await rectAt(east));
+const inkSouth = await inkInRect(await rectAt(south));
+const inkWest = await inkInRect(await rectAt(west));
+const inkNorth = await inkInRect(await rectAt(north));
+check('tinta en el punto dibujado', inkEast > 15, `${inkEast} px`);
+check('copia rotada en la segunda posición', inkSouth > 15, `${inkSouth} px`);
+check('copia rotada en la tercera posición', inkWest > 15, `${inkWest} px`);
+check('copia rotada en la cuarta posición', inkNorth > 15, `${inkNorth} px`);
+
+const historyBeforeRadialUndo = await page.evaluate(() => window.__trace.history.past.length);
+await page.keyboard.press('Control+z');
+await page.waitForTimeout(150);
+const historyAfterRadialUndo = await page.evaluate(() => window.__trace.history.past.length);
+check(
+  'las 4 copias radiales son un único paso de deshacer',
+  historyAfterRadialUndo === historyBeforeRadialUndo - 1,
+);
+check('deshacer quita las 4 copias', (await inkInRect(await rectAt(east))) < 5);
+await page.screenshot({ path: `${out}/symmetry-03-radial.png` });
+
+console.log('\n— Radial y vertical/horizontal son excluyentes —');
+await verticalBtn.click();
+await page.waitForTimeout(100);
+symState = await page.evaluate(() => window.__trace.symmetry);
+check('activar Vertical apaga la radial', symState.vertical === true && symState.radial === 0, JSON.stringify(symState));
+await verticalBtn.click();
+await page.waitForTimeout(100);
+
+await radialBtn.click();
+await radialBtn.click();
+await page.waitForTimeout(100);
+symState = await page.evaluate(() => window.__trace.symmetry);
+check('la radial pasa a ×6 en el siguiente toque', symState.radial === 6, JSON.stringify(symState));
+// Vuelve a apagado para no dejar el documento en un estado sorprendente
+// para el resto de tests que compartan este servidor de desarrollo.
+await radialBtn.click();
+await radialBtn.click();
+await radialBtn.click();
+await page.waitForTimeout(100);
+symState = await page.evaluate(() => window.__trace.symmetry);
+check('vuelve a apagado tras completar el ciclo', symState.radial === 0, JSON.stringify(symState));
+
 console.log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 

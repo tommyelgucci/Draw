@@ -229,8 +229,15 @@ export class Engine {
   };
   /** Espejo en vivo: cada estampa del trazo se refleja también al otro lado
    *  del eje (o de los dos) mientras se dibuja — no es un filtro que se
-   *  aplique después, es tinta real puesta en los dos sitios a la vez. */
-  symmetry: { vertical: boolean; horizontal: boolean } = { vertical: false, horizontal: false };
+   *  aplique después, es tinta real puesta en los dos sitios a la vez.
+   *  `radial` (0 = apagada, si no el número de repeticiones alrededor del
+   *  centro del documento) es mutuamente excluyente con vertical/horizontal
+   *  — activar una apaga la otra, la UI lo hace cumplir; ver `mirrorStamps`. */
+  symmetry: { vertical: boolean; horizontal: boolean; radial: number } = {
+    vertical: false,
+    horizontal: false,
+    radial: 0,
+  };
 
   playing = false;
   loop = true;
@@ -1999,15 +2006,37 @@ export class Engine {
   }
 
   /**
-   * Copias reflejadas de `stamps` según `symmetry` — vertical (eje X en
-   * `doc.width/2`), horizontal (eje Y en `doc.height/2`), o las dos a la
-   * vez, que añade también la copia en diagonal (reflejada en ambos ejes),
-   * como la simetría de 4 vías de Procreate. El ángulo se refleja junto
-   * con la posición: sin eso, una estampa ovalada (pincel achatado)
-   * quedaría girada al revés de como se ve al otro lado del eje.
+   * Copias reflejadas o rotadas de `stamps` según `symmetry`.
+   *
+   * Vertical (eje X en `doc.width/2`), horizontal (eje Y en `doc.height/2`),
+   * o las dos a la vez, que añade también la copia en diagonal (reflejada en
+   * ambos ejes), como la simetría de 4 vías de Procreate. El ángulo se
+   * refleja junto con la posición: sin eso, una estampa ovalada (pincel
+   * achatado) quedaría girada al revés de como se ve al otro lado del eje.
+   *
+   * Radial (mutuamente excluyente con las anteriores — ver el campo) reparte
+   * `radial` copias en corona alrededor del centro del documento, rotando
+   * tanto la posición como el ángulo de cada estampa: un pétalo dibujado a
+   * mano se convierte en un mandala completo mientras se dibuja.
    */
   private mirrorStamps(stamps: Stamp[]): Stamp[] {
-    const { vertical, horizontal } = this.symmetry;
+    const { vertical, horizontal, radial } = this.symmetry;
+    if (radial > 1) {
+      const cx = this.doc.width / 2;
+      const cy = this.doc.height / 2;
+      const out: Stamp[] = [];
+      for (let k = 1; k < radial; k++) {
+        const theta = (Math.PI * 2 * k) / radial;
+        const c = Math.cos(theta);
+        const s = Math.sin(theta);
+        for (const st of stamps) {
+          const dx = st.x - cx;
+          const dy = st.y - cy;
+          out.push({ ...st, x: cx + dx * c - dy * s, y: cy + dx * s + dy * c, angle: st.angle + theta });
+        }
+      }
+      return out;
+    }
     if (!vertical && !horizontal) return [];
     const mirrorV = (s: Stamp): Stamp => ({ ...s, x: this.doc.width - s.x, angle: Math.PI - s.angle });
     const mirrorH = (s: Stamp): Stamp => ({ ...s, y: this.doc.height - s.y, angle: -s.angle });

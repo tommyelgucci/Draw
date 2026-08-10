@@ -48,6 +48,7 @@ import {
   IconMask,
   IconMergeDown,
   IconPlus,
+  IconRadial,
   IconResize,
   IconSymmetry,
   IconText,
@@ -1008,7 +1009,9 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
             disabled={!engine}
             onClick={() => {
               if (!engine) return;
-              engine.symmetry = { ...engine.symmetry, vertical: !engine.symmetry.vertical };
+              // Vertical/horizontal y radial son excluyentes — ver el
+              // comentario del campo `symmetry` en engine.ts.
+              engine.symmetry = { vertical: !engine.symmetry.vertical, horizontal: engine.symmetry.horizontal, radial: 0 };
               engine.touch();
             }}
           >
@@ -1021,17 +1024,35 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
             disabled={!engine}
             onClick={() => {
               if (!engine) return;
-              engine.symmetry = { ...engine.symmetry, horizontal: !engine.symmetry.horizontal };
+              engine.symmetry = { vertical: engine.symmetry.vertical, horizontal: !engine.symmetry.horizontal, radial: 0 };
               engine.touch();
             }}
           >
             <IconSymmetry size={18} className="icon-symmetry--h" />
             <span>Horizontal</span>
           </button>
+          <button
+            type="button"
+            className={`action ${engine && engine.symmetry.radial >= 2 ? 'is-active' : ''}`}
+            disabled={!engine}
+            title="Simetría radial: repite el trazo en corona alrededor del centro"
+            onClick={() => {
+              if (!engine) return;
+              const steps = [0, 4, 6, 8, 12];
+              const i = steps.indexOf(engine.symmetry.radial);
+              const radial = steps[(i + 1) % steps.length];
+              engine.symmetry = { vertical: false, horizontal: false, radial };
+              engine.touch();
+            }}
+          >
+            <IconRadial size={18} />
+            <span>{engine && engine.symmetry.radial >= 2 ? `Radial ×${engine.symmetry.radial}` : 'Radial'}</span>
+          </button>
         </div>
         <p className="hint">
           Cada estampa del trazo se refleja también al otro lado del eje activo, en tiempo
-          real — como dibujar los dos lados de una cara a la vez.
+          real — como dibujar los dos lados de una cara a la vez. La radial reparte el
+          trazo en corona alrededor del centro del documento, como un mandala.
         </p>
       </div>
     </Panel>

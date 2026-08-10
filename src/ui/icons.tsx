@@ -326,6 +326,15 @@ export const IconSymmetry = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Radios desde un centro — la simetría radial reparte el trazo en corona,
+ *  no en espejo, así que no reutiliza el icono de `IconSymmetry`. */
+export const IconRadial = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+    <path d="M12 12 12 3M12 12 19.8 7.5M12 12 19.8 16.5M12 12 12 21M12 12 4.2 16.5M12 12 4.2 7.5" />
+  </svg>
+);
+
 export const IconChevronRight = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="m9 5 7 7-7 7" />
