@@ -59,13 +59,37 @@ export default function App() {
   useEffect(() => {
     if (!engine) return;
     let lastRevision = -1;
+    let inFlight = false;
+    let cancelled = false;
     const id = setInterval(() => {
-      if (engine.revision === lastRevision || engine.isDrawing) return;
-      lastRevision = engine.revision;
-      autosave(engine).catch((err) => console.warn('Autoguardado falló', err));
+      if (inFlight || engine.revision === lastRevision) return;
+      inFlight = true;
+      (async () => {
+        try {
+          // Si cae justo sobre un trazo, espera a que termine en vez de
+          // cortarlo a la mitad o saltarse el guardado dos minutos enteros.
+          await engine.whenIdle();
+          if (cancelled) return;
+          lastRevision = engine.revision;
+          // Bloquea atajos y lienzo mientras dura: `serializeProject` suelta
+          // superficies de la GPU/RAM a propósito para no quedarse sin
+          // memoria en un proyecto grande (ver `core/io.ts`), y necesita que
+          // nada las reclame hasta que las restaure al terminar.
+          setBusy('Guardando…');
+          await autosave(engine);
+        } catch (err) {
+          console.warn('Autoguardado falló', err);
+        } finally {
+          setBusy(null);
+          inFlight = false;
+        }
+      })();
     }, AUTOSAVE_INTERVAL);
-    return () => clearInterval(id);
-  }, [engine]);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [engine, setBusy]);
 
   /* Atajos de teclado. */
   useEffect(() => {
@@ -73,6 +97,11 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      // Con un guardado en curso el documento puede tener superficies
+      // sueltas de la GPU/RAM a propósito (ver `serializeProject` en
+      // `core/io.ts`) — deshacer/rehacer en ese instante las reclamaría
+      // antes de que se restauren al terminar. Se levanta solo.
+      if (useUI.getState().busy) return;
       const mod = e.metaKey || e.ctrlKey;
 
       if (mod && e.key.toLowerCase() === 'z') {

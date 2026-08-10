@@ -2114,6 +2114,31 @@ export class Engine {
     return this.builder !== null;
   }
 
+  /**
+   * Se resuelve en cuanto no haya un trazo en curso — de inmediato si ya
+   * está quieto. La usa el autoguardado (`App.tsx`) para no cortar un trazo
+   * a la mitad ni saltarse el guardado los dos minutos enteros por haber
+   * caído justo encima de uno: espera a que termine en vez de cualquiera de
+   * las dos.
+   */
+  whenIdle(): Promise<void> {
+    if (!this.isDrawing) return Promise.resolve();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (this.isDrawing) return;
+        unsub();
+        clearInterval(poll);
+        resolve();
+      };
+      const unsub = this.subscribe(check);
+      // Red de seguridad: `touch()` ya se llama en cada muestra del trazo y
+      // al soltar, pero un candado que se pudiera quedar pegado para
+      // siempre por un camino que termine el trazo sin pasar por ahí es
+      // peor que revisar cada poco.
+      const poll = setInterval(check, 150);
+    });
+  }
+
   /** Encaja la posición de una muestra a la guía de perspectiva si está
    *  activa — sin tocar el resto de campos (presión, inclinación...). */
   private snapSample(s: InputSample): InputSample {
