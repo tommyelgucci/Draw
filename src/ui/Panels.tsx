@@ -30,8 +30,10 @@ import {
 } from '../core/io';
 import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/video';
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
-import { Field, IconButton, Panel, Slider } from './controls';
+import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
+  IconAdjust,
+  IconAlphaLock,
   IconAudio,
   IconChevronRight,
   IconClose,
@@ -43,10 +45,13 @@ import {
   IconImage,
   IconKey,
   IconLock,
+  IconMask,
   IconMergeDown,
   IconPlus,
+  IconRadial,
   IconResize,
   IconSymmetry,
+  IconText,
   IconTrash,
   IconVideo,
 } from './icons';
@@ -109,6 +114,8 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         />
         <div className="layer__meta">
           {layer.kind === 'reference' && <span className="layer__badge">Ref</span>}
+          {layer.kind === 'adjustment' && <span className="layer__badge">Ajuste</span>}
+          {layer.text && <span className="layer__badge">Texto</span>}
           {BLEND_LABELS[layer.blend]} · {Math.round(layer.opacity * 100)}%
           {layer.cels.size > 0 &&
             ` · ${layer.cels.size} ${layer.kind === 'reference' ? 'fotogramas' : 'dib.'}`}
@@ -141,6 +148,67 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         >
           <IconLock size={17} />
         </button>
+        {/* Una capa de ajuste no tiene alfa ni dibujo propios que bloquear o
+            recortar — `rasterizeLayer` (de donde salen ambos) ni se llama
+            para ella, así que estos botones no harían nada de verdad. */}
+        {layer.kind !== 'adjustment' && (
+          <button
+            type="button"
+            className={`layer__toggle ${layer.alphaLock ? 'is-on' : ''}`}
+            title={
+              layer.alphaLock
+                ? 'Quitar bloqueo de alfa: se puede volver a pintar fuera del contorno'
+                : 'Bloquear alfa: sólo se puede repintar dentro del contorno ya pintado'
+            }
+            aria-label={layer.alphaLock ? 'Quitar bloqueo de alfa' : 'Bloquear alfa'}
+            aria-pressed={layer.alphaLock}
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.setLayerProp(layer.id, 'alphaLock', !layer.alphaLock, 'Bloqueo de alfa');
+            }}
+          >
+            <IconAlphaLock size={17} />
+          </button>
+        )}
+        {layer.kind !== 'adjustment' &&
+          (() => {
+            const editing = engine.editingMaskLayerId === layer.id;
+            const title = !layer.mask
+              ? 'Añadir máscara'
+              : editing
+                ? 'Dejar de editar la máscara — volver a pintar la capa'
+                : 'Editar máscara: blanco revela, negro oculta';
+            return (
+              <button
+                type="button"
+                className={`layer__toggle ${layer.mask ? 'is-on' : ''} ${editing ? 'is-editing' : ''}`}
+                title={title}
+                aria-label={title}
+                aria-pressed={editing}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!layer.mask) engine.addLayerMask(layer.id);
+                  else engine.setEditingMaskLayer(editing ? null : layer.id);
+                }}
+              >
+                <IconMask size={17} />
+              </button>
+            );
+          })()}
+        {layer.mask && (
+          <button
+            type="button"
+            className="layer__toggle"
+            title="Quitar máscara"
+            aria-label="Quitar máscara"
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.removeLayerMask(layer.id);
+            }}
+          >
+            <IconClose size={17} />
+          </button>
+        )}
       </div>
     </li>
   );
@@ -258,6 +326,24 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         <button
           type="button"
           className="action"
+          aria-label="Añadir texto"
+          onClick={() => engine.createTextLayer()}
+        >
+          <IconText size={18} />
+          <span>Texto</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          aria-label="Añadir capa de ajuste"
+          onClick={() => engine.createAdjustmentLayer()}
+        >
+          <IconAdjust size={18} />
+          <span>Ajuste</span>
+        </button>
+        <button
+          type="button"
+          className="action"
           aria-label="Duplicar capa"
           onClick={() => active && engine.duplicateLayer(active.id)}
           disabled={!active}
@@ -328,7 +414,134 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         )}
       </ul>
 
-      {active && (
+      {active?.text && (
+        <div className="panel__section">
+          <h3 className="panel__subtitle">Texto</h3>
+          <Field label="Contenido">
+            <textarea
+              className="text-layer__content"
+              rows={3}
+              value={active.text.text}
+              onChange={(e) => engine.setTextLayerProps(active.id, { text: e.target.value })}
+            />
+          </Field>
+          <Slider
+            label="Tamaño"
+            value={active.text.fontSize}
+            min={8}
+            max={Math.max(8, Math.round(engine.doc.height * 0.5))}
+            step={1}
+            format={(v) => `${Math.round(v)}px`}
+            onChange={(v) => engine.setTextLayerProps(active.id, { fontSize: Math.round(v) })}
+          />
+          <Field label="Alineación">
+            <Segmented
+              value={active.text.align}
+              options={[
+                { value: 'left', label: 'Izq.' },
+                { value: 'center', label: 'Centro' },
+                { value: 'right', label: 'Der.' },
+              ]}
+              onChange={(align) => engine.setTextLayerProps(active.id, { align })}
+            />
+          </Field>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={active.text.bold}
+              onChange={(e) => engine.setTextLayerProps(active.id, { bold: e.target.checked })}
+            />
+            <span>Negrita</span>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={active.text.italic}
+              onChange={(e) => engine.setTextLayerProps(active.id, { italic: e.target.checked })}
+            />
+            <span>Cursiva</span>
+          </label>
+          <Field label="Color del texto">
+            <input
+              type="color"
+              value={rgbToHex(active.text.color)}
+              onChange={(e) => engine.setTextLayerProps(active.id, { color: hexToRgb(e.target.value) })}
+            />
+          </Field>
+          <p className="hint">
+            Para moverlo, usa la herramienta Transformar — el texto se mueve, escala y
+            rota como cualquier otra capa.
+          </p>
+        </div>
+      )}
+
+      {active?.adjustment && (
+        <div className="panel__section">
+          <h3 className="panel__subtitle">Ajuste</h3>
+          <Slider
+            label="Opacidad"
+            value={active.opacity}
+            min={0}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerPropLive(active.id, 'opacity', v)}
+          />
+          <Field label="Modo de fusión">
+            <select
+              value={active.blend}
+              onChange={(e) =>
+                engine.setLayerProp(active.id, 'blend', e.target.value as BlendMode, 'Modo de fusión')
+              }
+            >
+              {BLEND_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {BLEND_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Slider
+            label="Tono"
+            value={(active.adjustment.hue * 180) / Math.PI}
+            min={-180}
+            max={180}
+            format={(v) => `${Math.round(v)}°`}
+            onChange={(v) =>
+              engine.setLayerAdjustment(active.id, { hue: (v * Math.PI) / 180 })
+            }
+          />
+          <Slider
+            label="Saturación"
+            value={active.adjustment.saturation}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { saturation: v })}
+          />
+          <Slider
+            label="Brillo"
+            value={active.adjustment.brightness}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { brightness: v })}
+          />
+          <Slider
+            label="Contraste"
+            value={active.adjustment.contrast}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { contrast: v })}
+          />
+          <p className="hint">
+            Afecta a todo lo que hay por debajo, no a un dibujo propio — como cualquier
+            capa, se puede ocultar, reordenar o borrar sin tocar las de abajo.
+          </p>
+        </div>
+      )}
+
+      {active && !active.adjustment && (
         <div className="panel__section">
           <Slider
             label="Opacidad"
@@ -796,7 +1009,9 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
             disabled={!engine}
             onClick={() => {
               if (!engine) return;
-              engine.symmetry = { ...engine.symmetry, vertical: !engine.symmetry.vertical };
+              // Vertical/horizontal y radial son excluyentes — ver el
+              // comentario del campo `symmetry` en engine.ts.
+              engine.symmetry = { vertical: !engine.symmetry.vertical, horizontal: engine.symmetry.horizontal, radial: 0 };
               engine.touch();
             }}
           >
@@ -809,17 +1024,35 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
             disabled={!engine}
             onClick={() => {
               if (!engine) return;
-              engine.symmetry = { ...engine.symmetry, horizontal: !engine.symmetry.horizontal };
+              engine.symmetry = { vertical: engine.symmetry.vertical, horizontal: !engine.symmetry.horizontal, radial: 0 };
               engine.touch();
             }}
           >
             <IconSymmetry size={18} className="icon-symmetry--h" />
             <span>Horizontal</span>
           </button>
+          <button
+            type="button"
+            className={`action ${engine && engine.symmetry.radial >= 2 ? 'is-active' : ''}`}
+            disabled={!engine}
+            title="Simetría radial: repite el trazo en corona alrededor del centro"
+            onClick={() => {
+              if (!engine) return;
+              const steps = [0, 4, 6, 8, 12];
+              const i = steps.indexOf(engine.symmetry.radial);
+              const radial = steps[(i + 1) % steps.length];
+              engine.symmetry = { vertical: false, horizontal: false, radial };
+              engine.touch();
+            }}
+          >
+            <IconRadial size={18} />
+            <span>{engine && engine.symmetry.radial >= 2 ? `Radial ×${engine.symmetry.radial}` : 'Radial'}</span>
+          </button>
         </div>
         <p className="hint">
           Cada estampa del trazo se refleja también al otro lado del eje activo, en tiempo
-          real — como dibujar los dos lados de una cara a la vez.
+          real — como dibujar los dos lados de una cara a la vez. La radial reparte el
+          trazo en corona alrededor del centro del documento, como un mandala.
         </p>
       </div>
     </Panel>

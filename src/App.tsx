@@ -10,6 +10,7 @@ import { BoneGizmoOverlay } from './ui/BoneGizmoOverlay';
 import { LassoOverlay } from './ui/LassoOverlay';
 import { SymmetryOverlay } from './ui/SymmetryOverlay';
 import { LoupeOverlay } from './ui/LoupeOverlay';
+import { MaskEditBanner } from './ui/MaskEditBanner';
 import { autosave, deserializeProject, loadAutosave } from './core/io';
 import { useUI } from './state/store';
 import './styles.css';
@@ -201,6 +202,7 @@ export default function App() {
       {engine && <LassoOverlay engine={engine} />}
       {engine && <SymmetryOverlay engine={engine} />}
       {engine && <LoupeOverlay engine={engine} />}
+      {engine && <MaskEditBanner engine={engine} />}
       {engine && <Toolbar engine={engine} />}
       {engine && <Timeline engine={engine} />}
 

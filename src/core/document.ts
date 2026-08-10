@@ -155,8 +155,22 @@ export function pickVariant(layer: Layer, frame: number): SpriteSwapVariant | nu
  * `draw`: capa normal, se dibuja y se exporta. `reference`: imagen o vídeo
  * importado para calcar (rotoscopia) — no admite trazo, bote ni selección, y
  * queda fuera de PNG/APNG/secuencia porque no es parte de la obra final.
+ * `adjustment`: no tiene dibujo propio — aplica `Layer.adjustment` a todo lo
+ * compuesto por debajo, como una capa de ajuste de Photoshop/Procreate.
  */
-export type LayerKind = 'draw' | 'reference';
+export type LayerKind = 'draw' | 'reference' | 'adjustment';
+
+/** Tono/saturación/brillo/contraste — ver `Layer.adjustment`. */
+export interface AdjustmentProps {
+  /** Radianes. */
+  hue: number;
+  /** -1..1, 0 = sin cambio. */
+  saturation: number;
+  /** -1..1, 0 = sin cambio. */
+  brightness: number;
+  /** -1..1, 0 = sin cambio. */
+  contrast: number;
+}
 
 export interface Layer {
   id: string;
@@ -168,6 +182,10 @@ export interface Layer {
   blend: BlendMode;
   /** Recorta esta capa a la alfa de la capa base que tiene debajo. */
   clipToBelow: boolean;
+  /** Pintar en esta capa sólo afecta a píxeles que ya tenían alfa > 0 — no
+   *  se puede ensanchar el contorno existente, sólo recolorear/sombrear
+   *  dentro de él. */
+  alphaLock: boolean;
   /**
    * `false`: un único cel (en el fotograma 0) visible en toda la animación —
    * fondos, capas de color. `true`: dibujo cuadro por cuadro.
@@ -186,6 +204,39 @@ export interface Layer {
   swap?: SpriteSwapCatalog;
   /** Presente si esta capa vive dentro de una carpeta de `TraceDocument.layerGroups`. */
   groupId?: string;
+  /** Máscara de recorte no destructiva — ver `LayerMask`. */
+  mask?: LayerMask;
+  /**
+   * Presente si esta capa es una capa de texto: su cel único (no animada)
+   * se regenera desde estas propiedades cada vez que cambian, en vez de
+   * pintarse a mano. La posición no vive aquí — se mueve como cualquier
+   * otra capa con su `TransformTrack` normal.
+   */
+  text?: TextLayerProps;
+  /** Presente si `kind === 'adjustment'`: el ajuste que aplica a todo lo
+   *  compuesto por debajo. No usa `cels` — no hay dibujo propio. */
+  adjustment?: AdjustmentProps;
+}
+
+export interface TextLayerProps {
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  color: RGB;
+  align: 'left' | 'center' | 'right';
+  bold: boolean;
+  italic: boolean;
+}
+
+/**
+ * Máscara de capa: una superficie gris del tamaño del documento cuya alfa
+ * modula la de la capa entera al componer — blanco (alfa 1) revela, negro
+ * (alfa 0) oculta, sin borrar el dibujo real. Un solo cel, no animado por
+ * fotograma: igual que `clipToBelow`, una decisión de v1 para no ampliar el
+ * modelo de datos hasta que haga falta de verdad.
+ */
+export interface LayerMask {
+  surface: Surface;
 }
 
 /**
@@ -281,6 +332,7 @@ export function newLayer(name: string, animated = true, kind: LayerKind = 'draw'
     opacity: 1,
     blend: 'normal',
     clipToBelow: false,
+    alphaLock: false,
     animated,
     cels: new Map(),
     transform: newTransform(),

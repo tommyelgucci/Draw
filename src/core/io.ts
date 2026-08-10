@@ -6,6 +6,7 @@ import {
   newDocument,
   newLayer,
   uid,
+  type AdjustmentProps,
   type AudioPeak,
   type AudioTrack,
   type Cel,
@@ -14,6 +15,7 @@ import {
   type LayerGroup,
   type LayerKind,
   type SpriteSwapCatalog,
+  type TextLayerProps,
   type TraceDocument,
   type TransformTrack,
 } from './document';
@@ -31,6 +33,8 @@ interface SerializedLayer {
   opacity: number;
   blend: BlendMode;
   clipToBelow: boolean;
+  /** Ausente en proyectos anteriores a esta función — normaliza a `false`. */
+  alphaLock?: boolean;
   animated: boolean;
   cels: { frame: number; celId: string; label?: string }[];
   transform: TransformTrack;
@@ -40,6 +44,15 @@ interface SerializedLayer {
   swap?: { variants: { id: string; label: string }[]; selected: Channel };
   /** Ausente en capas fuera de una carpeta. */
   groupId?: string;
+  /** El PNG de la máscara va aparte, bajo `mask/<layerId>.png`. Ausente en
+   *  capas sin máscara. */
+  hasMask?: boolean;
+  /** Ausente en capas que no son de texto. El cel ya lleva los píxeles
+   *  horneados como cualquier otro — esto es sólo para poder reabrir el
+   *  cuadro de edición con los mismos valores. */
+  text?: TextLayerProps;
+  /** Ausente en capas que no son de ajuste. */
+  adjustment?: AdjustmentProps;
 }
 
 interface SerializedBone {
@@ -160,6 +173,13 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       swap = { variants, selected: layer.swap.selected };
     }
 
+    let hasMask = false;
+    if (layer.mask) {
+      hasMask = true;
+      const data = engine.renderer.toImageData(engine.renderer.ensureResident(layer.mask.surface));
+      files[`mask/${layer.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
+    }
+
     layers.push({
       id: layer.id,
       name: layer.name,
@@ -169,12 +189,16 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       opacity: layer.opacity,
       blend: layer.blend,
       clipToBelow: layer.clipToBelow,
+      alphaLock: layer.alphaLock,
       animated: layer.animated,
       cels,
       transform: layer.transform,
       rig: layer.rig,
       swap,
       groupId: layer.groupId,
+      hasMask,
+      text: layer.text,
+      adjustment: layer.adjustment,
     });
   }
 
@@ -240,11 +264,14 @@ export async function deserializeProject(
       opacity: sl.opacity,
       blend: sl.blend,
       clipToBelow: sl.clipToBelow,
+      alphaLock: sl.alphaLock ?? false,
       animated: sl.animated,
       cels: new Map(),
       transform: normalizeTransform(sl.transform),
       rig: normalizeLayerRig(sl.rig),
       groupId: sl.groupId,
+      text: sl.text,
+      adjustment: sl.adjustment,
     };
     for (const sc of sl.cels) {
       const cel: Cel = {
@@ -277,6 +304,20 @@ export async function deserializeProject(
         catalog.variants.push({ id: sv.id, label: sv.label, surface });
       }
       layer.swap = catalog;
+    }
+    if (sl.hasMask) {
+      const surface = engine.renderer.createSurface('mask');
+      const png = files[`mask/${sl.id}.png`];
+      if (png) {
+        const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }));
+        engine.renderer.uploadImage(surface, bitmap);
+        bitmap.close();
+      } else {
+        // Nunca debería faltar el PNG si `hasMask` es cierto, pero por si
+        // acaso: una máscara sin datos es "revela todo", no "oculta todo".
+        engine.renderer.fill(surface, { r: 1, g: 1, b: 1 }, 1);
+      }
+      layer.mask = { surface };
     }
     doc.layers.push(layer);
   }

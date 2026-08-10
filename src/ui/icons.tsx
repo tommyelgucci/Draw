@@ -171,6 +171,41 @@ export const IconLock = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Cuadrícula tipo tablero de ajedrez — la misma metáfora visual que usa
+ *  cualquier editor para "hueco transparente", aquí como icono de bloqueo
+ *  de alfa (pintar sólo donde ya hay tinta). */
+export const IconAlphaLock = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="M4 12h8M12 4v8M12 12h8M12 12v8" strokeWidth={1.2} opacity={0.55} />
+  </svg>
+);
+
+/** Rectángulo con un círculo hueco dentro — la metáfora de "máscara" que
+ *  usa cualquier editor gráfico: la parte clara revela, la oscura oculta. */
+export const IconMask = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4" y="4" width="16" height="16" rx="3" />
+    <circle cx="12" cy="12" r="4.5" strokeWidth={1.2} opacity={0.6} />
+  </svg>
+);
+
+export const IconText = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M5 6h14M12 6v13" />
+  </svg>
+);
+
+/** Deslizadores tipo ecualizador — la metáfora habitual de "ajustes". */
+export const IconAdjust = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M5 5v14M12 5v14M19 5v14" />
+    <circle cx="5" cy="10" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="15" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="8" r="1.8" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const IconMenu = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 7h16M4 12h16M4 17h16" />
@@ -288,6 +323,15 @@ export const IconSymmetry = ({ size = 20, className }: IconProps) => (
     <path d="M12 3v18" strokeDasharray="2.5 2" />
     <path d="M12 5c-3 1.5-6 3-6 7s3 5.5 6 7" />
     <path d="M12 5c3 1.5 6 3 6 7s-3 5.5-6 7" strokeOpacity="0.45" />
+  </svg>
+);
+
+/** Radios desde un centro — la simetría radial reparte el trazo en corona,
+ *  no en espejo, así que no reutiliza el icono de `IconSymmetry`. */
+export const IconRadial = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+    <path d="M12 12 12 3M12 12 19.8 7.5M12 12 19.8 16.5M12 12 12 21M12 12 4.2 16.5M12 12 4.2 7.5" />
   </svg>
 );
 
