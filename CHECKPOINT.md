@@ -2,7 +2,7 @@
 
 Estado real del proyecto. Se actualiza al cerrar cada tanda de trabajo.
 
-**Fecha:** 9 de agosto de 2026
+**Fecha:** 10 de agosto de 2026
 **Rama:** `claude/trace-drawing-animation-app-ov7j6d`
 **Fase:** 0 cerrada, 1 en curso (ver `RUMBO.md`)
 
@@ -20,8 +20,11 @@ npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borr
 npm run test:video        TODO EN VERDE   (13 comprobaciones; el vídeo se decodifica y se le ven los trazos)
 npm run test:canvas-size  TODO EN VERDE   (redimensionar sin perder tinta, controles legibles en tablet)
 npm run test:quickshape   TODO EN VERDE   (24 comprobaciones: línea, elipse, rectángulo, triángulo, polígono)
+npm run test:fill         TODO EN VERDE   (bote de relleno, acotado a la caja tocada)
+npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tolerancia, sumar/restar)
+npm run test:unit         TODO EN VERDE   (83 casos: math.ts, document.ts, selection.ts — núcleo puro, sin navegador)
 npx oxlint                sin warnings
-npm run build             408 kB / 124 kB gzip
+npm run build             466 kB / 140 kB gzip
 ```
 
 ## Funciona
@@ -60,7 +63,9 @@ npm run build             408 kB / 124 kB gzip
   salpicadura) además de la punta lisa de siempre, seleccionables por pincel.
   El generador de píxeles (`core/brushTexture.ts`) es puro cálculo sin DOM:
   el mismo buffer sube como textura a la GPU y pinta la miniatura del
-  selector en la interfaz, sin duplicar el algoritmo en dos sitios.
+  selector en la interfaz, sin duplicar el algoritmo en dos sitios. Suben
+  con cadena de mipmaps completa (antes un solo nivel), corrigiendo el
+  aliasing de minificación en pinceles muy pequeños.
 - **Paleta de colores en cuatro grupos**: neutros (rampa de grises), espectro
   (12 tonos vivos), pasteles (6 tonos claros) y tierras y piel (8 tonos
   cálidos), además de los colores recientes. El espectro y los pasteles se
@@ -78,11 +83,23 @@ npm run build             408 kB / 124 kB gzip
   sostenido edita ese dibujo (comprobado en el test).
 - Keyframes interpolados con easing para posición, escala, rotación y
   opacidad, sobre la misma capa que lleva los cels.
-- Papel cebolla hasta 3 cuadros por lado, teñido rojo/azul, con caída.
+- Papel cebolla hasta 3 cuadros por lado, teñido rojo/azul, con caída. Su
+  popover se cierra con la "x" de la cabecera o con Escape (antes no había
+  forma de cerrarlo).
 - Reproducción en bucle y arrastre de cels en la línea de tiempo.
+- Techo de `frameCount` en 6000 cuadros (antes 2000), medido en navegador
+  para no meter un número que congelara la interfaz — la línea de tiempo no
+  está virtualizada, así que el límite real es cuánto tarda en pintarse, no
+  la memoria (los cels viven en un `Map` disperso). Un vídeo importado se
+  trocea al mismo techo, por la misma razón.
 
 ### Selección
-- Rectángulo y lazo, con modos sustituir / sumar / restar.
+- Rectángulo, lazo y **varita mágica** (semejanza de color), con modos
+  sustituir / sumar / restar. La varita toca para seleccionar la región
+  conexa de un color y arrastra para reajustar la tolerancia en vivo, con
+  HUD de porcentaje — reutiliza el barrido de líneas de `floodFill`
+  (`Engine.floodMatch`, compartido) y entra en el mismo sistema de
+  selección de siempre vía `rasterizeMask`.
 - Contorno animado ("hormigas marchando") de grosor constante a cualquier zoom.
 - **Los trazos se recortan a la selección**: el test mide cero píxeles
   pintados fuera.
@@ -107,6 +124,9 @@ npm run build             408 kB / 124 kB gzip
   actual, éste crece para acomodarla.
 - Encaja y centra el origen (imagen o vídeo) al lienzo por contención,
   conservando su proporción — nunca lo estira ni lo recorta.
+- Importar un vídeo se puede **cancelar a medias** (botón "Cancelar" junto
+  al progreso), vía `AbortSignal` — no deja una capa a medio importar ni
+  dispara el aviso de error que sí es un fallo real.
 
 ### Guardar y exportar
 - Formato `.trace` (zip con cels en PNG y estructura en JSON); ida y vuelta
@@ -242,31 +262,44 @@ que no se puede hacer desde aquí:
 
 ## Deuda conocida
 
+Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
+
+- ~~No hay tests unitarios del núcleo~~. `math.test.ts`, `document.test.ts` y
+  `selection.test.ts` (83 casos, `npm run test:unit`, Node nativo con
+  `node --test`, sin dependencia nueva).
+- ~~`selection.ts` hace un `getImageData` del documento entero por gesto~~.
+  `commitSelectionCanvas` acota el escaneo a la caja realmente tocada
+  (exacto, no aproximado — ver el commit). Queda pendiente el resto del
+  camino (subida de la máscara a GPU, restaurar el respaldo del canvas 2D),
+  que sigue siendo O(lienzo).
+- ~~`floodFill` recorre el lienzo entero para el crecimiento y el color~~.
+  Acotado a la caja de lo rellenado. Sigue leyendo el lienzo completo por
+  GPU dos veces como referencia (coste fijo, no depende del tamaño del
+  relleno) — moverlo a un worker sigue pendiente, ver abajo.
+- ~~Importar un vídeo largo no se puede cancelar~~. Botón "Cancelar" +
+  `AbortSignal`. Sigue siendo lento en proporción a la duración (`seek` +
+  subida a GPU secuenciales, sin cambiar) — cancelar no acelera la
+  importación, sólo permite abortarla.
+- ~~Texturas de punta con aliasing en pinceles pequeños~~. Cadena de mipmaps
+  completa. Corrección de manual, sin contrapartida; el efecto no salió
+  limpio de medir en el Chromium de pruebas (SwiftShader), así que el test
+  es una comprobación de sanidad, no una comparación antes/después.
+
+Todavía abierta:
+
 - **La miniatura de una línea fina es casi invisible.** Es inherente a
   reducir 1920 px a 48; Procreate tiene el mismo problema. Se arreglaría
   recortando a los límites del dibujo en vez de al documento entero.
-- **No hay tests unitarios del núcleo**, sólo de integración en navegador. Las
-  matemáticas de `math.ts` y la interpolación de `document.ts` se prestan a
-  ello y hoy sólo se cubren de rebote.
 - **El rendimiento sólo está medido con SwiftShader**, que es correcto pero
-  lento. Los números absolutos de un iPad están sin tomar.
-- **`floodFill` bloquea el hilo** mientras rellena. En un lienzo grande se
-  nota; hay un indicador de ocupado, pero lo correcto sería un worker.
-- **`selection.ts` rasteriza con canvas 2D**, lo que obliga a un
-  `getImageData` del documento entero para calcular los límites al soltar.
-  Aceptable porque ocurre una vez por gesto, pero es el punto más caro del
-  flujo de selección.
-- **Importar un vídeo largo es lento y sin cancelar.** Cada fotograma se
-  extrae con un `seek` + subida a GPU secuenciales; un clip de varios minutos
-  tarda en proporción y hoy no hay botón para abortar a medio camino, sólo el
-  progreso. Si el evento `seeked` no llega (pasa en algún navegador para un
-  fotograma suelto), hay un plazo de 2 s que lo salta duplicando el anterior
-  en vez de colgar la importación entera.
-- **Las texturas de punta se ven mal en pinceles muy pequeños.** El patrón de
-  128×128 se muestrea en todo el UV de la estampa sin importar cuántos
-  píxeles ocupe en pantalla: por debajo de ~12 px el resultado es una línea
-  casi invisible en vez de grano. Los pinceles del kit que llevan textura
-  (lápiz blando, grafito, carboncillo, pintura, acuarela, acrílico, aerógrafo
-  salpicado, pastel, textura de lienzo) están todos por encima de ese
-  tamaño; se arreglaría de raíz atenuando la textura por debajo de cierto
-  diámetro de estampa.
+  lento. Los números absolutos de un iPad están sin tomar — no se puede
+  resolver desde aquí, hace falta el dispositivo real.
+- **`floodFill` sigue bloqueando el hilo** mientras rellena (la lectura de
+  referencia por GPU, ver arriba). En un lienzo grande se nota; hay un
+  indicador de ocupado, pero lo correcto sería un worker.
+- **Historial persistente y capas en disco (OPFS)**, de `RUMBO.md` —
+  ninguno de los dos tiene código todavía. El primero es barato (los pasos
+  ya son instantáneas por rectángulo, falta serializarlas en el `.trace`);
+  el segundo cambia el respaldo de `Uint8Array` a archivos y quita el techo
+  de RAM del todo, contenido en `gl/renderer.ts`.
+- **Time-lapse**, de `RUMBO.md` — la codificación con WebCodecs ya existe;
+  falta capturar un fotograma por trazo en un búfer circular.
