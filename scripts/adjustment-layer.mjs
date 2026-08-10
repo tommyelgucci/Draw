@@ -183,7 +183,7 @@ const roundTrip = await page.evaluate(async () => {
   const e = window.__trace;
   const { serializeProject, deserializeProject } = await import('/src/core/io.ts');
   const bytes = await serializeProject(e);
-  const doc = await deserializeProject(e, bytes);
+  const { doc } = await deserializeProject(e, bytes);
   return doc.layers.filter((l) => l.kind === 'adjustment').map((l) => l.adjustment);
 });
 check('la capa de ajuste sobrevive guardar/reabrir', roundTrip.length === 1, JSON.stringify(roundTrip));

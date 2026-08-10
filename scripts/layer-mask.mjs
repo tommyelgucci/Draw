@@ -222,7 +222,7 @@ const roundTrip = await page.evaluate(async () => {
   const e = window.__trace;
   const { serializeProject, deserializeProject } = await import('/src/core/io.ts');
   const bytes = await serializeProject(e);
-  const doc = await deserializeProject(e, bytes);
+  const { doc } = await deserializeProject(e, bytes);
   return doc.layers.map((l) => !!l.mask);
 });
 check('la máscara sobrevive guardar/reabrir', roundTrip.some(Boolean), JSON.stringify(roundTrip));
