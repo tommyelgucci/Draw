@@ -27,6 +27,7 @@ import {
   type TraceDocument,
 } from './document';
 import { History } from './history';
+import { rehydrateHistoryOp, type HistoryOp } from './historyOps';
 import {
   bendSignFor,
   boneRestFromDrag,
@@ -131,6 +132,8 @@ export interface PendingQuickShape {
   ctx: StrokeContext;
   /** Igual semántica que `createdCelFrame` del trazo normal. */
   createdCelFrame: number;
+  /** Igual semántica que `strokeStartFrame` del trazo normal. */
+  startFrame: number;
   editing: boolean;
   /** Nodo más cercano al punto donde se disparó el dwell — el que sigue el
    * arrastre mientras el puntero original no se ha soltado todavía. */
@@ -326,6 +329,10 @@ export class Engine {
   private strokeCtx: StrokeContext | null = null;
   private strokeRect: Rect = emptyRect();
   private createdCelFrame = -1;
+  /** Fotograma vigente al empezar el trazo — hace falta junto a
+   *  `createdCelFrame` para resolver el cel sostenido correcto al persistir
+   *  el paso de historial, ver `storedCelFrame`. */
+  private strokeStartFrame = -1;
   private predictedStamps: Stamp[] = [];
   /** Recorrido crudo del trazo en curso, en espacio documento — lo único
    * que necesita el reconocedor de QuickShape; `StrokeBuilder` ya filtra y
@@ -529,6 +536,14 @@ export class Engine {
 
   private makeCel(): Cel {
     return { id: uid('cel'), surface: this.renderer.createSurface('cel') };
+  }
+
+  /** Fotograma real en `layer.cels` de un cel resuelto por `ensureCel`/
+   *  `celAt` — hace falta para que un paso de historial persistido (que
+   *  direcciona por clave del `Map`, no por el objeto en sí) apunte al cel
+   *  correcto incluso cuando se dibujó sobre un cuadro sostenido. */
+  private storedCelFrame(layer: Layer, frame: number, created: number): number {
+    return created >= 0 ? created : celStartFrame(layer, frame);
   }
 
   addLayer(above = true) {
@@ -1530,9 +1545,22 @@ export class Engine {
     if (!cel || cel.surface.empty) return;
     const full: Rect = { x: 0, y: 0, x2: this.doc.width, y2: this.doc.height };
     const before = this.renderer.readRect(cel.surface, full);
+    const after = new Uint8Array(before.length);
     this.history.run({
       label: 'Borrar fotograma',
       cost: before.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label: 'Borrar fotograma',
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, frame, -1),
+            createdFrame: -1,
+            rect: full,
+            before,
+            after,
+          },
       redo: () => {
         this.renderer.clear(cel.surface);
         this.touch(false);
@@ -2109,6 +2137,7 @@ export class Engine {
     this.strokeCel = cel;
     this.strokeCtx = ctx;
     this.createdCelFrame = created;
+    this.strokeStartFrame = this.currentFrame;
     this.strokeRect = emptyRect();
     this.predictedStamps = [];
     this.strokeRawPoints = [{ x: sample.x, y: sample.y }];
@@ -2318,6 +2347,7 @@ export class Engine {
     const cel = this.strokeCel;
     const ctx = this.strokeCtx;
     const createdFrame = this.createdCelFrame;
+    const startFrame = this.strokeStartFrame;
     const rect = clampRect(this.strokeRect, this.doc.width, this.doc.height);
 
     this.builder = null;
@@ -2325,6 +2355,7 @@ export class Engine {
     this.strokeCtx = null;
     this.strokeLayer = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
 
     if (rectIsEmpty(rect)) {
       if (createdFrame >= 0) layer.cels.delete(createdFrame);
@@ -2338,9 +2369,22 @@ export class Engine {
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
 
+    const label = ctx.brush.erase ? 'Borrar' : 'Trazo';
     this.history.push({
-      label: ctx.brush.erase ? 'Borrar' : 'Trazo',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, startFrame, createdFrame),
+            createdFrame,
+            rect,
+            before,
+            after,
+          },
       redo: () => {
         if (createdFrame >= 0) layer.cels.set(createdFrame, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -2364,6 +2408,7 @@ export class Engine {
     this.strokeCtx = null;
     this.strokeLayer = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
     this.predictedStamps = [];
     this.tailStamps = [];
     this.strokeLen = 0;
@@ -2438,6 +2483,7 @@ export class Engine {
     const cel = this.strokeCel;
     const ctx = this.strokeCtx;
     const createdCelFrame = this.createdCelFrame;
+    const startFrame = this.strokeStartFrame;
     const anchor = this.strokeRawPoints[this.strokeRawPoints.length - 1];
 
     // Apaga el trazo libre: a partir de aquí no le llegan más muestras (lo
@@ -2448,6 +2494,7 @@ export class Engine {
     this.strokeCel = null;
     this.strokeCtx = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
     this.strokeRawPoints = [];
     this.predictedStamps = [];
     this.renderer.clear(this.renderer.scratch('predict'));
@@ -2463,7 +2510,16 @@ export class Engine {
       }
     }
 
-    this.pendingQuickShape = { shape, layer, cel, ctx, createdCelFrame, editing: false, holdNodeIndex };
+    this.pendingQuickShape = {
+      shape,
+      layer,
+      cel,
+      ctx,
+      createdCelFrame,
+      startFrame,
+      editing: false,
+      holdNodeIndex,
+    };
     this.paintQuickShapeOutline(shape, ctx);
     this.touch();
     return true;
@@ -2558,9 +2614,22 @@ export class Engine {
     const layer = p.layer;
     const cel = p.cel;
     const createdCelFrame = p.createdCelFrame;
+    const label = p.ctx.brush.erase ? 'Borrar' : 'Forma';
     this.history.push({
-      label: p.ctx.brush.erase ? 'Borrar' : 'Forma',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, p.startFrame, createdCelFrame),
+            createdFrame: createdCelFrame,
+            rect,
+            before,
+            after,
+          },
       redo: () => {
         if (createdCelFrame >= 0) layer.cels.set(createdCelFrame, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -3604,9 +3673,20 @@ export class Engine {
     const before = this.renderer.readRect(cel.surface, rect);
     this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
     const after = this.renderer.readRect(cel.surface, rect);
+    const label = 'Borrar selección';
     this.history.push({
-      label: 'Borrar selección',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: {
+        type: 'rasterEdit',
+        label,
+        layerId: layer.id,
+        frame: this.storedCelFrame(layer, this.currentFrame, -1),
+        createdFrame: -1,
+        rect,
+        before,
+        after,
+      },
       redo: () => {
         this.renderer.writeRect(cel.surface, rect, after);
         this.touch();
@@ -3633,9 +3713,22 @@ export class Engine {
 
     const after = this.renderer.readRect(cel.surface, rect);
     const prev = before ?? new Uint8Array(after.length);
+    const label = 'Rellenar selección';
     this.history.push({
-      label: 'Rellenar selección',
+      label,
       cost: prev.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, this.currentFrame, created),
+            createdFrame: created,
+            rect,
+            before: prev,
+            after,
+          },
       redo: () => {
         if (created >= 0) layer.cels.set(created, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -3814,7 +3907,7 @@ export class Engine {
 
     // Un paso de deshacer por cel tocado — así un lote de N cuadros se
     // deshace/rehace de una vez, no cuadro por cuadro.
-    const steps: { surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
+    const steps: { frame: number; surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
     for (const fc of f.cels) {
       const cel = layer.cels.get(fc.celFrame);
       if (!cel) {
@@ -3830,7 +3923,7 @@ export class Engine {
       this.renderer.drawOver(cel.surface, fc.surface, 1, matrix);
       this.renderer.release(fc.surface);
       const afterRegion = this.renderer.readRect(cel.surface, region);
-      steps.push({ surface: cel.surface, before: beforeRegion, after: afterRegion });
+      steps.push({ frame: fc.celFrame, surface: cel.surface, before: beforeRegion, after: afterRegion });
     }
 
     if (steps.length === 0) {
@@ -3838,10 +3931,20 @@ export class Engine {
       return;
     }
 
+    const label =
+      steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección';
     this.history.push({
-      label:
-        steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección',
+      label,
       cost: steps.reduce((n, s) => n + s.before.byteLength + s.after.byteLength, 0),
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEditBatch',
+            label,
+            layerId: layer.id,
+            region,
+            steps: steps.map((s) => ({ frame: s.frame, before: s.before, after: s.after })),
+          },
       redo: () => {
         for (const s of steps) this.renderer.writeRect(s.surface, region, s.after);
         this.touch();
@@ -4046,9 +4149,22 @@ export class Engine {
     const sub = extractRect(target, w, rect);
     const prev = before ? extractRect(before, w, rect) : new Uint8Array(sub.length);
 
+    const label = 'Rellenar';
     this.history.run({
-      label: 'Rellenar',
+      label,
       cost: sub.byteLength + prev.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, this.currentFrame, created),
+            createdFrame: created,
+            rect,
+            before: prev,
+            after: sub,
+          },
       redo: () => {
         if (created >= 0) layer.cels.set(created, cel);
         this.renderer.writeRect(cel.surface, rect, sub);
@@ -4207,6 +4323,24 @@ export class Engine {
   /** Reemplaza el documento por uno leído de un archivo `.trace`. */
   loadDocument(doc: TraceDocument) {
     this.replaceDocument(doc);
+  }
+
+  /**
+   * Repuebla la pila de deshacer tras `loadDocument` con los pasos que
+   * `deserializeProject` haya podido reconstruir del `.trace` — ver
+   * `historyOps.ts`. Va aparte de `loadDocument` (no dentro de
+   * `replaceDocument`) porque `deserializeProject` sólo entrega el
+   * documento y el historial juntos cuando termina de leer el archivo; el
+   * llamador decide el orden, pero siempre después de que `this.doc` ya sea
+   * el nuevo. Los pasos que no se puedan reconstruir (capa o cel que ya no
+   * existen) se descartan en silencio: mejor un historial más corto que
+   * romper la carga por un paso viejo.
+   */
+  loadHistoryOps(ops: HistoryOp[]) {
+    const cmds = ops
+      .map((op) => rehydrateHistoryOp(this.doc, this.renderer, () => this.touch(), op))
+      .filter((cmd): cmd is NonNullable<typeof cmd> => cmd !== null);
+    this.history.loadPast(cmds);
   }
 
   /**

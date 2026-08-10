@@ -41,14 +41,9 @@ export default function App() {
       if (!ok || cancelled) return;
       setBusy('Recuperando…');
       try {
-        const doc = await deserializeProject(engine, record.bytes);
-        engine.doc = doc;
-        engine.renderer.setDocumentSize(doc.width, doc.height);
-        engine.currentFrame = 0;
-        engine.activeLayerId = doc.layers[doc.layers.length - 1]?.id ?? null;
-        engine.history.clear();
-        engine.resetView();
-        engine.touch();
+        const { doc, historyOps } = await deserializeProject(engine, record.bytes);
+        engine.loadDocument(doc);
+        engine.loadHistoryOps(historyOps);
       } catch (err) {
         console.error(err);
       } finally {

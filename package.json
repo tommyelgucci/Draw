@@ -44,6 +44,7 @@
     "test:taper": "node scripts/taper.mjs",
     "test:fill": "node scripts/fill.mjs",
     "test:select-wand": "node scripts/select-wand.mjs",
+    "test:history-persist": "node scripts/history-persist.mjs",
     "test:unit": "node --import ./scripts/register-ts-loader.mjs --test src/core/*.test.ts"
   },
   "dependencies": {

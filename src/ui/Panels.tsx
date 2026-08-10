@@ -9,6 +9,7 @@ import {
 import { BUILTIN_TEXTURES, generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS } from '../core/brush';
 import {
+  MAX_FRAME_COUNT,
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
   type Layer,
@@ -1704,7 +1705,7 @@ export function ExportPanel({ engine }: { engine: Engine }) {
           <input
             type="number"
             min={1}
-            max={2000}
+            max={MAX_FRAME_COUNT}
             value={engine.doc.frameCount}
             onChange={(e) => engine.setFrameCount(Number(e.target.value) || 1)}
           />
@@ -1746,8 +1747,9 @@ export function ExportPanel({ engine }: { engine: Engine }) {
           if (!file) return;
           await run('Abriendo proyecto…', async () => {
             const bytes = new Uint8Array(await file.arrayBuffer());
-            const doc = await deserializeProject(engine, bytes);
+            const { doc, historyOps } = await deserializeProject(engine, bytes);
             engine.loadDocument(doc);
+            engine.loadHistoryOps(historyOps);
           });
         }}
       />

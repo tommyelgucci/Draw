@@ -113,10 +113,24 @@ las oportunidades están donde su arquitectura no le deja llegar.
    segundo dedo para forzar proporción. Precisión ajustable porque la
    calibración inicial (probada con ratón) fallaba con dedo real en pantalla
    táctil — ver commits de recalibración.
-2. **Historial persistente.** Su queja número uno de flujo: al cerrar el
-   archivo se pierde el deshacer. Para nosotros es barato porque los pasos ya
-   son instantáneas por rectángulo; falta serializarlas en el `.trace`. No lo
-   hace nadie.
+2. **Historial persistente.** `hecho`, parcial y a propósito. Su queja número
+   uno de flujo es al cerrar el archivo se pierde el deshacer. No todos los
+   comandos del historial son igual de baratos de serializar: los que editan
+   píxeles (trazo, QuickShape, bote, rellenar/borrar selección, transformar
+   por lotes) ya eran un diff de rectángulo — antes/después — así que
+   persistirlos es directo (`historyOps.ts`: `RasterEditOp`/
+   `RasterEditBatchOp`, reconstruidos contra el documento recién cargado por
+   id de capa/cel, no por referencia). Los que tocan estructura (añadir
+   capa, keyframes, reordenar...) siguen sin persistir — reescribir cada uno
+   como una operación serializable es una superficie de cuarenta sitios
+   distintos, desproporcionada frente al caso real: la inmensa mayoría de
+   los pasos que un animador acumula dibujando SÍ son ediciones de píxel.
+   `serializeProject` guarda la racha más reciente de pasos serializables
+   desde la cima de la pila (se corta, no se salta, en el primer paso sin
+   persistir) hasta un techo de 24 MB comprimidos; `deserializeProject` +
+   `engine.loadHistoryOps` la reconstruyen al abrir. Mismo camino para el
+   `.trace` manual y el autoguardado en IndexedDB, porque ambos pasan por
+   `serializeProject`/`deserializeProject`.
 3. **Time-lapse.** La codificación con WebCodecs ya está; falta capturar un
    fotograma por trazo en un búfer circular.
 4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos

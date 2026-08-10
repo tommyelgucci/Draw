@@ -23,6 +23,7 @@ npm run test:quickshape   TODO EN VERDE   (24 comprobaciones: línea, elipse, re
 npm run test:fill         TODO EN VERDE   (bote de relleno, acotado a la caja tocada)
 npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tolerancia, sumar/restar)
 npm run test:unit         TODO EN VERDE   (83 casos: math.ts, document.ts, selection.ts — núcleo puro, sin navegador)
+npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
 ```
@@ -258,7 +259,8 @@ que no se puede hacer desde aquí:
    que sólo se ha ejercitado la ruta VP9/WebM. El código de MP4 compila y usa
    un muxer probado, pero no se ha visto producir un archivo aquí; en Safari,
    que sí trae H.264, debería tomar esa rama.
-4. **Historial persistente y capas en disco (OPFS)**, según `RUMBO.md`.
+4. **Capas en disco (OPFS)**, según `RUMBO.md` — el historial ya persiste
+   (ver deuda conocida, resuelta).
 
 ## Deuda conocida
 
@@ -284,6 +286,15 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   completa. Corrección de manual, sin contrapartida; el efecto no salió
   limpio de medir en el Chromium de pruebas (SwiftShader), así que el test
   es una comprobación de sanidad, no una comparación antes/después.
+- ~~Historial persistente~~. Parcial y a propósito — ver `RUMBO.md`,
+  oportunidad 2, para el porqué del alcance. `historyOps.ts` +
+  `Engine.loadHistoryOps` + `serializeProject`/`deserializeProject` en
+  `io.ts`. Sólo los pasos que editan píxeles (trazo, QuickShape, bote,
+  rellenar/borrar selección, transformar por lotes) sobreviven guardar y
+  volver a abrir; los estructurales (capas, keyframes...) siguen sin
+  persistir y cortan la racha donde aparecen. Mismo camino para el
+  `.trace` manual y el autoguardado. Test en
+  `scripts/history-persist.mjs` (`npm run test:history-persist`).
 
 Todavía abierta:
 
@@ -296,10 +307,22 @@ Todavía abierta:
 - **`floodFill` sigue bloqueando el hilo** mientras rellena (la lectura de
   referencia por GPU, ver arriba). En un lienzo grande se nota; hay un
   indicador de ocupado, pero lo correcto sería un worker.
-- **Historial persistente y capas en disco (OPFS)**, de `RUMBO.md` —
-  ninguno de los dos tiene código todavía. El primero es barato (los pasos
-  ya son instantáneas por rectángulo, falta serializarlas en el `.trace`);
-  el segundo cambia el respaldo de `Uint8Array` a archivos y quita el techo
-  de RAM del todo, contenido en `gl/renderer.ts`.
+- **Capas en disco (OPFS)**, de `RUMBO.md` — cambia el respaldo de
+  `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
+  de expulsión ya existe, así que el cambio queda contenido en
+  `gl/renderer.ts`.
 - **Time-lapse**, de `RUMBO.md` — la codificación con WebCodecs ya existe;
   falta capturar un fotograma por trazo en un búfer circular.
+- **Lote de transformación + selección rectangular: aviso de WebGL en
+  consola, sin efecto visible.** Al levantar un lote de varios cels
+  (`liftSelectionRange`) tras crear la selección, la consola muestra
+  "Feedback loop formed between Framebuffer and active Texture" varias
+  veces. No es una regresión de esta tanda —ninguno de los cambios de
+  historial persistente toca `liftCel`/`commitFloating`/`renderer.ts`— y
+  no se ha visto que estropee el resultado (medido con `readRect` en la
+  región exacta de origen y destino, no con una captura de pantalla): el
+  origen queda vacío y el destino recibe la tinta, en ambos cels del
+  lote, antes y después de recargar. Encontrado mientras se escribía el
+  test de historial; queda para revisar aparte porque un warning de GPU
+  sin efecto medible no es zona seguro para asumir que no importa en un
+  dispositivo real.

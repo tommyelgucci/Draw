@@ -168,7 +168,7 @@ const roundTrip = await page.evaluate(async () => {
   const e = window.__trace;
   const mod = await import('/src/core/io.ts');
   const bytes = await mod.serializeProject(e);
-  const doc = await mod.deserializeProject(e, bytes);
+  const { doc } = await mod.deserializeProject(e, bytes);
   const layer = doc.layers.find((l) => l.swap);
   return {
     size: bytes.length,
