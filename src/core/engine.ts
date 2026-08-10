@@ -19,6 +19,7 @@ import {
   type Cel,
   type Layer,
   type LayerGroup,
+  type LayerMask,
   type SpriteSwapCatalog,
   type SpriteSwapVariant,
   type TraceDocument,
@@ -482,6 +483,12 @@ export class Engine {
   setActiveLayer(id: string) {
     if (this.activeLayerId === id) return;
     this.activeLayerId = id;
+    // Cambiar de capa activa sale del modo "editar máscara" si era el de
+    // otra capa — pintar la máscara de una capa que ya no se está mirando
+    // sería fácil de hacer sin darse cuenta.
+    if (this.editingMaskLayerId !== null && this.editingMaskLayerId !== id) {
+      this.editingMaskLayerId = null;
+    }
     this.touch();
   }
 
@@ -551,6 +558,11 @@ export class Engine {
       this.renderer.copy(nc.surface, this.renderer.ensureResident(cel.surface), 1);
       copy.cels.set(frame, nc);
     }
+    if (src.mask) {
+      const surface = this.renderer.createSurface('mask');
+      this.renderer.copy(surface, this.renderer.ensureResident(src.mask.surface), 1);
+      copy.mask = { surface };
+    }
 
     this.history.run({
       label: 'Duplicar capa',
@@ -610,6 +622,75 @@ export class Engine {
     if (!layer) return;
     layer[key] = value;
     this.touch();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Máscara de capa
+   * ---------------------------------------------------------------- */
+
+  /** Capa cuya máscara se está pintando en vez de su dibujo — null si no
+   *  hay ninguna en edición. Un trazo la usa como destino en vez del cel
+   *  activo (ver `resolveStrokeCel`), y `rasterizeLayer` compone en vivo el
+   *  resultado de aplicarla mientras se pinta. */
+  editingMaskLayerId: string | null = null;
+  /** El trazo en curso (o la forma QuickShape pendiente) pinta sobre la
+   *  máscara de `strokeLayer`, no sobre su cel — se fija una vez al empezar
+   *  el gesto y no cambia aunque `editingMaskLayerId` se toque a mitad,
+   *  igual que `bendSign` en el arrastre de IK. */
+  private strokeTargetsMask = false;
+
+  setEditingMaskLayer(layerId: string | null) {
+    if (layerId !== null) {
+      const layer = this.doc.layers.find((l) => l.id === layerId);
+      if (!layer?.mask) return;
+    }
+    this.editingMaskLayerId = layerId;
+    this.touch();
+  }
+
+  /** Añade una máscara en blanco (blanco opaco = revela todo) a la capa —
+   *  no se puede pintar nada hasta que exista. */
+  addLayerMask(layerId: string) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer || layer.mask) return;
+    const surface = this.renderer.createSurface('mask');
+    this.renderer.fill(surface, { r: 1, g: 1, b: 1 }, 1);
+    const mask: LayerMask = { surface };
+    this.history.run({
+      label: 'Añadir máscara',
+      redo: () => {
+        layer.mask = mask;
+        this.editingMaskLayerId = layerId;
+        this.touch();
+      },
+      undo: () => {
+        layer.mask = undefined;
+        if (this.editingMaskLayerId === layerId) this.editingMaskLayerId = null;
+        this.touch();
+      },
+    });
+  }
+
+  /** Quita la máscara de la capa — deshacer restaura su contenido tal cual
+   *  estaba, no una en blanco nueva. */
+  removeLayerMask(layerId: string) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer?.mask) return;
+    const mask = layer.mask;
+    const wasEditing = this.editingMaskLayerId === layerId;
+    this.history.run({
+      label: 'Quitar máscara',
+      redo: () => {
+        layer.mask = undefined;
+        if (this.editingMaskLayerId === layerId) this.editingMaskLayerId = null;
+        this.touch();
+      },
+      undo: () => {
+        layer.mask = mask;
+        if (wasEditing) this.editingMaskLayerId = layerId;
+        this.touch();
+      },
+    });
   }
 
   /**
@@ -1005,12 +1086,19 @@ export class Engine {
   /**
    * Cel a dibujar cuando empieza un trazo — para un nodo de intercambio de
    * sprites es la variante seleccionada, no un cel de `layer.cels` (que ni
-   * siquiera se usa en ese tipo de capa). Aparte de `beginStroke`, nada más
-   * necesita esta distinción: `SpriteSwapVariant` ya tiene la misma forma
-   * que `Cel` (id + surface + label), así que el resto del trazo —
-   * `drawOver`, `readRect`, `writeRect` en `endStroke` — no ve diferencia.
+   * siquiera se usa en ese tipo de capa); para una capa con su máscara en
+   * edición es la propia máscara. En los tres casos el resto del trazo —
+   * `drawOver`, `readRect`, `writeRect` en `endStroke` — no ve diferencia,
+   * porque `LayerMask`/`SpriteSwapVariant` tienen la misma forma que `Cel`
+   * (id + surface). `rasterizeLayer` sí necesita saber cuál de los tres es
+   * — ver `strokeTargetsMask`.
    */
   private resolveStrokeCel(layer: Layer, frame: number): { cel: Cel; created: number } | null {
+    if (this.editingMaskLayerId === layer.id && layer.mask) {
+      this.strokeTargetsMask = true;
+      return { cel: { id: `${layer.id}:mask`, surface: layer.mask.surface }, created: -1 };
+    }
+    this.strokeTargetsMask = false;
     if (layer.swap) {
       const variant = pickVariant(layer, frame);
       return variant ? { cel: variant, created: -1 } : null;
@@ -2347,13 +2435,26 @@ export class Engine {
     // rig, composición) sigue viendo "una superficie del tamaño del
     // documento", así que no hace falta ramificar el resto de la función.
     const cel = layer.swap ? pickVariant(layer, frame) : celAt(layer, frame);
+    // Con la máscara de esta capa en edición, el trazo/QuickShape en curso
+    // pinta sobre ELLA (ver `resolveStrokeCel`), no sobre el cel — así que
+    // no cuenta como "objetivo del cel" de cara al bloque `wetCtx` de abajo;
+    // tiene su propio bloque más adelante, junto a la aplicación de la
+    // máscara.
+    const isMaskWetTarget =
+      includeWet &&
+      this.strokeTargetsMask &&
+      ((this.builder !== null && this.strokeLayer?.id === layer.id) ||
+        (this.pendingQuickShape !== null && this.pendingQuickShape.layer.id === layer.id));
     const isStrokeTarget =
-      includeWet && this.builder !== null && this.strokeLayer?.id === layer.id;
+      includeWet && this.builder !== null && this.strokeLayer?.id === layer.id && !isMaskWetTarget;
     // Mientras hay una forma QuickShape pendiente, `wet` guarda su contorno
     // en vez de un trazo libre — mismo mecanismo de composición en vivo,
     // sólo cambia qué lo alimenta (ver `paintQuickShapeOutline`).
     const isQuickShapeTarget =
-      includeWet && this.pendingQuickShape !== null && this.pendingQuickShape.layer.id === layer.id;
+      includeWet &&
+      this.pendingQuickShape !== null &&
+      this.pendingQuickShape.layer.id === layer.id &&
+      !isMaskWetTarget;
     // Un flotante puede llevar varios cels a la vez (transformación por
     // lote — `liftSelectionRange`): sólo se superpone el que corresponde al
     // cel realmente visible en `frame`, no el primero de la lista, porque
@@ -2446,6 +2547,57 @@ export class Engine {
     }
 
     if (!src) return null;
+
+    // Máscara de capa: se aplica en espacio LOCAL (antes de rig/transform)
+    // para que se mueva con la capa, no fija al documento. Si su edición
+    // está en marcha, no se lee `layer.mask.surface` tal cual — se copia a
+    // un scratch y se le funde encima el `wet`/cola/especulación en curso,
+    // igual que el bloque de arriba hace con el cel, para que la vista
+    // previa se vea sin esperar a soltar el dedo.
+    if (layer.mask) {
+      let maskSurface: Surface = layer.mask.surface;
+      if (isMaskWetTarget) {
+        const isFreehand = this.builder !== null && this.strokeLayer?.id === layer.id;
+        const maskCtx = isFreehand ? this.strokeCtx! : this.pendingQuickShape!.ctx;
+        const erase = maskCtx.brush.erase;
+        const liveMask = this.renderer.scratch('lmask');
+        this.renderer.copy(liveMask, layer.mask.surface, 1);
+        this.renderer.drawOver(liveMask, this.renderer.scratch('wet'), maskCtx.brush.opacity, undefined, erase);
+        if (isFreehand && this.tailStamps.length > 0) {
+          const tail = this.renderer.scratch('tail');
+          this.renderer.clear(tail);
+          const texId = maskCtx.brush.textureId;
+          const scaled = this.tailStamps.map(({ stamp, dist }) => {
+            const ratio = taperScale(this.strokeLen - dist, maskCtx.brush);
+            return ratio >= 1 ? stamp : { ...stamp, size: stamp.size * ratio };
+          });
+          this.renderer.drawStamps(
+            tail,
+            [...scaled, ...this.mirrorStamps(scaled)],
+            maskCtx.color,
+            texId ? this.renderer.getBrushTexture(texId) : undefined,
+          );
+          this.renderer.drawOver(liveMask, tail, maskCtx.brush.opacity, undefined, erase);
+        }
+        if (isFreehand && this.predictedStamps.length > 0) {
+          const predict = this.renderer.scratch('predict');
+          this.renderer.clear(predict);
+          const texId = maskCtx.brush.textureId;
+          this.renderer.drawStamps(
+            predict,
+            this.predictedStamps,
+            maskCtx.color,
+            texId ? this.renderer.getBrushTexture(texId) : undefined,
+          );
+          this.renderer.drawOver(liveMask, predict, maskCtx.brush.opacity, undefined, erase);
+        }
+        maskSurface = liveMask;
+      }
+      const masked = this.renderer.scratch('lmaskout');
+      this.renderer.clear(masked);
+      this.renderer.drawOver(masked, src, 1, undefined, false, maskSurface);
+      src = masked;
+    }
 
     // Una capa riggeada sigue a su rig en vez de su propio TransformTrack:
     // son dos formas de mover la misma capa que no tiene sentido combinar.
@@ -3567,11 +3719,28 @@ export class Engine {
     return shots;
   }
 
+  /** Igual que `snapshotCels`, pero para las máscaras de capa — indexadas
+   *  por id de CAPA, no de cel, porque una máscara no vive en `layer.cels`. */
+  private snapshotMasks(): Map<string, HTMLCanvasElement> {
+    const shots = new Map<string, HTMLCanvasElement>();
+    for (const layer of this.doc.layers) {
+      if (!layer.mask) continue;
+      const data = this.renderer.toImageData(this.renderer.ensureResident(layer.mask.surface));
+      const canvas = document.createElement('canvas');
+      canvas.width = data.width;
+      canvas.height = data.height;
+      canvas.getContext('2d')!.putImageData(data, 0, 0);
+      shots.set(layer.id, canvas);
+    }
+    return shots;
+  }
+
   /** Reconstruye todos los cels al tamaño dado, colocando cada copia en `dx, dy`. */
   private applyCanvasSize(
     width: number,
     height: number,
     shots: Map<string, HTMLCanvasElement>,
+    maskShots: Map<string, HTMLCanvasElement>,
     dx: number,
     dy: number,
   ) {
@@ -3597,6 +3766,30 @@ export class Engine {
         placed.getContext('2d')!.drawImage(shot, dx, dy);
         this.renderer.uploadImage(cel.surface, placed);
       }
+      if (layer.mask) {
+        this.renderer.release(layer.mask.surface);
+        // El área nueva de una máscara empieza en blanco (revela todo), no
+        // transparente (ocultaría todo) — al revés que un cel, donde lo de
+        // fuera del dibujo siempre fue "no hay tinta".
+        const placed = document.createElement('canvas');
+        placed.width = width;
+        placed.height = height;
+        const pctx = placed.getContext('2d')!;
+        pctx.fillStyle = '#fff';
+        pctx.fillRect(0, 0, width, height);
+        const shot = maskShots.get(layer.id);
+        if (shot) {
+          // `putImageData`, no `drawImage`: escribe los píxeles del recorte
+          // TAL CUAL, sin compositar — un agujero borrado en la máscara
+          // tiene alfa 0, y `drawImage` con blending normal (o con
+          // `globalCompositeOperation:'copy'`, que además borra el lienzo
+          // entero fuera del recorte) lo habría revelado otra vez en vez de
+          // conservar el 0 tal cual.
+          const shotData = shot.getContext('2d')!.getImageData(0, 0, shot.width, shot.height);
+          pctx.putImageData(shotData, dx, dy);
+        }
+        this.renderer.uploadImage(layer.mask.surface, placed);
+      }
     }
     this.resetView();
     this.touch();
@@ -3615,11 +3808,13 @@ export class Engine {
     if (this.pendingQuickShape) this.cancelQuickShape();
     for (const layer of this.doc.layers) {
       for (const cel of layer.cels.values()) this.renderer.release(cel.surface);
+      if (layer.mask) this.renderer.release(layer.mask.surface);
     }
     this.doc = doc;
     this.renderer.setDocumentSize(doc.width, doc.height);
     this.currentFrame = 0;
     this.activeLayerId = doc.layers[doc.layers.length - 1]?.id ?? null;
+    this.editingMaskLayerId = null;
     this.selection = { active: false, bounds: emptyRect() };
     this.history.clear();
     this.thumbCache.clear();
@@ -3662,19 +3857,21 @@ export class Engine {
     const oldW = this.doc.width;
     const oldH = this.doc.height;
     const shots = this.snapshotCels();
+    const maskShots = this.snapshotMasks();
     const dx = Math.round((w - oldW) * anchorX);
     const dy = Math.round((h - oldH) * anchorY);
 
     let cost = 0;
     for (const c of shots.values()) cost += c.width * c.height * 4;
+    for (const c of maskShots.values()) cost += c.width * c.height * 4;
 
     this.history.run({
       label: 'Tamaño del lienzo',
       cost,
-      redo: () => this.applyCanvasSize(w, h, shots, dx, dy),
+      redo: () => this.applyCanvasSize(w, h, shots, maskShots, dx, dy),
       // Volver atrás reinserta las copias en su sitio original, porque al
       // encoger se perdieron píxeles que no se pueden deducir.
-      undo: () => this.applyCanvasSize(oldW, oldH, shots, 0, 0),
+      undo: () => this.applyCanvasSize(oldW, oldH, shots, maskShots, 0, 0),
     });
   }
 

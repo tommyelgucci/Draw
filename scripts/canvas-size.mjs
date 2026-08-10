@@ -66,8 +66,10 @@ for (const label of ['Nueva', 'Duplicar', 'Combinar', 'Eliminar']) {
   const n = await page.locator('.panel__actions .action', { hasText: label }).count();
   check(`la acción "${label}" muestra su nombre`, n === 1);
 }
+// Ojo, candado, bloqueo de alfa y máscara — 4 por capa desde que existen
+// esos dos últimos (antes eran sólo ojo+candado).
 const toggles = await page.locator('.layer__toggle').count();
-check('cada capa tiene ojo y candado visibles', toggles === 2, `${toggles} controles`);
+check('cada capa tiene sus 4 controles visibles', toggles === 4, `${toggles} controles`);
 
 console.log('\n— Duplicar, ocultar y bloquear funcionan —');
 await page.locator('.panel__actions .action', { hasText: 'Duplicar' }).click();

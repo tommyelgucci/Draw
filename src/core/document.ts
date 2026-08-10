@@ -190,6 +190,19 @@ export interface Layer {
   swap?: SpriteSwapCatalog;
   /** Presente si esta capa vive dentro de una carpeta de `TraceDocument.layerGroups`. */
   groupId?: string;
+  /** Máscara de recorte no destructiva — ver `LayerMask`. */
+  mask?: LayerMask;
+}
+
+/**
+ * Máscara de capa: una superficie gris del tamaño del documento cuya alfa
+ * modula la de la capa entera al componer — blanco (alfa 1) revela, negro
+ * (alfa 0) oculta, sin borrar el dibujo real. Un solo cel, no animado por
+ * fotograma: igual que `clipToBelow`, una decisión de v1 para no ampliar el
+ * modelo de datos hasta que haga falta de verdad.
+ */
+export interface LayerMask {
+  surface: Surface;
 }
 
 /**

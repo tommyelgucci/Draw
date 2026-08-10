@@ -28,6 +28,7 @@
     "test:draggable-panels": "node scripts/draggable-panels.mjs",
     "test:loupe-precision": "node scripts/loupe-precision.mjs",
     "test:alpha-lock": "node scripts/alpha-lock.mjs",
+    "test:layer-mask": "node scripts/layer-mask.mjs",
     "test:quickshape": "node scripts/quickshape.mjs",
     "test:reference": "node scripts/reference.mjs",
     "test:brush-texture": "node scripts/brush-texture.mjs",

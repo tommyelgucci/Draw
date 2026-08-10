@@ -44,6 +44,7 @@ import {
   IconImage,
   IconKey,
   IconLock,
+  IconMask,
   IconMergeDown,
   IconPlus,
   IconResize,
@@ -159,6 +160,44 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         >
           <IconAlphaLock size={17} />
         </button>
+        {(() => {
+          const editing = engine.editingMaskLayerId === layer.id;
+          const title = !layer.mask
+            ? 'Añadir máscara'
+            : editing
+              ? 'Dejar de editar la máscara — volver a pintar la capa'
+              : 'Editar máscara: blanco revela, negro oculta';
+          return (
+            <button
+              type="button"
+              className={`layer__toggle ${layer.mask ? 'is-on' : ''} ${editing ? 'is-editing' : ''}`}
+              title={title}
+              aria-label={title}
+              aria-pressed={editing}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!layer.mask) engine.addLayerMask(layer.id);
+                else engine.setEditingMaskLayer(editing ? null : layer.id);
+              }}
+            >
+              <IconMask size={17} />
+            </button>
+          );
+        })()}
+        {layer.mask && (
+          <button
+            type="button"
+            className="layer__toggle"
+            title="Quitar máscara"
+            aria-label="Quitar máscara"
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.removeLayerMask(layer.id);
+            }}
+          >
+            <IconClose size={17} />
+          </button>
+        )}
       </div>
     </li>
   );

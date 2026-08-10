@@ -42,6 +42,9 @@ interface SerializedLayer {
   swap?: { variants: { id: string; label: string }[]; selected: Channel };
   /** Ausente en capas fuera de una carpeta. */
   groupId?: string;
+  /** El PNG de la máscara va aparte, bajo `mask/<layerId>.png`. Ausente en
+   *  capas sin máscara. */
+  hasMask?: boolean;
 }
 
 interface SerializedBone {
@@ -162,6 +165,13 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       swap = { variants, selected: layer.swap.selected };
     }
 
+    let hasMask = false;
+    if (layer.mask) {
+      hasMask = true;
+      const data = engine.renderer.toImageData(engine.renderer.ensureResident(layer.mask.surface));
+      files[`mask/${layer.id}.png`] = await canvasToPngBytes(canvasFromImageData(data));
+    }
+
     layers.push({
       id: layer.id,
       name: layer.name,
@@ -178,6 +188,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       rig: layer.rig,
       swap,
       groupId: layer.groupId,
+      hasMask,
     });
   }
 
@@ -281,6 +292,20 @@ export async function deserializeProject(
         catalog.variants.push({ id: sv.id, label: sv.label, surface });
       }
       layer.swap = catalog;
+    }
+    if (sl.hasMask) {
+      const surface = engine.renderer.createSurface('mask');
+      const png = files[`mask/${sl.id}.png`];
+      if (png) {
+        const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }));
+        engine.renderer.uploadImage(surface, bitmap);
+        bitmap.close();
+      } else {
+        // Nunca debería faltar el PNG si `hasMask` es cierto, pero por si
+        // acaso: una máscara sin datos es "revela todo", no "oculta todo".
+        engine.renderer.fill(surface, { r: 1, g: 1, b: 1 }, 1);
+      }
+      layer.mask = { surface };
     }
     doc.layers.push(layer);
   }

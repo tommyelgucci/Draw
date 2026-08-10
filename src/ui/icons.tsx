@@ -181,6 +181,15 @@ export const IconAlphaLock = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Rectángulo con un círculo hueco dentro — la metáfora de "máscara" que
+ *  usa cualquier editor gráfico: la parte clara revela, la oscura oculta. */
+export const IconMask = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4" y="4" width="16" height="16" rx="3" />
+    <circle cx="12" cy="12" r="4.5" strokeWidth={1.2} opacity={0.6} />
+  </svg>
+);
+
 export const IconMenu = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 7h16M4 12h16M4 17h16" />

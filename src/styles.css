@@ -1576,6 +1576,41 @@ button:focus-visible {
   stroke-dasharray: 3 5;
 }
 
+/** Aviso de que el trazo va a la máscara de la capa, no a su dibujo — ver
+ * `MaskEditBanner`. Arriba centrado, fuera del área de dibujo, para no
+ * tapar nunca lo que se está pintando. */
+.mask-edit-banner {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 16px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mask-edit-banner button {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .sel-overlay {
   position: absolute;
   inset: 0;
@@ -1958,6 +1993,13 @@ button:focus-visible {
   border-color: var(--accent);
   color: #fff;
   background: var(--accent-dim);
+}
+
+/* Editando la máscara de la capa, no su dibujo: un acento propio para que
+ * no se confunda con "is-on" (que aquí sólo diría "tiene máscara"). */
+.layer__toggle.is-editing {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
 /* ------------------------------------------------------------------ *
