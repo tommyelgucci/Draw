@@ -94,25 +94,55 @@ function paperStyle(engine: Engine): string {
   return `rgb(${to(paper.r)}, ${to(paper.g)}, ${to(paper.b)})`;
 }
 
-function drawFrame(
-  engine: Engine,
-  ctx: CanvasRenderingContext2D,
-  frame: number,
-  w: number,
-  h: number,
-  background: string,
-) {
-  const data = engine.renderFrameToImageData(frame);
-  ctx.fillStyle = background;
-  ctx.fillRect(0, 0, w, h);
+/**
+ * De dónde saca cada fotograma un vídeo — hoy sólo la anima­ción del
+ * documento (`animationFrameSource`); el time-lapse tiene su propio par de
+ * funciones (`exportSequenceWithWebCodecs`/`exportSequenceWithRecorder`,
+ * más abajo) porque parte de una lista de lienzos ya en memoria, no de
+ * `doc.frameCount`. `exportWithWebCodecs`/`exportWithRecorder` no saben ni
+ * les importa de dónde sale cada fotograma: sólo piden `frameImage(i)`.
+ */
+interface FrameSource {
+  width: number;
+  height: number;
+  fps: number;
+  frameCount: number;
+  background: string;
+  frameImage(index: number): CanvasImageSource;
+}
 
-  // `putImageData` ignora el estado del contexto y machacaría el fondo, así
-  // que el fotograma pasa primero por un lienzo suelto y se dibuja encima.
+/** `drawImage` no acepta `ImageData` directo — hace falta un lienzo suelto
+ *  de por medio. */
+function imageDataToCanvas(data: ImageData): HTMLCanvasElement {
   const tmp = document.createElement('canvas');
   tmp.width = data.width;
   tmp.height = data.height;
   tmp.getContext('2d')!.putImageData(data, 0, 0);
-  ctx.drawImage(tmp, 0, 0);
+  return tmp;
+}
+
+function animationFrameSource(engine: Engine): FrameSource {
+  const { width, height, fps, frameCount } = engine.doc;
+  return {
+    width,
+    height,
+    fps,
+    frameCount,
+    background: paperStyle(engine),
+    frameImage: (f) => imageDataToCanvas(engine.renderFrameToImageData(f)),
+  };
+}
+
+function drawFrame(
+  source: FrameSource,
+  ctx: CanvasRenderingContext2D,
+  frame: number,
+  w: number,
+  h: number,
+) {
+  ctx.fillStyle = source.background;
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(source.frameImage(frame), 0, 0);
 }
 
 /* ------------------------------------------------------------------ *
@@ -153,11 +183,11 @@ async function pickEncoding(w: number, h: number, fps: number, bitrate: number) 
 }
 
 async function exportWithWebCodecs(
-  engine: Engine,
+  source: FrameSource,
   opts: VideoExportOptions,
 ): Promise<VideoExportResult | null> {
-  const { fps, frameCount } = engine.doc;
-  const [w, h] = evenSize(engine.doc.width, engine.doc.height);
+  const { fps, frameCount } = source;
+  const [w, h] = evenSize(source.width, source.height);
   const bitrate = bitrateFor(w, h, fps, opts.quality);
 
   const picked = await pickEncoding(w, h, fps, bitrate);
@@ -201,12 +231,11 @@ async function exportWithWebCodecs(
 
   const canvas = makeFrameCanvas(w, h);
   const ctx = canvas.getContext('2d')!;
-  const background = paperStyle(engine);
   const frameDuration = 1_000_000 / fps;
 
   for (let f = 0; f < frameCount; f++) {
     if (failure) break;
-    drawFrame(engine, ctx, f, w, h, background);
+    drawFrame(source, ctx, f, w, h);
 
     const videoFrame = new VideoFrame(canvas, {
       timestamp: Math.round(f * frameDuration),
@@ -264,7 +293,7 @@ interface CaptureTrack extends MediaStreamTrack {
 }
 
 async function exportWithRecorder(
-  engine: Engine,
+  source: FrameSource,
   opts: VideoExportOptions,
 ): Promise<VideoExportResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -273,11 +302,10 @@ async function exportWithRecorder(
   const mimeType = RECORDER_TYPES.find((t) => MediaRecorder.isTypeSupported(t));
   if (!mimeType) throw new Error('Este navegador no ofrece ningún formato de vídeo.');
 
-  const { fps, frameCount } = engine.doc;
-  const [w, h] = evenSize(engine.doc.width, engine.doc.height);
+  const { fps, frameCount } = source;
+  const [w, h] = evenSize(source.width, source.height);
   const canvas = makeFrameCanvas(w, h);
   const ctx = canvas.getContext('2d')!;
-  const background = paperStyle(engine);
 
   // Con `requestFrame` controlamos cuándo entra cada fotograma; sin él hay
   // que dejar que el navegador muestree el canvas a la fps pedida.
@@ -301,7 +329,7 @@ async function exportWithRecorder(
   recorder.start();
   const step = 1000 / fps;
   for (let f = 0; f < frameCount; f++) {
-    drawFrame(engine, ctx, f, w, h, background);
+    drawFrame(source, ctx, f, w, h);
     if (manual) track.requestFrame!();
     opts.onProgress?.(f + 1, frameCount);
     // Esta ruta graba en tiempo real: exportar 4 segundos tarda 4 segundos.
@@ -511,15 +539,16 @@ export async function exportVideo(
   engine: Engine,
   opts: VideoExportOptions,
 ): Promise<VideoExportResult> {
+  const source = animationFrameSource(engine);
   if (hasWebCodecs()) {
     try {
-      const result = await exportWithWebCodecs(engine, opts);
+      const result = await exportWithWebCodecs(source, opts);
       if (result) return result;
     } catch (err) {
       console.warn('WebCodecs falló, se intenta con MediaRecorder', err);
     }
   }
-  return exportWithRecorder(engine, opts);
+  return exportWithRecorder(source, opts);
 }
 
 export interface VideoSupport {

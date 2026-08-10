@@ -131,8 +131,18 @@ las oportunidades están donde su arquitectura no le deja llegar.
    `engine.loadHistoryOps` la reconstruyen al abrir. Mismo camino para el
    `.trace` manual y el autoguardado en IndexedDB, porque ambos pasan por
    `serializeProject`/`deserializeProject`.
-3. **Time-lapse.** La codificación con WebCodecs ya está; falta capturar un
-   fotograma por trazo en un búfer circular.
+3. **Time-lapse.** `hecho`. Grabación manual (empezar/detener/descartar):
+   mientras está activa, captura una miniatura del compuesto (máx. 480px de
+   ancho) cada segundo en el que el documento cambió de verdad, enganchada a
+   `onAfterRender` en vez de a un `setInterval` propio — así sólo se intenta
+   cuando el lienzo cambió, no a ciegas. Tope de 600 fotogramas
+   (`Engine.timelapseFrames`); al llegar diezma a la mitad y dobla el
+   intervalo de captura, para que una sesión larga no crezca sin límite. Se
+   exporta con `exportImageSequenceAsVideo`, un codificador (WebCodecs con
+   reserva en `MediaRecorder`) separado a propósito del de `exportVideo`: la
+   fuente de fotogramas es un array de lienzos ya capturados, no algo que se
+   pueda expresar como la `FrameSource` de la animación (que renderiza
+   cuadro a cuadro bajo demanda).
 4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
    quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
    que el cambio queda contenido en `gl/renderer.ts`.

@@ -24,6 +24,7 @@ npm run test:fill         TODO EN VERDE   (bote de relleno; el barrido en CPU co
 npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tolerancia, sumar/restar)
 npm run test:unit         TODO EN VERDE   (89 casos: math.ts, document.ts, selection.ts, flood.ts — núcleo puro, sin navegador)
 npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
+npm run test:timelapse    TODO EN VERDE   (grabación periódica del proceso de dibujo, exporta un WebM válido)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
 ```
@@ -140,6 +141,13 @@ npm run build             466 kB / 140 kB gzip
   si falta el codificador H.264 se usa VP9 en WebM, y si no hay WebCodecs se
   graba con `MediaRecorder` en tiempo real. La interfaz avisa cuál toca antes
   de empezar, porque la última tarda lo que dure la animación.
+- **Time-lapse.** Botones explícitos de grabar/detener/descartar: mientras
+  está activo, captura un fotograma (máx. 480px de ancho) cada segundo en el
+  que el documento cambió de verdad (enganchado a `onAfterRender`, no a un
+  `setInterval` ciego), con un tope de 600 fotogramas — al llegar diezma a la
+  mitad y dobla el intervalo, para que una sesión larga no crezca sin límite.
+  Se exporta a vídeo con el mismo par de codificadores (WebCodecs con reserva
+  en `MediaRecorder`) a 24 fps fijos.
 
 ### Lienzo
 - El tamaño se cambia cuando se quiera desde *Proyecto → Tamaño del lienzo*,
@@ -324,8 +332,6 @@ Todavía abierta:
   `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
   de expulsión ya existe, así que el cambio queda contenido en
   `gl/renderer.ts`.
-- **Time-lapse**, de `RUMBO.md` — la codificación con WebCodecs ya existe;
-  falta capturar un fotograma por trazo en un búfer circular.
 - **Lote de transformación + selección rectangular: aviso de WebGL en
   consola, sin efecto visible.** Al levantar un lote de varios cels
   (`liftSelectionRange`) tras crear la selección, la consola muestra
