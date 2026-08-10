@@ -12,7 +12,16 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
 const errors = [];
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+// Aparte de errores de JS: el aviso de WebGL "Feedback loop formed between
+// Framebuffer and active Texture" no es un `error` de consola (es un
+// `warning` del driver), así que `errors` no lo habría cazado nunca —
+// vigilado aparte porque `commitFloating` en un lote multi-cel lo disparaba
+// (ver punto 16 de CHECKPOINT.md).
+const glWarnings = [];
+page.on('console', (m) => {
+  if (m.type() === 'error') errors.push(m.text());
+  if (m.text().includes('Feedback loop')) glWarnings.push(m.text());
+});
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
 let failures = 0;
@@ -302,6 +311,12 @@ await page.evaluate((tx) => window.__trace.updateFloating({ tx, ty: 0 }), TX_DOC
 await page.waitForTimeout(150);
 await page.evaluate(() => window.__trace.commitFloating());
 await page.waitForTimeout(150);
+
+check(
+  'confirmar el lote no dispara el feedback loop de WebGL (unidad de la máscara sin desenlazar)',
+  glWarnings.length === 0,
+  glWarnings.length ? `${glWarnings.length} avisos` : '',
+);
 
 const inkOrigFrame0 = await inkInRect(layerC, 0, origRect);
 const inkOrigFrame5 = await inkInRect(layerC, 5, origRect);

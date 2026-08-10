@@ -251,6 +251,23 @@ Todos salieron de mirar capturas, no del compilador:
     (`merge-base --is-ancestor`, `diff --stat` vacío antes de forzar el
     push). La regla en `CLAUDE.md` sigue siendo la salvaguarda correcta; el
     fallo está en que la sesión de turno no la aplicó, no en la regla misma.
+16. **`liftSelectionRange` + `commitFloating` disparaban el mismo feedback
+    loop de WebGL que el punto 8, pero en la unidad 1.** El programa `copy`
+    declara `uMask` sin condición (se lee dentro de `if (uUseMask > 0.5)`,
+    pero eso no lo saca de los samplers activos del programa enlazado), y
+    `bindSource` sólo reenlazaba esa unidad cuando había máscara — sin ella
+    quedaba lo que hubiera dejado la última llamada que sí pasó una. Al
+    confirmar un lote de transformación (`drawOver(cel.surface, fc.surface)`
+    sin máscara, justo después de que `liftCel` hubiera dejado la unidad 1
+    apuntando a `selectionMask`), la validación de WebGL comparaba esa
+    unidad contra el framebuffer activo y rechazaba el draw call, con aviso
+    en consola aunque el resultado en píxeles fuera correcto — la duda que
+    quedaba abierta en la entrada anterior de este checkpoint. Reproducido
+    con un repro aislado que capturaba la consola con ubicación, aislando
+    que el aviso salía exactamente en `commitFloating`, no en el levantado.
+    `bindSource` ahora desenlaza la unidad 1 explícitamente (`bindTexture(...,
+    null)`) cuando no hay máscara, igual que ya hacía `drawStamps` con la
+    unidad 0.
 
 ## Lo siguiente
 
@@ -339,16 +356,5 @@ Todavía abierta:
   `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
   de expulsión ya existe, así que el cambio queda contenido en
   `gl/renderer.ts`.
-- **Lote de transformación + selección rectangular: aviso de WebGL en
-  consola, sin efecto visible.** Al levantar un lote de varios cels
-  (`liftSelectionRange`) tras crear la selección, la consola muestra
-  "Feedback loop formed between Framebuffer and active Texture" varias
-  veces. No es una regresión de esta tanda —ninguno de los cambios de
-  historial persistente toca `liftCel`/`commitFloating`/`renderer.ts`— y
-  no se ha visto que estropee el resultado (medido con `readRect` en la
-  región exacta de origen y destino, no con una captura de pantalla): el
-  origen queda vacío y el destino recibe la tinta, en ambos cels del
-  lote, antes y después de recargar. Encontrado mientras se escribía el
-  test de historial; queda para revisar aparte porque un warning de GPU
-  sin efecto medible no es zona seguro para asumir que no importa en un
-  dispositivo real.
+- ~~Lote de transformación + selección rectangular: aviso de WebGL en
+  consola.~~ Resuelto — ver el punto 16 de "Bugs encontrados y corregidos".
