@@ -543,6 +543,7 @@ export class Engine {
     copy.opacity = src.opacity;
     copy.blend = src.blend;
     copy.clipToBelow = src.clipToBelow;
+    copy.alphaLock = src.alphaLock;
     copy.transform = structuredCloneTransform(src.transform);
 
     for (const [frame, cel] of src.cels) {
@@ -1891,14 +1892,7 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(cel.surface, rect);
-    this.renderer.drawOver(
-      cel.surface,
-      this.renderer.scratch('wet'),
-      ctx.brush.opacity,
-      undefined,
-      ctx.brush.erase,
-      this.clipMask,
-    );
+    this.mergeStroke(cel.surface, this.renderer.scratch('wet'), ctx.brush.opacity, ctx.brush.erase, layer);
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
 
@@ -2115,14 +2109,7 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(p.cel.surface, rect);
-    this.renderer.drawOver(
-      p.cel.surface,
-      wet,
-      p.ctx.brush.opacity,
-      undefined,
-      p.ctx.brush.erase,
-      this.clipMask,
-    );
+    this.mergeStroke(p.cel.surface, wet, p.ctx.brush.opacity, p.ctx.brush.erase, p.layer);
     const after = this.renderer.readRect(p.cel.surface, rect);
     this.renderer.clear(wet);
 
@@ -2738,6 +2725,41 @@ export class Engine {
     return this.selection.active ? this.selectionMask : null;
   }
 
+  /** Copia el alfa actual de `cel` a un scratch aparte: es la máscara del
+   *  bloqueo de alfa (sólo pintar donde ya había algo). No puede ser el
+   *  propio `cel.surface` porque `drawOver` lo usaría a la vez como
+   *  destino y como fuente de la máscara en la misma pasada — prohibido en
+   *  WebGL2, igual que el resto de invariantes de `composite()`. */
+  private alphaLockMask(cel: Surface): Surface {
+    const snap = this.renderer.scratch('alock');
+    this.renderer.clear(snap);
+    this.renderer.drawOver(snap, cel, 1);
+    return snap;
+  }
+
+  /**
+   * Funde `src` sobre `cel.surface` respetando la selección activa y el
+   * bloqueo de alfa de `layer` a la vez si hace falta. `drawOver` sólo
+   * admite una máscara por pasada, así que cuando las dos aplican a la vez
+   * se resuelve con dos pasadas encadenadas — recorta `src` a la selección
+   * sobre un scratch limpio primero, y ese resultado es el que se funde de
+   * verdad usando el bloqueo de alfa como máscara — en vez de un shader
+   * nuevo sólo para multiplicar dos máscaras. Sin ninguna de las dos
+   * activa (el caso normal), es exactamente el `drawOver` de siempre.
+   */
+  private mergeStroke(dst: Surface, src: Surface, opacity: number, erase: boolean, layer: Layer) {
+    const selMask = this.clipMask;
+    const lockMask = layer.alphaLock ? this.alphaLockMask(dst) : null;
+    if (selMask && lockMask) {
+      const pre = this.renderer.scratch('paintmask');
+      this.renderer.clear(pre);
+      this.renderer.drawOver(pre, src, 1, undefined, false, selMask);
+      this.renderer.drawOver(dst, pre, opacity, undefined, erase, lockMask);
+      return;
+    }
+    this.renderer.drawOver(dst, src, opacity, undefined, erase, selMask ?? lockMask);
+  }
+
   private selectionSurfaceCanvas(): HTMLCanvasElement {
     if (
       !this.selectionCanvas ||
@@ -3084,7 +3106,7 @@ export class Engine {
 
     const flat = this.renderer.scratch('flat');
     this.renderer.fill(flat, color, 1);
-    this.renderer.drawOver(cel.surface, flat, 1, undefined, false, this.selectionMask);
+    this.mergeStroke(cel.surface, flat, 1, false, layer);
 
     const after = this.renderer.readRect(cel.surface, rect);
     const prev = before ?? new Uint8Array(after.length);
@@ -3479,11 +3501,17 @@ export class Engine {
     const cr = Math.round(color.r * 255);
     const cg = Math.round(color.g * 255);
     const cb = Math.round(color.b * 255);
+    // Con bloqueo de alfa, el bote sólo puede recolorear tinta que ya
+    // existía en esta capa — nunca ensanchar su contorno. `target[o + 3]`
+    // todavía es el alfa ORIGINAL en este punto: cada píxel se escribe una
+    // sola vez en este bucle, así que leerlo justo antes de sobrescribirlo
+    // es seguro.
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const i = y * w + x;
         if (!filled[i]) continue;
         const o = i * 4;
+        if (layer.alphaLock && target[o + 3] === 0) continue;
         target[o] = cr;
         target[o + 1] = cg;
         target[o + 2] = cb;

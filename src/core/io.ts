@@ -31,6 +31,8 @@ interface SerializedLayer {
   opacity: number;
   blend: BlendMode;
   clipToBelow: boolean;
+  /** Ausente en proyectos anteriores a esta función — normaliza a `false`. */
+  alphaLock?: boolean;
   animated: boolean;
   cels: { frame: number; celId: string; label?: string }[];
   transform: TransformTrack;
@@ -169,6 +171,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       opacity: layer.opacity,
       blend: layer.blend,
       clipToBelow: layer.clipToBelow,
+      alphaLock: layer.alphaLock,
       animated: layer.animated,
       cels,
       transform: layer.transform,
@@ -240,6 +243,7 @@ export async function deserializeProject(
       opacity: sl.opacity,
       blend: sl.blend,
       clipToBelow: sl.clipToBelow,
+      alphaLock: sl.alphaLock ?? false,
       animated: sl.animated,
       cels: new Map(),
       transform: normalizeTransform(sl.transform),

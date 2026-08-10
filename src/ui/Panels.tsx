@@ -32,6 +32,7 @@ import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/vi
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Slider } from './controls';
 import {
+  IconAlphaLock,
   IconAudio,
   IconChevronRight,
   IconClose,
@@ -140,6 +141,23 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
           }}
         >
           <IconLock size={17} />
+        </button>
+        <button
+          type="button"
+          className={`layer__toggle ${layer.alphaLock ? 'is-on' : ''}`}
+          title={
+            layer.alphaLock
+              ? 'Quitar bloqueo de alfa: se puede volver a pintar fuera del contorno'
+              : 'Bloquear alfa: sólo se puede repintar dentro del contorno ya pintado'
+          }
+          aria-label={layer.alphaLock ? 'Quitar bloqueo de alfa' : 'Bloquear alfa'}
+          aria-pressed={layer.alphaLock}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.setLayerProp(layer.id, 'alphaLock', !layer.alphaLock, 'Bloqueo de alfa');
+          }}
+        >
+          <IconAlphaLock size={17} />
         </button>
       </div>
     </li>

@@ -171,6 +171,16 @@ export const IconLock = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Cuadrícula tipo tablero de ajedrez — la misma metáfora visual que usa
+ *  cualquier editor para "hueco transparente", aquí como icono de bloqueo
+ *  de alfa (pintar sólo donde ya hay tinta). */
+export const IconAlphaLock = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="M4 12h8M12 4v8M12 12h8M12 12v8" strokeWidth={1.2} opacity={0.55} />
+  </svg>
+);
+
 export const IconMenu = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 7h16M4 12h16M4 17h16" />

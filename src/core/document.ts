@@ -168,6 +168,10 @@ export interface Layer {
   blend: BlendMode;
   /** Recorta esta capa a la alfa de la capa base que tiene debajo. */
   clipToBelow: boolean;
+  /** Pintar en esta capa sólo afecta a píxeles que ya tenían alfa > 0 — no
+   *  se puede ensanchar el contorno existente, sólo recolorear/sombrear
+   *  dentro de él. */
+  alphaLock: boolean;
   /**
    * `false`: un único cel (en el fotograma 0) visible en toda la animación —
    * fondos, capas de color. `true`: dibujo cuadro por cuadro.
@@ -281,6 +285,7 @@ export function newLayer(name: string, animated = true, kind: LayerKind = 'draw'
     opacity: 1,
     blend: 'normal',
     clipToBelow: false,
+    alphaLock: false,
     animated,
     cels: new Map(),
     transform: newTransform(),
