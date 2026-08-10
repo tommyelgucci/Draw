@@ -43,6 +43,7 @@
     "test:palettes": "node scripts/palettes.mjs",
     "test:taper": "node scripts/taper.mjs",
     "test:fill": "node scripts/fill.mjs",
+    "test:thumbnail-crop": "node scripts/thumbnail-crop.mjs",
     "test:select-wand": "node scripts/select-wand.mjs",
     "test:history-persist": "node scripts/history-persist.mjs",
     "test:unit": "node --import ./scripts/register-ts-loader.mjs --test src/core/*.test.ts"

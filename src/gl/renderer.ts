@@ -11,6 +11,7 @@ import {
   STAMP_VS,
 } from './shaders';
 import { generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
+import { extractRect } from '../core/flood';
 import { mat3Identity, type Mat3 } from '../core/math';
 import type { Mesh } from '../core/rig';
 import type { RGB, Rect, Stamp } from '../core/types';
@@ -958,49 +959,177 @@ export class Renderer {
   }
 
   /**
+   * Reduce `srcTex` (tamaño `curW`x`curH`) hasta `targetW`x`targetH` por
+   * mitades sucesivas en vez de saltar de golpe: una minificación directa
+   * con filtro lineal muestrea cuatro téxeles y se salta el resto, con lo
+   * que las líneas finas desaparecen. Encadenando halvings cada paso es un
+   * filtro de caja correcto. Siempre termina con un blit a `final` aunque ya
+   * esté al tamaño pedido (documento más pequeño que el destino): `final` es
+   * una textura de scratch aparte, no la fuente, y sin ese blit se leería lo
+   * que hubiera de una miniatura anterior del mismo tamaño.
+   */
+  private reduceByHalving(
+    srcTex: WebGLTexture,
+    curW: number,
+    curH: number,
+    targetW: number,
+    targetH: number,
+  ): { tex: WebGLTexture; fbo: WebGLFramebuffer } {
+    let tex = srcTex;
+    let w = curW;
+    let h = curH;
+    while (w > targetW * 2 && h > targetH * 2) {
+      const nw = Math.max(targetW, w >> 1);
+      const nh = Math.max(targetH, h >> 1);
+      const t = this.smallTarget(nw, nh);
+      this.blitTo(tex, t.fbo, nw, nh);
+      tex = t.tex;
+      w = nw;
+      h = nh;
+    }
+    const final = this.smallTarget(targetW, targetH);
+    this.blitTo(tex, final.fbo, targetW, targetH);
+    return final;
+  }
+
+  /** Tamaño del sondeo usado para localizar el dibujo dentro del documento
+   *  — sólo hace falta saber DÓNDE está, no verlo con nitidez, así que no
+   *  hace falta acercarse al tamaño real del documento. Fijo, no derivado de
+   *  `maxSize`: así el sondeo reutiliza siempre las mismas entradas de
+   *  `smallTargets` (que sólo crecen por tamaño de textura distinto pedido,
+   *  nunca se expulsan salvo al cambiar el tamaño del documento) en vez de
+   *  crear una nueva por cada aspecto de recorte distinto. */
+  private static readonly INK_PROBE_MAX = 128;
+
+  /**
+   * Caja del dibujo dentro del documento, en coordenadas de documento y con
+   * margen — o `null` si no hay tinta, o si el dibujo ya ocupa casi todo el
+   * documento (ahí recortar no ayuda y sólo cambia un halving de calidad
+   * probada por un blit de un solo paso). Se mide sobre una reducción
+   * barata (`INK_PROBE_MAX`), no a resolución completa: para saber dónde
+   * recortar no hace falta precisión de píxel.
+   */
+  private findInkBounds(src: Surface): Rect | null {
+    const gl = this.gl;
+    const scale = Math.min(
+      Renderer.INK_PROBE_MAX / this.docWidth,
+      Renderer.INK_PROBE_MAX / this.docHeight,
+      1,
+    );
+    const probeW = Math.max(1, Math.round(this.docWidth * scale));
+    const probeH = Math.max(1, Math.round(this.docHeight * scale));
+    const probe = this.reduceByHalving(src.tex!, this.docWidth, this.docHeight, probeW, probeH);
+
+    const px = new Uint8Array(probeW * probeH * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fbo);
+    gl.readPixels(0, 0, probeW, probeH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    let minX = probeW;
+    let minY = probeH;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < probeH; y++) {
+      for (let x = 0; x < probeW; x++) {
+        if (px[(y * probeW + x) * 4 + 3] === 0) continue;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    if (maxX < 0) return null;
+
+    const area = (maxX - minX + 1) * (maxY - minY + 1);
+    if (area > probeW * probeH * 0.85) return null;
+
+    // Vuelve a coordenadas de documento con margen: al menos un téxel de
+    // sondeo (la caja es tan precisa como su resolución) más un 8% del lado
+    // mayor, para no recortar al ras del trazo.
+    const sx = this.docWidth / probeW;
+    const sy = this.docHeight / probeH;
+    const bboxW = (maxX - minX + 1) * sx;
+    const bboxH = (maxY - minY + 1) * sy;
+    const pad = Math.max(sx, sy, Math.max(bboxW, bboxH) * 0.08);
+    return {
+      x: Math.max(0, Math.floor(minX * sx - pad)),
+      y: Math.max(0, Math.floor(minY * sy - pad)),
+      x2: Math.min(this.docWidth, Math.ceil((maxX + 1) * sx + pad)),
+      y2: Math.min(this.docHeight, Math.ceil((maxY + 1) * sy + pad)),
+    };
+  }
+
+  /**
    * Miniatura de una superficie sin traerse el documento entero a CPU.
    *
-   * Reduce por mitades sucesivas en vez de saltar de 1920 px a 64 de golpe:
-   * una minificación directa con filtro lineal muestrea cuatro téxeles y se
-   * salta el resto, con lo que las líneas finas desaparecen. Encadenando
-   * halvings cada paso es un filtro de caja correcto.
+   * Antes de reducir, recorta a la caja del dibujo (`findInkBounds`): un
+   * boceto pequeño en un documento grande, reducido sin recortar, se queda
+   * en unos pocos téxeles de la miniatura entera y una línea fina se vuelve
+   * casi invisible — inherente a reducir 1920 px a 64, no un bug de
+   * muestreo. El recorte usa `blitFramebuffer` (recorte + escala en un solo
+   * paso de GPU, sin tocar el pipeline de shaders compartido) hacia una
+   * textura fija de `maxSize`x`maxSize` — fija para no crear una entrada
+   * nueva en `smallTargets` por cada aspecto de recorte distinto, que
+   * crecería sin límite a lo largo de una sesión de dibujo — y se recorta
+   * en CPU al tamaño real tras leerla, con `extractRect` (mismo camino que
+   * ya usa `floodFill` para recortar un buffer).
+   *
+   * Sin caja que recortar (sin tinta, o el dibujo ya ocupa casi todo el
+   * documento) sigue el camino de siempre: reducir por mitades sucesivas,
+   * el filtro de caja correcto para minificaciones grandes.
    */
   downscaleToCanvas(src: Surface, maxSize: number): HTMLCanvasElement | null {
     if (src.empty && !src.backing) return null;
     const gl = this.gl;
     this.ensureResident(src);
 
-    const scale = Math.min(maxSize / this.docWidth, maxSize / this.docHeight, 1);
-    const targetW = Math.max(1, Math.round(this.docWidth * scale));
-    const targetH = Math.max(1, Math.round(this.docHeight * scale));
+    const inkRect = this.findInkBounds(src);
+    let targetW: number;
+    let targetH: number;
+    let px: Uint8Array;
 
-    let curTex = src.tex!;
-    let curW = this.docWidth;
-    let curH = this.docHeight;
+    if (inkRect) {
+      const rectW = inkRect.x2 - inkRect.x;
+      const rectH = inkRect.y2 - inkRect.y;
+      const scale = Math.min(maxSize / rectW, maxSize / rectH, 1);
+      targetW = Math.max(1, Math.round(rectW * scale));
+      targetH = Math.max(1, Math.round(rectH * scale));
 
-    while (curW > targetW * 2 && curH > targetH * 2) {
-      const nw = Math.max(targetW, curW >> 1);
-      const nh = Math.max(targetH, curH >> 1);
-      const t = this.smallTarget(nw, nh);
-      this.blitTo(curTex, t.fbo, nw, nh);
-      curTex = t.tex;
-      curW = nw;
-      curH = nh;
+      const slot = this.smallTarget(maxSize, maxSize);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, slot.fbo);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src.fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, slot.fbo);
+      gl.blitFramebuffer(
+        inkRect.x,
+        inkRect.y,
+        inkRect.x2,
+        inkRect.y2,
+        0,
+        0,
+        targetW,
+        targetH,
+        gl.COLOR_BUFFER_BIT,
+        gl.LINEAR,
+      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+      const full = new Uint8Array(maxSize * maxSize * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, slot.fbo);
+      gl.readPixels(0, 0, maxSize, maxSize, gl.RGBA, gl.UNSIGNED_BYTE, full);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      px = extractRect(full, maxSize, { x: 0, y: 0, x2: targetW, y2: targetH });
+    } else {
+      const scale = Math.min(maxSize / this.docWidth, maxSize / this.docHeight, 1);
+      targetW = Math.max(1, Math.round(this.docWidth * scale));
+      targetH = Math.max(1, Math.round(this.docHeight * scale));
+      const final = this.reduceByHalving(src.tex!, this.docWidth, this.docHeight, targetW, targetH);
+      px = new Uint8Array(targetW * targetH * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, final.fbo);
+      gl.readPixels(0, 0, targetW, targetH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
-
-    const final = this.smallTarget(targetW, targetH);
-    if (curW !== targetW || curH !== targetH) {
-      this.blitTo(curTex, final.fbo, targetW, targetH);
-    }
-
-    const readFbo =
-      curW === targetW && curH === targetH
-        ? this.smallTarget(curW, curH).fbo
-        : final.fbo;
-    const px = new Uint8Array(targetW * targetH * 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, readFbo);
-    gl.readPixels(0, 0, targetW, targetH, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     unpremultiply(px);
     const canvas = document.createElement('canvas');
