@@ -192,6 +192,23 @@ export interface Layer {
   groupId?: string;
   /** Máscara de recorte no destructiva — ver `LayerMask`. */
   mask?: LayerMask;
+  /**
+   * Presente si esta capa es una capa de texto: su cel único (no animada)
+   * se regenera desde estas propiedades cada vez que cambian, en vez de
+   * pintarse a mano. La posición no vive aquí — se mueve como cualquier
+   * otra capa con su `TransformTrack` normal.
+   */
+  text?: TextLayerProps;
+}
+
+export interface TextLayerProps {
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  color: RGB;
+  align: 'left' | 'center' | 'right';
+  bold: boolean;
+  italic: boolean;
 }
 
 /**

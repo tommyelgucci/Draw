@@ -22,6 +22,7 @@ import {
   type LayerMask,
   type SpriteSwapCatalog,
   type SpriteSwapVariant,
+  type TextLayerProps,
   type TraceDocument,
 } from './document';
 import { History } from './history';
@@ -924,6 +925,99 @@ export class Engine {
   discardReferenceImport(layer: Layer) {
     for (const cel of layer.cels.values()) this.renderer.release(cel.surface);
     layer.cels.clear();
+  }
+
+  /* --- capas de texto --- */
+
+  private textCanvas: HTMLCanvasElement | null = null;
+
+  /**
+   * Hornea `layer.text` en su único cel (no animada) con Canvas 2D — igual
+   * que `uploadFitted` para imágenes de referencia: el resto del pipeline
+   * (composición, rig, máscara, transform) no distingue una capa de texto
+   * de cualquier otra, porque lo único que cambia es de dónde salen los
+   * píxeles del cel. La posición no se toca aquí: el texto siempre se
+   * hornea centrado en el documento, y moverlo es cosa del `TransformTrack`
+   * normal de la capa, como con cualquier otra.
+   */
+  private renderTextIntoLayer(layer: Layer) {
+    if (!layer.text) return;
+    const { cel } = this.ensureCel(layer, 0);
+    if (
+      !this.textCanvas ||
+      this.textCanvas.width !== this.doc.width ||
+      this.textCanvas.height !== this.doc.height
+    ) {
+      this.textCanvas = document.createElement('canvas');
+      this.textCanvas.width = this.doc.width;
+      this.textCanvas.height = this.doc.height;
+    }
+    const ctx = this.textCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, this.doc.width, this.doc.height);
+    const t = layer.text;
+    const style = t.italic ? 'italic ' : '';
+    const weight = t.bold ? 'bold ' : '';
+    ctx.font = `${style}${weight}${t.fontSize}px ${t.fontFamily}`;
+    ctx.fillStyle = `rgb(${Math.round(t.color.r * 255)}, ${Math.round(t.color.g * 255)}, ${Math.round(t.color.b * 255)})`;
+    ctx.textAlign = t.align;
+    ctx.textBaseline = 'middle';
+    const anchorX =
+      t.align === 'left' ? this.doc.width * 0.08 : t.align === 'right' ? this.doc.width * 0.92 : this.doc.width / 2;
+    const lines = t.text.length > 0 ? t.text.split('\n') : [''];
+    const lineHeight = t.fontSize * 1.2;
+    const startY = this.doc.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], anchorX, startY + i * lineHeight);
+    }
+    this.renderer.clear(cel.surface);
+    this.renderer.uploadImage(cel.surface, this.textCanvas);
+  }
+
+  /** Crea una capa de texto nueva encima de la activa, con valores por
+   *  defecto razonables — el tamaño escala con el documento para que no
+   *  salga microscópico en un lienzo grande ni gigante en uno pequeño. */
+  createTextLayer(text = 'Texto') {
+    const layer = newLayer('Texto', false, 'draw');
+    layer.text = {
+      text,
+      fontFamily: 'sans-serif',
+      fontSize: Math.round(this.doc.height * 0.08),
+      color: { r: 0, g: 0, b: 0 },
+      align: 'center',
+      bold: false,
+      italic: false,
+    };
+    this.renderTextIntoLayer(layer);
+
+    const index = this.activeLayerIndex + 1;
+    const at = index < 0 ? this.doc.layers.length : index;
+    const prevActive = this.activeLayerId;
+    this.history.run({
+      label: 'Añadir texto',
+      redo: () => {
+        this.doc.layers.splice(at, 0, layer);
+        this.activeLayerId = layer.id;
+        this.touch();
+      },
+      undo: () => {
+        const i = this.doc.layers.indexOf(layer);
+        if (i >= 0) this.doc.layers.splice(i, 1);
+        this.activeLayerId = prevActive;
+        this.touch();
+      },
+    });
+  }
+
+  /** Cambia el contenido/estilo de una capa de texto y la vuelve a hornear
+   *  — sin paso de deshacer propio, igual que `setLayerPropLive` para
+   *  cualquier otro ajuste continuo (nombre, opacidad): cada pulsación de
+   *  tecla no merece su propio "deshacer". */
+  setTextLayerProps(layerId: string, patch: Partial<TextLayerProps>) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer?.text) return;
+    layer.text = { ...layer.text, ...patch };
+    this.renderTextIntoLayer(layer);
+    this.touch();
   }
 
   /* --- intercambio de sprites (poses/visemas) --- */

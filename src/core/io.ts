@@ -14,6 +14,7 @@ import {
   type LayerGroup,
   type LayerKind,
   type SpriteSwapCatalog,
+  type TextLayerProps,
   type TraceDocument,
   type TransformTrack,
 } from './document';
@@ -45,6 +46,10 @@ interface SerializedLayer {
   /** El PNG de la máscara va aparte, bajo `mask/<layerId>.png`. Ausente en
    *  capas sin máscara. */
   hasMask?: boolean;
+  /** Ausente en capas que no son de texto. El cel ya lleva los píxeles
+   *  horneados como cualquier otro — esto es sólo para poder reabrir el
+   *  cuadro de edición con los mismos valores. */
+  text?: TextLayerProps;
 }
 
 interface SerializedBone {
@@ -189,6 +194,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       swap,
       groupId: layer.groupId,
       hasMask,
+      text: layer.text,
     });
   }
 
@@ -260,6 +266,7 @@ export async function deserializeProject(
       transform: normalizeTransform(sl.transform),
       rig: normalizeLayerRig(sl.rig),
       groupId: sl.groupId,
+      text: sl.text,
     };
     for (const sc of sl.cels) {
       const cel: Cel = {

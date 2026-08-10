@@ -396,7 +396,8 @@ body,
 input[type='text'],
 input[type='number'],
 input:not([type]),
-select {
+select,
+textarea {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -405,6 +406,11 @@ select {
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.text-layer__content {
+  resize: vertical;
+  min-height: 60px;
 }
 
 input:focus-visible,
@@ -1910,7 +1916,10 @@ button:focus-visible {
 
 .panel__actions {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* auto-fit en vez de un `repeat(4, ...)` fijo: reparte el ancho entre las
+   * que haya (2 al agrupar capas, 5 con la capa de texto) sin dejar una fila
+   * aparte con un único botón huérfano. */
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 4px;
 }
 

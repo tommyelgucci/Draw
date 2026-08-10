@@ -30,7 +30,7 @@ import {
 } from '../core/io';
 import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/video';
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
-import { Field, IconButton, Panel, Slider } from './controls';
+import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
   IconAlphaLock,
   IconAudio,
@@ -49,6 +49,7 @@ import {
   IconPlus,
   IconResize,
   IconSymmetry,
+  IconText,
   IconTrash,
   IconVideo,
 } from './icons';
@@ -315,6 +316,15 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         <button
           type="button"
           className="action"
+          aria-label="Añadir texto"
+          onClick={() => engine.createTextLayer()}
+        >
+          <IconText size={18} />
+          <span>Texto</span>
+        </button>
+        <button
+          type="button"
+          className="action"
           aria-label="Duplicar capa"
           onClick={() => active && engine.duplicateLayer(active.id)}
           disabled={!active}
@@ -384,6 +394,67 @@ export function LayersPanel({ engine }: { engine: Engine }) {
           ),
         )}
       </ul>
+
+      {active?.text && (
+        <div className="panel__section">
+          <h3 className="panel__subtitle">Texto</h3>
+          <Field label="Contenido">
+            <textarea
+              className="text-layer__content"
+              rows={3}
+              value={active.text.text}
+              onChange={(e) => engine.setTextLayerProps(active.id, { text: e.target.value })}
+            />
+          </Field>
+          <Slider
+            label="Tamaño"
+            value={active.text.fontSize}
+            min={8}
+            max={Math.max(8, Math.round(engine.doc.height * 0.5))}
+            step={1}
+            format={(v) => `${Math.round(v)}px`}
+            onChange={(v) => engine.setTextLayerProps(active.id, { fontSize: Math.round(v) })}
+          />
+          <Field label="Alineación">
+            <Segmented
+              value={active.text.align}
+              options={[
+                { value: 'left', label: 'Izq.' },
+                { value: 'center', label: 'Centro' },
+                { value: 'right', label: 'Der.' },
+              ]}
+              onChange={(align) => engine.setTextLayerProps(active.id, { align })}
+            />
+          </Field>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={active.text.bold}
+              onChange={(e) => engine.setTextLayerProps(active.id, { bold: e.target.checked })}
+            />
+            <span>Negrita</span>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={active.text.italic}
+              onChange={(e) => engine.setTextLayerProps(active.id, { italic: e.target.checked })}
+            />
+            <span>Cursiva</span>
+          </label>
+          <Field label="Color del texto">
+            <input
+              type="color"
+              value={rgbToHex(active.text.color)}
+              onChange={(e) => engine.setTextLayerProps(active.id, { color: hexToRgb(e.target.value) })}
+            />
+          </Field>
+          <p className="hint">
+            Para moverlo, usa la herramienta Transformar — el texto se mueve, escala y
+            rota como cualquier otra capa.
+          </p>
+        </div>
+      )}
 
       {active && (
         <div className="panel__section">

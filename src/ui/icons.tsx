@@ -190,6 +190,12 @@ export const IconMask = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+export const IconText = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M5 6h14M12 6v13" />
+  </svg>
+);
+
 export const IconMenu = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 7h16M4 12h16M4 17h16" />
