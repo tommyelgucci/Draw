@@ -28,7 +28,7 @@ await page.waitForTimeout(1200);
  */
 const drawRingAndFill = ({ x0, y0, x1, y1, thickness }, fillPoint, sizeLabel) =>
   page.evaluate(
-    ({ x0, y0, x1, y1, thickness, fillPoint, sizeLabel }) => {
+    async ({ x0, y0, x1, y1, thickness, fillPoint, sizeLabel }) => {
       const e = window.__trace;
       const layer = e.activeLayer;
       e.addCel(layer.id, e.currentFrame, false);
@@ -52,11 +52,11 @@ const drawRingAndFill = ({ x0, y0, x1, y1, thickness }, fillPoint, sizeLabel) =>
       e.renderer.writeRect(cel.surface, rect, px);
       e.touch();
 
-      const median = (fn) => {
+      const median = async (fn) => {
         const times = [];
         for (let i = 0; i < 5; i++) {
           const t0 = performance.now();
-          fn();
+          await fn();
           times.push(performance.now() - t0);
         }
         times.sort((a, b) => a - b);
@@ -70,7 +70,7 @@ const drawRingAndFill = ({ x0, y0, x1, y1, thickness }, fillPoint, sizeLabel) =>
       // el área rellenada). Medir esa lectura por separado y restarla aísla
       // la parte que este cambio corrige.
       const full0 = { x: 0, y: 0, x2: e.doc.width, y2: e.doc.height };
-      const baseline = median(() => e.renderer.readRect(cel.surface, full0));
+      const baseline = await median(() => e.renderer.readRect(cel.surface, full0));
 
       // Deshacer entre repetición y repetición, no encadenarlas: el paso de
       // "crecimiento" no mira color, sólo adyacencia a lo ya lleno, así que
@@ -78,14 +78,15 @@ const drawRingAndFill = ({ x0, y0, x1, y1, thickness }, fillPoint, sizeLabel) =>
       // anillo un par de píxeles cada vez — no es un caso real (nadie hace
       // clic cinco veces seguidas en el mismo sitio), pero sí falsea la
       // medición si no se limpia el estado entre una repetición y la
-      // siguiente.
-      const elapsed = median(() => {
-        e.floodFill(fillPoint, { r: 0.9, g: 0.2, b: 0.2 });
+      // siguiente. `floodFill` es asíncrono (el barrido corre en un worker),
+      // así que hay que esperarlo antes de deshacer.
+      const elapsed = await median(async () => {
+        await e.floodFill(fillPoint, { r: 0.9, g: 0.2, b: 0.2 });
         e.history.undo();
       });
       // El último deshecho ya limpió el estado; vuelve a rellenar una sola
       // vez para dejar el resultado que el resto del test espera leer.
-      e.floodFill(fillPoint, { r: 0.9, g: 0.2, b: 0.2 });
+      await e.floodFill(fillPoint, { r: 0.9, g: 0.2, b: 0.2 });
 
       const full = e.renderer.readRect(cel.surface, full0);
       let filledCount = 0;
@@ -152,13 +153,20 @@ check(
 // de aplicar color a la caja del relleno (antes recorrían el lienzo entero,
 // aunque el área rellenada fuera diminuta) es correcto por inspección del
 // código y está cubierto por las comprobaciones de arriba (el resultado no
-// cambia). Pero `floodFill` hace además dos lecturas de GPU del lienzo
-// completo (la referencia compuesta y el cel) y copia el búfer entero para
-// el deshacer — costes fijos, ajenos a este cambio, que en SwiftShader
-// dominan tanto el tiempo total que ni con ~5900x más área rellenada se ve
-// una diferencia limpia. Ver CLAUDE.md: "no midas rendimiento absoluto ahí,
-// sólo comparativas" — y aquí ni así alcanza. Workerizar esas lecturas es
-// trabajo aparte, ya apuntado en la deuda conocida.
+// cambia). `elapsed`/`delta` miden desde que se llama a `floodFill` hasta
+// que su promesa resuelve — incluyen el viaje de ida y vuelta al worker,
+// que corre el barrido/crecimiento/color fuera del hilo principal (ver
+// core/flood.ts y workers/floodFill.worker.ts), pero `floodFill` hace
+// además dos lecturas de GPU del lienzo completo (la referencia compuesta
+// y el cel) ANTES de mandar nada al worker — ésas no se pueden mover: hace
+// falta el contexto WebGL vivo, que sólo existe en el hilo principal. Ese
+// coste fijo, ajeno al tamaño del relleno, domina tanto el tiempo total en
+// SwiftShader que ni con ~5900x más área rellenada se ve una diferencia
+// limpia. Ver CLAUDE.md: "no midas rendimiento absoluto ahí, sólo
+// comparativas" — y aquí ni así alcanza. Lo que sí importa de este cambio
+// —que el hilo principal no se quede bloqueado durante el barrido— no se
+// puede medir con un cronómetro sincrónico como éste; se comprueba en el
+// navegador, no aquí.
 console.log('\n— Coste del resto (informativo, no se falla por esto) —');
 console.log(
   `  pequeño ${small.delta.toFixed(1)} ms vs grande ${large.delta.toFixed(1)} ms — ` +

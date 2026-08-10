@@ -113,12 +113,36 @@ las oportunidades están donde su arquitectura no le deja llegar.
    segundo dedo para forzar proporción. Precisión ajustable porque la
    calibración inicial (probada con ratón) fallaba con dedo real en pantalla
    táctil — ver commits de recalibración.
-2. **Historial persistente.** Su queja número uno de flujo: al cerrar el
-   archivo se pierde el deshacer. Para nosotros es barato porque los pasos ya
-   son instantáneas por rectángulo; falta serializarlas en el `.trace`. No lo
-   hace nadie.
-3. **Time-lapse.** La codificación con WebCodecs ya está; falta capturar un
-   fotograma por trazo en un búfer circular.
+2. **Historial persistente.** `hecho`, parcial y a propósito. Su queja número
+   uno de flujo es al cerrar el archivo se pierde el deshacer. No todos los
+   comandos del historial son igual de baratos de serializar: los que editan
+   píxeles (trazo, QuickShape, bote, rellenar/borrar selección, transformar
+   por lotes) ya eran un diff de rectángulo — antes/después — así que
+   persistirlos es directo (`historyOps.ts`: `RasterEditOp`/
+   `RasterEditBatchOp`, reconstruidos contra el documento recién cargado por
+   id de capa/cel, no por referencia). Los que tocan estructura (añadir
+   capa, keyframes, reordenar...) siguen sin persistir — reescribir cada uno
+   como una operación serializable es una superficie de cuarenta sitios
+   distintos, desproporcionada frente al caso real: la inmensa mayoría de
+   los pasos que un animador acumula dibujando SÍ son ediciones de píxel.
+   `serializeProject` guarda la racha más reciente de pasos serializables
+   desde la cima de la pila (se corta, no se salta, en el primer paso sin
+   persistir) hasta un techo de 24 MB comprimidos; `deserializeProject` +
+   `engine.loadHistoryOps` la reconstruyen al abrir. Mismo camino para el
+   `.trace` manual y el autoguardado en IndexedDB, porque ambos pasan por
+   `serializeProject`/`deserializeProject`.
+3. **Time-lapse.** `hecho`. Grabación manual (empezar/detener/descartar):
+   mientras está activa, captura una miniatura del compuesto (máx. 480px de
+   ancho) cada segundo en el que el documento cambió de verdad, enganchada a
+   `onAfterRender` en vez de a un `setInterval` propio — así sólo se intenta
+   cuando el lienzo cambió, no a ciegas. Tope de 600 fotogramas
+   (`Engine.timelapseFrames`); al llegar diezma a la mitad y dobla el
+   intervalo de captura, para que una sesión larga no crezca sin límite. Se
+   exporta con `exportImageSequenceAsVideo`, un codificador (WebCodecs con
+   reserva en `MediaRecorder`) separado a propósito del de `exportVideo`: la
+   fuente de fotogramas es un array de lienzos ya capturados, no algo que se
+   pueda expresar como la `FrameSource` de la animación (que renderiza
+   cuadro a cuadro bajo demanda).
 4. **Capas en disco (OPFS).** Cambiar el respaldo de `Uint8Array` a archivos
    quita el techo de RAM del todo. La maquinaria de expulsión ya existe, así
    que el cambio queda contenido en `gl/renderer.ts`.
@@ -150,8 +174,9 @@ las oportunidades están donde su arquitectura no le deja llegar.
    Trace era la de "Selección automática": tocar un color
    selecciona la región conexa que se le parece, arrastrar el dedo hacia un
    lado u otro reajusta la tolerancia en vivo — igual gesto que Procreate.
-   Reutiliza el `floodFill` ya existente (compartido vía `Engine.floodMatch`,
-   extraído para no duplicar el barrido de líneas) pero escribe en la máscara
+   Reutiliza el `floodFill` ya existente (compartido vía `floodMatch` de
+   `core/flood.ts`, extraído para no duplicar el barrido de líneas) pero
+   escribe en la máscara
    de selección en vez de pintar: la referencia compuesta se lee una sola vez
    al tocar y se cachea, así que reajustar la tolerancia arrastrando sólo
    repite el flood-fill barato en CPU, sin otra lectura de GPU por muestra de

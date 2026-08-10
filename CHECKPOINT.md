@@ -20,9 +20,11 @@ npm run test:brushes      TODO EN VERDE   (los 18 pinceles del kit pintan o borr
 npm run test:video        TODO EN VERDE   (13 comprobaciones; el vídeo se decodifica y se le ven los trazos)
 npm run test:canvas-size  TODO EN VERDE   (redimensionar sin perder tinta, controles legibles en tablet)
 npm run test:quickshape   TODO EN VERDE   (24 comprobaciones: línea, elipse, rectángulo, triángulo, polígono)
-npm run test:fill         TODO EN VERDE   (bote de relleno, acotado a la caja tocada)
+npm run test:fill         TODO EN VERDE   (bote de relleno; el barrido en CPU corre en un worker)
 npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tolerancia, sumar/restar)
-npm run test:unit         TODO EN VERDE   (83 casos: math.ts, document.ts, selection.ts — núcleo puro, sin navegador)
+npm run test:unit         TODO EN VERDE   (89 casos: math.ts, document.ts, selection.ts, flood.ts — núcleo puro, sin navegador)
+npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
+npm run test:timelapse    TODO EN VERDE   (grabación periódica del proceso de dibujo, exporta un WebM válido)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
 ```
@@ -139,6 +141,13 @@ npm run build             466 kB / 140 kB gzip
   si falta el codificador H.264 se usa VP9 en WebM, y si no hay WebCodecs se
   graba con `MediaRecorder` en tiempo real. La interfaz avisa cuál toca antes
   de empezar, porque la última tarda lo que dure la animación.
+- **Time-lapse.** Botones explícitos de grabar/detener/descartar: mientras
+  está activo, captura un fotograma (máx. 480px de ancho) cada segundo en el
+  que el documento cambió de verdad (enganchado a `onAfterRender`, no a un
+  `setInterval` ciego), con un tope de 600 fotogramas — al llegar diezma a la
+  mitad y dobla el intervalo, para que una sesión larga no crezca sin límite.
+  Se exporta a vídeo con el mismo par de codificadores (WebCodecs con reserva
+  en `MediaRecorder`) a 24 fps fijos.
 
 ### Lienzo
 - El tamaño se cambia cuando se quiera desde *Proyecto → Tamaño del lienzo*,
@@ -258,7 +267,8 @@ que no se puede hacer desde aquí:
    que sólo se ha ejercitado la ruta VP9/WebM. El código de MP4 compila y usa
    un muxer probado, pero no se ha visto producir un archivo aquí; en Safari,
    que sí trae H.264, debería tomar esa rama.
-4. **Historial persistente y capas en disco (OPFS)**, según `RUMBO.md`.
+4. **Capas en disco (OPFS)**, según `RUMBO.md` — el historial ya persiste
+   (ver deuda conocida, resuelta).
 
 ## Deuda conocida
 
@@ -273,9 +283,25 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   camino (subida de la máscara a GPU, restaurar el respaldo del canvas 2D),
   que sigue siendo O(lienzo).
 - ~~`floodFill` recorre el lienzo entero para el crecimiento y el color~~.
-  Acotado a la caja de lo rellenado. Sigue leyendo el lienzo completo por
-  GPU dos veces como referencia (coste fijo, no depende del tamaño del
-  relleno) — moverlo a un worker sigue pendiente, ver abajo.
+  Acotado a la caja de lo rellenado.
+- ~~`floodFill` bloquea el hilo principal mientras rellena~~. El barrido de
+  líneas, el crecimiento y pintar el color —la parte en CPU, extraída a
+  `core/flood.ts`, puro— corren ahora en `workers/floodFill.worker.ts`. Las
+  dos lecturas de GPU (la referencia compuesta y el cel) siguen en el hilo
+  principal a la fuerza: hace falta el contexto WebGL vivo, que no existe
+  en un Worker sin transferirle el canvas entero (`OffscreenCanvas`), lo
+  que habría sido un cambio mucho mayor para lo que hacía falta. `Engine.
+  floodFill` pasó a ser `async`; la varita mágica reutiliza las mismas
+  funciones puras pero SIN worker (`beginSelectWand`/
+  `updateSelectWandTolerance` necesitan responder en cada muestra de un
+  arrastre en vivo, así que un viaje de ida y vuelta ahí sería más lento,
+  no menos). Verificado con rAF: el hilo principal sigue despachando
+  fotogramas durante un relleno grande (antes, cero, la única forma
+  posible de estar realmente bloqueado). El tiempo TOTAL de un relleno no
+  bajó — subió, de hecho, por el coste fijo de transferir los búferes de
+  referencia y cel al worker — la mejora es que ese tiempo ya no bloquea
+  nada más, no que sea más corto; medido y documentado así en
+  `scripts/fill.mjs`, sin convertirlo en una aserción de rendimiento.
 - ~~Importar un vídeo largo no se puede cancelar~~. Botón "Cancelar" +
   `AbortSignal`. Sigue siendo lento en proporción a la duración (`seek` +
   subida a GPU secuenciales, sin cambiar) — cancelar no acelera la
@@ -284,6 +310,15 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   completa. Corrección de manual, sin contrapartida; el efecto no salió
   limpio de medir en el Chromium de pruebas (SwiftShader), así que el test
   es una comprobación de sanidad, no una comparación antes/después.
+- ~~Historial persistente~~. Parcial y a propósito — ver `RUMBO.md`,
+  oportunidad 2, para el porqué del alcance. `historyOps.ts` +
+  `Engine.loadHistoryOps` + `serializeProject`/`deserializeProject` en
+  `io.ts`. Sólo los pasos que editan píxeles (trazo, QuickShape, bote,
+  rellenar/borrar selección, transformar por lotes) sobreviven guardar y
+  volver a abrir; los estructurales (capas, keyframes...) siguen sin
+  persistir y cortan la racha donde aparecen. Mismo camino para el
+  `.trace` manual y el autoguardado. Test en
+  `scripts/history-persist.mjs` (`npm run test:history-persist`).
 
 Todavía abierta:
 
@@ -293,13 +328,20 @@ Todavía abierta:
 - **El rendimiento sólo está medido con SwiftShader**, que es correcto pero
   lento. Los números absolutos de un iPad están sin tomar — no se puede
   resolver desde aquí, hace falta el dispositivo real.
-- **`floodFill` sigue bloqueando el hilo** mientras rellena (la lectura de
-  referencia por GPU, ver arriba). En un lienzo grande se nota; hay un
-  indicador de ocupado, pero lo correcto sería un worker.
-- **Historial persistente y capas en disco (OPFS)**, de `RUMBO.md` —
-  ninguno de los dos tiene código todavía. El primero es barato (los pasos
-  ya son instantáneas por rectángulo, falta serializarlas en el `.trace`);
-  el segundo cambia el respaldo de `Uint8Array` a archivos y quita el techo
-  de RAM del todo, contenido en `gl/renderer.ts`.
-- **Time-lapse**, de `RUMBO.md` — la codificación con WebCodecs ya existe;
-  falta capturar un fotograma por trazo en un búfer circular.
+- **Capas en disco (OPFS)**, de `RUMBO.md` — cambia el respaldo de
+  `Uint8Array` a archivos y quita el techo de RAM del todo; la maquinaria
+  de expulsión ya existe, así que el cambio queda contenido en
+  `gl/renderer.ts`.
+- **Lote de transformación + selección rectangular: aviso de WebGL en
+  consola, sin efecto visible.** Al levantar un lote de varios cels
+  (`liftSelectionRange`) tras crear la selección, la consola muestra
+  "Feedback loop formed between Framebuffer and active Texture" varias
+  veces. No es una regresión de esta tanda —ninguno de los cambios de
+  historial persistente toca `liftCel`/`commitFloating`/`renderer.ts`— y
+  no se ha visto que estropee el resultado (medido con `readRect` en la
+  región exacta de origen y destino, no con una captura de pantalla): el
+  origen queda vacío y el destino recibe la tinta, en ambos cels del
+  lote, antes y después de recargar. Encontrado mientras se escribía el
+  test de historial; queda para revisar aparte porque un warning de GPU
+  sin efecto medible no es zona seguro para asumir que no importa en un
+  dispositivo real.

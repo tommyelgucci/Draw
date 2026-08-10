@@ -118,7 +118,7 @@ const roundTrip = await page.evaluate(async () => {
   const { serializeProject, deserializeProject } = await import('/src/core/io.ts');
   const e = window.__trace;
   const bytes = await serializeProject(e);
-  const reopened = await deserializeProject(e, bytes);
+  const { doc: reopened } = await deserializeProject(e, bytes);
   return {
     hasAudio: !!reopened.audio,
     duration: reopened.audio?.duration,

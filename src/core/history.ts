@@ -1,9 +1,18 @@
+import type { HistoryOp } from './historyOps';
+
 export interface Command {
   label: string;
   undo(): void;
   redo(): void;
   /** Bytes aproximados retenidos, para presupuestar la pila. */
   cost?: number;
+  /**
+   * Presente si este paso se puede reconstruir desde disco — ver
+   * `historyOps.ts` y `serializeProject` en `io.ts`. La mayoría de los
+   * comandos (añadir capa, keyframes, reordenar...) no llevan `op`: sólo
+   * viven en memoria, no sobreviven a guardar y volver a abrir.
+   */
+  op?: HistoryOp;
 }
 
 const MAX_STEPS = 120;
@@ -62,6 +71,26 @@ export class History {
     this.past.length = 0;
     this.future.length = 0;
     this.bytes = 0;
+    this.emit();
+  }
+
+  /** Sólo la pila de deshacer, de más antiguo a más reciente — lo que hace
+   *  falta para decidir qué persistir en el `.trace` (ver `io.ts`). No
+   *  incluye `future`: rehacer después de recargar no se persiste, ver el
+   *  comentario de `HistoryOp` en `historyOps.ts`. */
+  get pastCommands(): readonly Command[] {
+    return this.past;
+  }
+
+  /**
+   * Repuebla la pila de deshacer con comandos ya reconstruidos (carga de un
+   * `.trace`) — a diferencia de `push`, no toca `future` y emite un único
+   * evento al final en vez de uno por paso.
+   */
+  loadPast(cmds: Command[]) {
+    this.past = cmds;
+    this.bytes = cmds.reduce((n, c) => n + (c.cost ?? 0), 0);
+    this.trim();
     this.emit();
   }
 

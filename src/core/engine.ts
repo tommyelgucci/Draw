@@ -26,7 +26,10 @@ import {
   type TextLayerProps,
   type TraceDocument,
 } from './document';
+import { extractRect, floodMatch } from './flood';
 import { History } from './history';
+import { rehydrateHistoryOp, type HistoryOp } from './historyOps';
+import type { FloodFillResponse } from '../workers/floodFill.worker';
 import {
   bendSignFor,
   boneRestFromDrag,
@@ -131,6 +134,8 @@ export interface PendingQuickShape {
   ctx: StrokeContext;
   /** Igual semántica que `createdCelFrame` del trazo normal. */
   createdCelFrame: number;
+  /** Igual semántica que `strokeStartFrame` del trazo normal. */
+  startFrame: number;
   editing: boolean;
   /** Nodo más cercano al punto donde se disparó el dwell — el que sigue el
    * arrastre mientras el puntero original no se ha soltado todavía. */
@@ -326,6 +331,10 @@ export class Engine {
   private strokeCtx: StrokeContext | null = null;
   private strokeRect: Rect = emptyRect();
   private createdCelFrame = -1;
+  /** Fotograma vigente al empezar el trazo — hace falta junto a
+   *  `createdCelFrame` para resolver el cel sostenido correcto al persistir
+   *  el paso de historial, ver `storedCelFrame`. */
+  private strokeStartFrame = -1;
   private predictedStamps: Stamp[] = [];
   /** Recorrido crudo del trazo en curso, en espacio documento — lo único
    * que necesita el reconocedor de QuickShape; `StrokeBuilder` ya filtra y
@@ -529,6 +538,14 @@ export class Engine {
 
   private makeCel(): Cel {
     return { id: uid('cel'), surface: this.renderer.createSurface('cel') };
+  }
+
+  /** Fotograma real en `layer.cels` de un cel resuelto por `ensureCel`/
+   *  `celAt` — hace falta para que un paso de historial persistido (que
+   *  direcciona por clave del `Map`, no por el objeto en sí) apunte al cel
+   *  correcto incluso cuando se dibujó sobre un cuadro sostenido. */
+  private storedCelFrame(layer: Layer, frame: number, created: number): number {
+    return created >= 0 ? created : celStartFrame(layer, frame);
   }
 
   addLayer(above = true) {
@@ -1530,9 +1547,22 @@ export class Engine {
     if (!cel || cel.surface.empty) return;
     const full: Rect = { x: 0, y: 0, x2: this.doc.width, y2: this.doc.height };
     const before = this.renderer.readRect(cel.surface, full);
+    const after = new Uint8Array(before.length);
     this.history.run({
       label: 'Borrar fotograma',
       cost: before.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label: 'Borrar fotograma',
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, frame, -1),
+            createdFrame: -1,
+            rect: full,
+            before,
+            after,
+          },
       redo: () => {
         this.renderer.clear(cel.surface);
         this.touch(false);
@@ -2109,6 +2139,7 @@ export class Engine {
     this.strokeCel = cel;
     this.strokeCtx = ctx;
     this.createdCelFrame = created;
+    this.strokeStartFrame = this.currentFrame;
     this.strokeRect = emptyRect();
     this.predictedStamps = [];
     this.strokeRawPoints = [{ x: sample.x, y: sample.y }];
@@ -2318,6 +2349,7 @@ export class Engine {
     const cel = this.strokeCel;
     const ctx = this.strokeCtx;
     const createdFrame = this.createdCelFrame;
+    const startFrame = this.strokeStartFrame;
     const rect = clampRect(this.strokeRect, this.doc.width, this.doc.height);
 
     this.builder = null;
@@ -2325,6 +2357,7 @@ export class Engine {
     this.strokeCtx = null;
     this.strokeLayer = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
 
     if (rectIsEmpty(rect)) {
       if (createdFrame >= 0) layer.cels.delete(createdFrame);
@@ -2338,9 +2371,22 @@ export class Engine {
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
 
+    const label = ctx.brush.erase ? 'Borrar' : 'Trazo';
     this.history.push({
-      label: ctx.brush.erase ? 'Borrar' : 'Trazo',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, startFrame, createdFrame),
+            createdFrame,
+            rect,
+            before,
+            after,
+          },
       redo: () => {
         if (createdFrame >= 0) layer.cels.set(createdFrame, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -2364,6 +2410,7 @@ export class Engine {
     this.strokeCtx = null;
     this.strokeLayer = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
     this.predictedStamps = [];
     this.tailStamps = [];
     this.strokeLen = 0;
@@ -2438,6 +2485,7 @@ export class Engine {
     const cel = this.strokeCel;
     const ctx = this.strokeCtx;
     const createdCelFrame = this.createdCelFrame;
+    const startFrame = this.strokeStartFrame;
     const anchor = this.strokeRawPoints[this.strokeRawPoints.length - 1];
 
     // Apaga el trazo libre: a partir de aquí no le llegan más muestras (lo
@@ -2448,6 +2496,7 @@ export class Engine {
     this.strokeCel = null;
     this.strokeCtx = null;
     this.createdCelFrame = -1;
+    this.strokeStartFrame = -1;
     this.strokeRawPoints = [];
     this.predictedStamps = [];
     this.renderer.clear(this.renderer.scratch('predict'));
@@ -2463,7 +2512,16 @@ export class Engine {
       }
     }
 
-    this.pendingQuickShape = { shape, layer, cel, ctx, createdCelFrame, editing: false, holdNodeIndex };
+    this.pendingQuickShape = {
+      shape,
+      layer,
+      cel,
+      ctx,
+      createdCelFrame,
+      startFrame,
+      editing: false,
+      holdNodeIndex,
+    };
     this.paintQuickShapeOutline(shape, ctx);
     this.touch();
     return true;
@@ -2558,9 +2616,22 @@ export class Engine {
     const layer = p.layer;
     const cel = p.cel;
     const createdCelFrame = p.createdCelFrame;
+    const label = p.ctx.brush.erase ? 'Borrar' : 'Forma';
     this.history.push({
-      label: p.ctx.brush.erase ? 'Borrar' : 'Forma',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, p.startFrame, createdCelFrame),
+            createdFrame: createdCelFrame,
+            rect,
+            before,
+            after,
+          },
       redo: () => {
         if (createdCelFrame >= 0) layer.cels.set(createdCelFrame, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -3521,7 +3592,7 @@ export class Engine {
   private previewSelectWand() {
     const pending = this.pendingWand;
     if (!pending) return;
-    const { filled, minX, minY, maxX, maxY } = this.floodMatch(
+    const { filled, minX, minY, maxX, maxY } = floodMatch(
       pending.reference,
       pending.w,
       pending.h,
@@ -3604,9 +3675,20 @@ export class Engine {
     const before = this.renderer.readRect(cel.surface, rect);
     this.renderer.drawOver(cel.surface, this.selectionMask, 1, undefined, true);
     const after = this.renderer.readRect(cel.surface, rect);
+    const label = 'Borrar selección';
     this.history.push({
-      label: 'Borrar selección',
+      label,
       cost: before.byteLength + after.byteLength,
+      op: {
+        type: 'rasterEdit',
+        label,
+        layerId: layer.id,
+        frame: this.storedCelFrame(layer, this.currentFrame, -1),
+        createdFrame: -1,
+        rect,
+        before,
+        after,
+      },
       redo: () => {
         this.renderer.writeRect(cel.surface, rect, after);
         this.touch();
@@ -3633,9 +3715,22 @@ export class Engine {
 
     const after = this.renderer.readRect(cel.surface, rect);
     const prev = before ?? new Uint8Array(after.length);
+    const label = 'Rellenar selección';
     this.history.push({
-      label: 'Rellenar selección',
+      label,
       cost: prev.byteLength + after.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, this.currentFrame, created),
+            createdFrame: created,
+            rect,
+            before: prev,
+            after,
+          },
       redo: () => {
         if (created >= 0) layer.cels.set(created, cel);
         this.renderer.writeRect(cel.surface, rect, after);
@@ -3814,7 +3909,7 @@ export class Engine {
 
     // Un paso de deshacer por cel tocado — así un lote de N cuadros se
     // deshace/rehace de una vez, no cuadro por cuadro.
-    const steps: { surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
+    const steps: { frame: number; surface: Surface; before: Uint8Array; after: Uint8Array }[] = [];
     for (const fc of f.cels) {
       const cel = layer.cels.get(fc.celFrame);
       if (!cel) {
@@ -3830,7 +3925,7 @@ export class Engine {
       this.renderer.drawOver(cel.surface, fc.surface, 1, matrix);
       this.renderer.release(fc.surface);
       const afterRegion = this.renderer.readRect(cel.surface, region);
-      steps.push({ surface: cel.surface, before: beforeRegion, after: afterRegion });
+      steps.push({ frame: fc.celFrame, surface: cel.surface, before: beforeRegion, after: afterRegion });
     }
 
     if (steps.length === 0) {
@@ -3838,10 +3933,20 @@ export class Engine {
       return;
     }
 
+    const label =
+      steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección';
     this.history.push({
-      label:
-        steps.length > 1 ? `Transformar selección (${steps.length} cuadros)` : 'Transformar selección',
+      label,
       cost: steps.reduce((n, s) => n + s.before.byteLength + s.after.byteLength, 0),
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEditBatch',
+            label,
+            layerId: layer.id,
+            region,
+            steps: steps.map((s) => ({ frame: s.frame, before: s.before, after: s.after })),
+          },
       redo: () => {
         for (const s of steps) this.renderer.writeRect(s.surface, region, s.after);
         this.touch();
@@ -3888,71 +3993,45 @@ export class Engine {
     return { r: px[0] / 255 / a, g: px[1] / 255 / a, b: px[2] / 255 / a };
   }
 
-  /**
-   * Región conexa por semejanza de color desde `(sx,sy)` sobre `reference`
-   * (RGBA, `w`×`h`), con relleno por líneas de barrido — mucho menos
-   * tráfico de pila que el recursivo por píxel, que en un lienzo grande
-   * revienta. Compartido entre `floodFill` (pinta la región) y
-   * `beginSelectWand`/`updateSelectWandTolerance` (la seleccionan): ambos
-   * necesitan exactamente la misma región, sólo cambia qué se hace con
-   * ella después.
-   */
-  private floodMatch(
+  /** Worker perezoso para la parte en CPU de `floodFill` — un solo hilo
+   *  para la vida del `Engine`, no uno por relleno; el worker no guarda
+   *  nada entre mensajes. */
+  private floodWorker: Worker | null = null;
+  private getFloodWorker(): Worker {
+    if (!this.floodWorker) {
+      this.floodWorker = new Worker(new URL('../workers/floodFill.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+    }
+    return this.floodWorker;
+  }
+
+  private runFloodFillWorker(
     reference: Uint8Array,
+    target: Uint8Array,
     w: number,
     h: number,
     sx: number,
     sy: number,
     tolerance: number,
-  ): { filled: Uint8Array; minX: number; minY: number; maxX: number; maxY: number } {
-    const start = (sy * w + sx) * 4;
-    const sr = reference[start];
-    const sg = reference[start + 1];
-    const sb = reference[start + 2];
-    const sa = reference[start + 3];
-    const tol = tolerance * 255;
-
-    const matches = (i: number) =>
-      Math.abs(reference[i] - sr) <= tol &&
-      Math.abs(reference[i + 1] - sg) <= tol &&
-      Math.abs(reference[i + 2] - sb) <= tol &&
-      Math.abs(reference[i + 3] - sa) <= tol;
-
-    const filled = new Uint8Array(w * h);
-    const stack: number[] = [sx, sy];
-    let minX = sx;
-    let minY = sy;
-    let maxX = sx;
-    let maxY = sy;
-
-    while (stack.length > 0) {
-      const y = stack.pop()!;
-      const x = stack.pop()!;
-      if (filled[y * w + x]) continue;
-
-      let left = x;
-      while (left > 0 && !filled[y * w + left - 1] && matches((y * w + left - 1) * 4)) left--;
-      let right = x;
-      while (right < w - 1 && !filled[y * w + right + 1] && matches((y * w + right + 1) * 4))
-        right++;
-
-      for (let i = left; i <= right; i++) filled[y * w + i] = 1;
-      if (left < minX) minX = left;
-      if (right > maxX) maxX = right;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-
-      for (const ny of [y - 1, y + 1]) {
-        if (ny < 0 || ny >= h) continue;
-        for (let i = left; i <= right; i++) {
-          if (!filled[ny * w + i] && matches((ny * w + i) * 4)) {
-            stack.push(i, ny);
-          }
-        }
-      }
-    }
-
-    return { filled, minX, minY, maxX, maxY };
+    expand: number,
+    color: RGB,
+    alphaLock: boolean,
+  ): Promise<FloodFillResponse> {
+    return new Promise((resolve) => {
+      const worker = this.getFloodWorker();
+      worker.addEventListener(
+        'message',
+        (e: MessageEvent<FloodFillResponse>) => resolve(e.data),
+        { once: true },
+      );
+      // Se transfieren los dos buffers (no se copian): ya no hacen falta
+      // aquí — `before` es una copia aparte, tomada antes de esto.
+      worker.postMessage(
+        { reference, target, w, h, sx, sy, tolerance, expand, color, alphaLock },
+        [reference.buffer, target.buffer],
+      );
+    });
   }
 
   /**
@@ -3961,8 +4040,15 @@ export class Engine {
    * La referencia es el documento compuesto, no el cel: al colorear una
    * animación quieres que el bote respete las líneas aunque estén en otra
    * capa. La escritura sí va al cel activo.
+   *
+   * El barrido de líneas y sus dos pasadas siguientes (crecer el borde,
+   * pintar el color) corren en un Worker — ver `workers/floodFill.worker.ts`
+   * y `core/flood.ts` para el porqué está partido así. Las dos lecturas de
+   * GPU (la referencia compuesta y el cel) siguen aquí, en el hilo
+   * principal: son la parte que de verdad no se puede mover, porque hace
+   * falta el contexto WebGL vivo para leerlas.
    */
-  floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2) {
+  async floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2): Promise<void> {
     const layer = this.activeLayer;
     if (!layer || layer.locked || !layer.visible || layer.kind !== 'draw') return;
     const w = this.doc.width;
@@ -3988,67 +4074,36 @@ export class Engine {
     const target = this.renderer.readRect(cel.surface, full);
     const before = created >= 0 ? null : target.slice();
 
-    let { filled, minX, minY, maxX, maxY } = this.floodMatch(reference, w, h, sx, sy, tolerance);
-
-    // Un par de píxeles de crecimiento evita la orla blanca que deja el
-    // antialias de la línea entre el relleno y el trazo. Cada pasada sólo
-    // puede alcanzar un píxel más allá de lo ya lleno, así que tras `expand`
-    // pasadas nada fuera de este margen puede haber cambiado — acotar los
-    // dos bucles a esta caja, en vez de recorrer el lienzo entero, es la
-    // diferencia entre 8 millones de comprobaciones y unos pocos miles en un
-    // documento 4K con un relleno pequeño.
-    const boundMinX = Math.max(0, minX - expand);
-    const boundMinY = Math.max(0, minY - expand);
-    const boundMaxX = Math.min(w - 1, maxX + expand);
-    const boundMaxY = Math.min(h - 1, maxY + expand);
-
-    for (let pass = 0; pass < expand; pass++) {
-      const grown = filled.slice();
-      for (let y = boundMinY; y <= boundMaxY; y++) {
-        for (let x = boundMinX; x <= boundMaxX; x++) {
-          if (filled[y * w + x]) continue;
-          const up = y > 0 && filled[(y - 1) * w + x];
-          const down = y < h - 1 && filled[(y + 1) * w + x];
-          const lf = x > 0 && filled[y * w + x - 1];
-          const rt = x < w - 1 && filled[y * w + x + 1];
-          if (up || down || lf || rt) grown[y * w + x] = 1;
-        }
-      }
-      filled.set(grown);
-    }
-    minX = boundMinX;
-    minY = boundMinY;
-    maxX = boundMaxX;
-    maxY = boundMaxY;
-
-    const cr = Math.round(color.r * 255);
-    const cg = Math.round(color.g * 255);
-    const cb = Math.round(color.b * 255);
-    // Con bloqueo de alfa, el bote sólo puede recolorear tinta que ya
-    // existía en esta capa — nunca ensanchar su contorno. `target[o + 3]`
-    // todavía es el alfa ORIGINAL en este punto: cada píxel se escribe una
-    // sola vez en este bucle, así que leerlo justo antes de sobrescribirlo
-    // es seguro.
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const i = y * w + x;
-        if (!filled[i]) continue;
-        const o = i * 4;
-        if (layer.alphaLock && target[o + 3] === 0) continue;
-        target[o] = cr;
-        target[o + 1] = cg;
-        target[o + 2] = cb;
-        target[o + 3] = 255;
-      }
-    }
-
-    const rect: Rect = { x: minX, y: minY, x2: maxX + 1, y2: maxY + 1 };
-    const sub = extractRect(target, w, rect);
+    const { sub, rect } = await this.runFloodFillWorker(
+      reference,
+      target,
+      w,
+      h,
+      sx,
+      sy,
+      tolerance,
+      expand,
+      color,
+      layer.alphaLock,
+    );
     const prev = before ? extractRect(before, w, rect) : new Uint8Array(sub.length);
 
+    const label = 'Rellenar';
     this.history.run({
-      label: 'Rellenar',
+      label,
       cost: sub.byteLength + prev.byteLength,
+      op: layer.swap
+        ? undefined
+        : {
+            type: 'rasterEdit',
+            label,
+            layerId: layer.id,
+            frame: this.storedCelFrame(layer, this.currentFrame, created),
+            createdFrame: created,
+            rect,
+            before: prev,
+            after: sub,
+          },
       redo: () => {
         if (created >= 0) layer.cels.set(created, cel);
         this.renderer.writeRect(cel.surface, rect, sub);
@@ -4210,6 +4265,24 @@ export class Engine {
   }
 
   /**
+   * Repuebla la pila de deshacer tras `loadDocument` con los pasos que
+   * `deserializeProject` haya podido reconstruir del `.trace` — ver
+   * `historyOps.ts`. Va aparte de `loadDocument` (no dentro de
+   * `replaceDocument`) porque `deserializeProject` sólo entrega el
+   * documento y el historial juntos cuando termina de leer el archivo; el
+   * llamador decide el orden, pero siempre después de que `this.doc` ya sea
+   * el nuevo. Los pasos que no se puedan reconstruir (capa o cel que ya no
+   * existen) se descartan en silencio: mejor un historial más corto que
+   * romper la carga por un paso viejo.
+   */
+  loadHistoryOps(ops: HistoryOp[]) {
+    const cmds = ops
+      .map((op) => rehydrateHistoryOp(this.doc, this.renderer, () => this.touch(), op))
+      .filter((cmd): cmd is NonNullable<typeof cmd> => cmd !== null);
+    this.history.loadPast(cmds);
+  }
+
+  /**
    * Cambia el tamaño del lienzo conservando los dibujos.
    *
    * `anchor` va de 0 a 1 en cada eje y decide dónde queda el contenido
@@ -4303,18 +4376,6 @@ function spliceRect(dst: Uint8Array, dstRect: Rect, src: Uint8Array, srcRect: Re
     const from = y * srcW * 4;
     dst.set(src.subarray(from, from + srcW * 4), (dy * dstW + dx) * 4);
   }
-}
-
-/** Recorta un sub-rectángulo de un buffer RGBA de ancho `stride` píxeles. */
-function extractRect(src: Uint8Array, stride: number, r: Rect): Uint8Array {
-  const w = r.x2 - r.x;
-  const h = r.y2 - r.y;
-  const out = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    const from = ((r.y + y) * stride + r.x) * 4;
-    out.set(src.subarray(from, from + w * 4), y * w * 4);
-  }
-  return out;
 }
 
 function structuredCloneTransform(t: Layer['transform']): Layer['transform'] {

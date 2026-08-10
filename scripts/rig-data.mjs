@@ -86,7 +86,7 @@ const roundTrip = await page.evaluate(async (ids) => {
   const e = window.__trace;
   const mod = await import('/src/core/io.ts');
   const bytes = await mod.serializeProject(e);
-  const doc = await mod.deserializeProject(e, bytes);
+  const { doc } = await mod.deserializeProject(e, bytes);
   const skel = doc.skeletons.find((s) => s.id === ids.skelId);
   const layer = doc.layers.find((l) => l.rig);
   return {

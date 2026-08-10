@@ -203,7 +203,7 @@ const roundTrip = await page.evaluate(async () => {
   const mod = await import('/src/core/io.ts');
   const before = e.doc.layers.length;
   const bytes = await mod.serializeProject(e);
-  const doc = await mod.deserializeProject(e, bytes);
+  const { doc } = await mod.deserializeProject(e, bytes);
   return { before, after: doc.layers.length, name: doc.name, size: bytes.length };
 });
 check(

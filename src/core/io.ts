@@ -1,5 +1,6 @@
-import { unzipSync, zipSync } from 'fflate';
+import { unzipSync, zipSync, type ZipOptions } from 'fflate';
 import type { Engine } from './engine';
+import { historyOpByteLength, type HistoryOp } from './historyOps';
 import {
   celAt,
   MAX_FRAME_COUNT,
@@ -20,7 +21,7 @@ import {
   type TransformTrack,
 } from './document';
 import { newBoneTrack, type Bone, type BoneTrack, type LayerRig, type Mesh, type MeshVertex, type Skeleton } from './rig';
-import type { BlendMode, RGB } from './types';
+import type { BlendMode, Rect, RGB } from './types';
 
 const FORMAT_VERSION = 1;
 
@@ -109,6 +110,26 @@ interface SerializedDoc {
   /** Ausente en proyectos sin pista de audio; el archivo real va aparte,
    *  bajo `audio/<id>` — ver `normalizeAudioTrack`. */
   audio?: AudioTrack;
+  /** Racha más reciente de pasos de deshacer persistidos — ver
+   *  `packHistory`/`unpackHistory`. Ausente en proyectos sin nada que
+   *  persistir (historial vacío, o ninguno de los últimos pasos era de un
+   *  tipo serializable). */
+  history?: SerializedHistoryStep[];
+}
+
+interface SerializedHistoryStep {
+  type: 'rasterEdit' | 'rasterEditBatch';
+  label: string;
+  layerId: string;
+  /** `rasterEdit`: el rect tocado. `rasterEditBatch`: la región común a
+   *  todos los cels del lote. */
+  rect: Rect;
+  /** Sólo `rasterEdit`. */
+  frame?: number;
+  createdFrame?: number;
+  /** Sólo `rasterEditBatch`: un fotograma por paso, en el mismo orden que
+   *  los bytes en `history/patches.bin`. */
+  frames?: number[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -133,6 +154,130 @@ function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
         .catch(reject);
     }, 'image/png');
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Historial persistente
+ * ------------------------------------------------------------------ */
+
+/**
+ * Techo de lo que se persiste en el `.trace`/autoguardado: los pasos de
+ * deshacer en memoria tienen su propio presupuesto (320 MB sin comprimir,
+ * ver `history.ts`), pero volcar TODO eso en cada autoguardado —cada dos
+ * minutos, ver `autosave`— sería demasiado disco y demasiado tiempo de
+ * guardado. Se conserva la racha de pasos más recientes que quepa aquí,
+ * comprimida. Capas en disco (OPFS) es la solución de fondo si esto se
+ * queda corto, ver `RUMBO.md`.
+ */
+const HISTORY_PERSIST_MAX_BYTES = 24 * 1024 * 1024;
+
+function rectByteLength(r: Rect): number {
+  return (r.x2 - r.x) * (r.y2 - r.y) * 4;
+}
+
+/**
+ * De más reciente a más antiguo: sólo la RACHA contigua desde la cima de la
+ * pila sirve para deshacer sin huecos. El primer paso sin `op` (un tipo de
+ * comando que no se sabe serializar — añadir capa, keyframes...) o que se
+ * salga del presupuesto corta la racha ahí, no se salta: un paso viejo sin
+ * los pasos más recientes encima no reconstruye nada útil.
+ *
+ * Los bytes de cada paso van todos concatenados en un solo buffer en vez de
+ * un archivo por paso — comprime mejor (una sola ventana de deflate) y
+ * evita la sobrecarga de entradas de zip. El orden es implícito: se lee con
+ * el mismo recorrido y los mismos tamaños derivados de `rect`/`region`.
+ */
+function packHistory(engine: Engine): { steps: SerializedHistoryStep[]; patches: Uint8Array } {
+  const chain: HistoryOp[] = [];
+  let budget = HISTORY_PERSIST_MAX_BYTES;
+  const past = engine.history.pastCommands;
+  for (let i = past.length - 1; i >= 0; i--) {
+    const op = past[i].op;
+    if (!op) break;
+    const size = historyOpByteLength(op);
+    if (size > budget && chain.length > 0) break;
+    budget -= size;
+    chain.unshift(op);
+    if (budget <= 0) break;
+  }
+
+  const steps: SerializedHistoryStep[] = [];
+  const parts: Uint8Array[] = [];
+  for (const op of chain) {
+    if (op.type === 'rasterEdit') {
+      steps.push({
+        type: 'rasterEdit',
+        label: op.label,
+        layerId: op.layerId,
+        rect: op.rect,
+        frame: op.frame,
+        createdFrame: op.createdFrame,
+      });
+      parts.push(op.before, op.after);
+    } else {
+      steps.push({
+        type: 'rasterEditBatch',
+        label: op.label,
+        layerId: op.layerId,
+        rect: op.region,
+        frames: op.steps.map((s) => s.frame),
+      });
+      for (const s of op.steps) parts.push(s.before, s.after);
+    }
+  }
+
+  let total = 0;
+  for (const part of parts) total += part.byteLength;
+  const patches = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    patches.set(part, offset);
+    offset += part.byteLength;
+  }
+  return { steps, patches };
+}
+
+function unpackHistory(
+  steps: SerializedHistoryStep[] | undefined,
+  patches: Uint8Array | undefined,
+): HistoryOp[] {
+  if (!steps || steps.length === 0) return [];
+  const bytes = patches ?? new Uint8Array(0);
+  let cursor = 0;
+  const take = (len: number) => {
+    const slice = bytes.subarray(cursor, cursor + len);
+    cursor += len;
+    return slice;
+  };
+
+  const ops: HistoryOp[] = [];
+  for (const s of steps) {
+    const len = rectByteLength(s.rect);
+    if (s.type === 'rasterEdit') {
+      const before = take(len);
+      const after = take(len);
+      ops.push({
+        type: 'rasterEdit',
+        label: s.label,
+        layerId: s.layerId,
+        frame: s.frame ?? 0,
+        createdFrame: s.createdFrame ?? -1,
+        rect: s.rect,
+        before,
+        after,
+      });
+    } else {
+      const frames = s.frames ?? [];
+      ops.push({
+        type: 'rasterEditBatch',
+        label: s.label,
+        layerId: s.layerId,
+        region: s.rect,
+        steps: frames.map((frame) => ({ frame, before: take(len), after: take(len) })),
+      });
+    }
+  }
+  return ops;
 }
 
 /* ------------------------------------------------------------------ *
@@ -206,6 +351,8 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     files[`audio/${doc.audio.id}`] = engine.audioBytes;
   }
 
+  const { steps: historySteps, patches: historyPatches } = packHistory(engine);
+
   const meta: SerializedDoc = {
     version: FORMAT_VERSION,
     id: doc.id,
@@ -223,17 +370,34 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
     meshes: doc.meshes,
     layerGroups: doc.layerGroups,
     audio: doc.audio,
+    history: historySteps.length > 0 ? historySteps : undefined,
   };
   files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
 
-  // Los PNG ya están comprimidos; recomprimirlos sólo gasta tiempo.
-  return zipSync(files, { level: 0 });
+  // Los PNG ya están comprimidos; recomprimirlos sólo gasta tiempo. Los
+  // parches de historial son bytes de píxel crudos (sin comprimir), así que
+  // sí les compensa deflate — a diferencia del resto, van con su propio
+  // nivel en vez del 0 global.
+  const zipInput: Record<string, Uint8Array | [Uint8Array, ZipOptions]> = { ...files };
+  if (historySteps.length > 0) {
+    zipInput['history/patches.bin'] = [historyPatches, { level: 6 }];
+  }
+  return zipSync(zipInput, { level: 0 });
+}
+
+export interface DeserializedProject {
+  doc: TraceDocument;
+  /** Pasos de deshacer reconstruidos del archivo — pásalos a
+   *  `engine.loadHistoryOps` DESPUÉS de `engine.loadDocument(doc)`, nunca
+   *  antes: necesitan el documento ya cargado para resolver capa/cel por
+   *  id, ver `historyOps.ts`. */
+  historyOps: HistoryOp[];
 }
 
 export async function deserializeProject(
   engine: Engine,
   bytes: Uint8Array,
-): Promise<TraceDocument> {
+): Promise<DeserializedProject> {
   const files = unzipSync(bytes);
   const metaRaw = files['trace.json'];
   if (!metaRaw) throw new Error('El archivo no es un proyecto de Trace válido.');
@@ -333,7 +497,8 @@ export async function deserializeProject(
     if (audioBytes) engine.attachAudioBytes(audioBytes, doc.audio.mimeType);
   }
 
-  return doc;
+  const historyOps = unpackHistory(meta.history, files['history/patches.bin']);
+  return { doc, historyOps };
 }
 
 /** Rellena canales que falten si el archivo viene de una versión anterior. */
