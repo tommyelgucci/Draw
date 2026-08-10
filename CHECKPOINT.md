@@ -25,6 +25,7 @@ npm run test:select-wand  TODO EN VERDE   (varita mágica: tocar, arrastrar tole
 npm run test:unit         TODO EN VERDE   (89 casos: math.ts, document.ts, selection.ts, flood.ts — núcleo puro, sin navegador)
 npm run test:history-persist TODO EN VERDE (guardar/reabrir conserva y deshace los pasos de edición de píxel)
 npm run test:timelapse    TODO EN VERDE   (grabación periódica del proceso de dibujo, exporta un WebM válido)
+npm run test:thumbnail-crop TODO EN VERDE (miniatura recortada a la caja del dibujo, no al documento entero)
 npx oxlint                sin warnings
 npm run build             466 kB / 140 kB gzip
 ```
@@ -320,11 +321,17 @@ Resuelta desde el checkpoint anterior (quedan documentadas, no repetir):
   `.trace` manual y el autoguardado. Test en
   `scripts/history-persist.mjs` (`npm run test:history-persist`).
 
+Resuelto en esta tanda:
+
+- ~~La miniatura de una línea fina es casi invisible~~. `downscaleToCanvas`
+  (`gl/renderer.ts`) ahora localiza la caja del dibujo sobre una reducción
+  barata de sondeo y, si no ocupa ya casi todo el documento, recorta y
+  escala con `blitFramebuffer` en un solo paso de GPU en vez de aplastar el
+  documento entero. Test en `scripts/thumbnail-crop.mjs`
+  (`npm run test:thumbnail-crop`).
+
 Todavía abierta:
 
-- **La miniatura de una línea fina es casi invisible.** Es inherente a
-  reducir 1920 px a 48; Procreate tiene el mismo problema. Se arreglaría
-  recortando a los límites del dibujo en vez de al documento entero.
 - **El rendimiento sólo está medido con SwiftShader**, que es correcto pero
   lento. Los números absolutos de un iPad están sin tomar — no se puede
   resolver desde aquí, hace falta el dispositivo real.
