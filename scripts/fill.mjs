@@ -188,6 +188,71 @@ const outside = await page.evaluate(() => {
 });
 check('fuera del rectángulo sigue sin tocar', outside.a === 0, JSON.stringify(outside));
 
+console.log('\n— Dos rellenos a la vez no se cruzan (worker compartido) —');
+// El worker de floodFill es uno solo para toda la vida del Engine; nada en
+// la UI bloquea el lienzo mientras la promesa está en vuelo (sólo hay un
+// indicador visual), así que un doble toque rápido en dos sitios distintos
+// manda dos peticiones al mismo worker antes de que la primera responda.
+// Bug real y ya corregido: antes cada llamada registraba su propio listener
+// `once:true` en el worker, y CUALQUIERA de esos listeners se disparaba con
+// el PRIMER mensaje que llegara — la segunda promesa resolvía con los datos
+// del primer relleno (rect/color equivocados) y la respuesta de verdad se
+// perdía sin que nadie la recogiera. La corrección correlaciona cada
+// petición por id con un único handler fijo.
+const concurrent = await page.evaluate(async () => {
+  const e = window.__trace;
+  e.newProject(400, 400, 12, 1);
+  await new Promise((r) => setTimeout(r, 50));
+  const layer = e.activeLayer;
+  e.addCel(layer.id, e.currentFrame, false);
+  const cel = [...layer.cels.values()][0];
+  // Dos anillos separados, cada uno con su propio interior a rellenar.
+  const drawRing = (x0, y0, x1, y1) => {
+    const w = x1 - x0;
+    const h = y1 - y0;
+    const rect = { x: x0, y: y0, x2: x1, y2: y1 };
+    const px = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const onRing = x < 3 || x >= w - 3 || y < 3 || y >= h - 3;
+        if (!onRing) continue;
+        const o = (y * w + x) * 4;
+        px[o] = 0;
+        px[o + 1] = 0;
+        px[o + 2] = 0;
+        px[o + 3] = 255;
+      }
+    }
+    e.renderer.writeRect(cel.surface, rect, px);
+  };
+  drawRing(20, 20, 100, 100);
+  drawRing(200, 200, 320, 320);
+  e.touch();
+
+  // Sin `await` entre una y otra: las dos peticiones llegan al worker antes
+  // de que la primera responda.
+  const pA = e.floodFill({ x: 60, y: 60 }, { r: 0.9, g: 0.1, b: 0.1 }); // rojo
+  const pB = e.floodFill({ x: 260, y: 260 }, { r: 0.1, g: 0.2, b: 0.9 }); // azul
+  await Promise.all([pA, pB]);
+
+  const full = e.renderer.readRect(cel.surface, { x: 0, y: 0, x2: 400, y2: 400 });
+  const at = (x, y) => {
+    const o = (y * 400 + x) * 4;
+    return { r: full[o], g: full[o + 1], b: full[o + 2], a: full[o + 3] };
+  };
+  return { insideA: at(60, 60), insideB: at(260, 260) };
+});
+check(
+  'el relleno A quedó rojo en su propia región',
+  concurrent.insideA.r > 180 && concurrent.insideA.b < 100,
+  JSON.stringify(concurrent.insideA),
+);
+check(
+  'el relleno B quedó azul en su propia región, no rojo',
+  concurrent.insideB.b > 180 && concurrent.insideB.r < 100,
+  JSON.stringify(concurrent.insideB),
+);
+
 console.log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 
