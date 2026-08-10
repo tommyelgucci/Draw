@@ -20,6 +20,7 @@ import {
   type Layer,
   type LayerGroup,
   type LayerMask,
+  type AdjustmentProps,
   type SpriteSwapCatalog,
   type SpriteSwapVariant,
   type TextLayerProps,
@@ -564,6 +565,8 @@ export class Engine {
       this.renderer.copy(surface, this.renderer.ensureResident(src.mask.surface), 1);
       copy.mask = { surface };
     }
+    if (src.text) copy.text = { ...src.text };
+    if (src.adjustment) copy.adjustment = { ...src.adjustment };
 
     this.history.run({
       label: 'Duplicar capa',
@@ -1017,6 +1020,44 @@ export class Engine {
     if (!layer?.text) return;
     layer.text = { ...layer.text, ...patch };
     this.renderTextIntoLayer(layer);
+    this.touch();
+  }
+
+  /* --- capas de ajuste --- */
+
+  /** Crea una capa de ajuste (tono/saturación/brillo/contraste) sin efecto
+   *  encima de la activa — no tiene dibujo propio, `compositeGroups` la
+   *  reconoce por `kind` y aplica el ajuste al acumulador en vez de
+   *  componer un cel. */
+  createAdjustmentLayer() {
+    const layer = newLayer('Ajuste', false, 'adjustment');
+    layer.adjustment = { hue: 0, saturation: 0, brightness: 0, contrast: 0 };
+
+    const index = this.activeLayerIndex + 1;
+    const at = index < 0 ? this.doc.layers.length : index;
+    const prevActive = this.activeLayerId;
+    this.history.run({
+      label: 'Añadir capa de ajuste',
+      redo: () => {
+        this.doc.layers.splice(at, 0, layer);
+        this.activeLayerId = layer.id;
+        this.touch();
+      },
+      undo: () => {
+        const i = this.doc.layers.indexOf(layer);
+        if (i >= 0) this.doc.layers.splice(i, 1);
+        this.activeLayerId = prevActive;
+        this.touch();
+      },
+    });
+  }
+
+  /** Ajuste continuo de los deslizadores — sin paso de deshacer propio,
+   *  igual que `setTextLayerProps`/`setLayerPropLive`. */
+  setLayerAdjustment(layerId: string, patch: Partial<AdjustmentProps>) {
+    const layer = this.doc.layers.find((l) => l.id === layerId);
+    if (!layer?.adjustment) return;
+    layer.adjustment = { ...layer.adjustment, ...patch };
     this.touch();
   }
 
@@ -1913,7 +1954,7 @@ export class Engine {
 
   beginStroke(sample: InputSample, ctx: StrokeContext): boolean {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !layer.visible || layer.kind === 'reference') return false;
+    if (!layer || layer.locked || !layer.visible || layer.kind !== 'draw') return false;
 
     // Un trazo nuevo confirma cualquier forma QuickShape que hubiera
     // quedado pendiente de edición — es lo que espera cualquiera que venga
@@ -2801,6 +2842,23 @@ export class Engine {
       const { base, clipped } = groups[gi];
       if (!base.visible) continue;
 
+      // Una capa de ajuste no tiene dibujo propio: transforma TODO lo
+      // compuesto hasta aquí (`acc`) en vez de aportar contenido nuevo. Se
+      // resuelve en dos pasos — calcular el resultado ajustado aparte y
+      // fundirlo con `composite()` normal contra el propio `acc` — para que
+      // la opacidad de la capa siga funcionando igual que en cualquier
+      // otra, sin un shader de blending distinto sólo para esto.
+      if (base.kind === 'adjustment' && base.adjustment) {
+        const adjusted = r.scratch('adjTmp');
+        r.applyAdjustment(adjusted, acc, base.adjustment);
+        r.composite(other, acc, adjusted, {
+          opacity: base.opacity * sampleChannel(base.transform.opacity, frame),
+          blend: BLEND_INDEX[base.blend],
+        });
+        [acc, other] = [other, acc];
+        continue;
+      }
+
       const baseSurface = this.rasterizeLayer(base, frame, includeWet);
       const visibleClipped = clipped.filter((l) => l.visible);
       if (!baseSurface && visibleClipped.length === 0) continue;
@@ -3320,7 +3378,7 @@ export class Engine {
   /** Borra los píxeles de la capa activa que caen dentro de la selección. */
   deleteSelection() {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference') return;
+    if (!layer || layer.locked || !this.selection.active || layer.kind !== 'draw') return;
     const cel = celAt(layer, this.currentFrame);
     if (!cel) return;
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
@@ -3345,7 +3403,7 @@ export class Engine {
   /** Rellena la selección con un color plano en la capa activa. */
   fillSelection(color: RGB) {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference') return;
+    if (!layer || layer.locked || !this.selection.active || layer.kind !== 'draw') return;
     const { cel, created } = this.ensureCel(layer, this.currentFrame);
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
     const before = created >= 0 ? null : this.renderer.readRect(cel.surface, rect);
@@ -3387,7 +3445,7 @@ export class Engine {
   liftSelection(): boolean {
     if (this.floating) return true;
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference')
+    if (!layer || layer.locked || !this.selection.active || layer.kind !== 'draw')
       return false;
     const cel = celAt(layer, this.currentFrame);
     if (!cel || cel.surface.empty) return false;
@@ -3416,7 +3474,7 @@ export class Engine {
   liftSelectionRange(fromFrame: number, toFrame: number): boolean {
     if (this.floating) return true;
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !this.selection.active || layer.kind === 'reference')
+    if (!layer || layer.locked || !this.selection.active || layer.kind !== 'draw')
       return false;
 
     const rect = clampRect(this.selection.bounds, this.doc.width, this.doc.height);
@@ -3687,7 +3745,7 @@ export class Engine {
    */
   floodFill(p: Vec2, color: RGB, tolerance = 0.15, expand = 2) {
     const layer = this.activeLayer;
-    if (!layer || layer.locked || !layer.visible || layer.kind === 'reference') return;
+    if (!layer || layer.locked || !layer.visible || layer.kind !== 'draw') return;
     const w = this.doc.width;
     const h = this.doc.height;
     const sx = Math.floor(p.x);

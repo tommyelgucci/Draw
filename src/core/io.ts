@@ -6,6 +6,7 @@ import {
   newDocument,
   newLayer,
   uid,
+  type AdjustmentProps,
   type AudioPeak,
   type AudioTrack,
   type Cel,
@@ -50,6 +51,8 @@ interface SerializedLayer {
    *  horneados como cualquier otro — esto es sólo para poder reabrir el
    *  cuadro de edición con los mismos valores. */
   text?: TextLayerProps;
+  /** Ausente en capas que no son de ajuste. */
+  adjustment?: AdjustmentProps;
 }
 
 interface SerializedBone {
@@ -195,6 +198,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       groupId: layer.groupId,
       hasMask,
       text: layer.text,
+      adjustment: layer.adjustment,
     });
   }
 
@@ -267,6 +271,7 @@ export async function deserializeProject(
       rig: normalizeLayerRig(sl.rig),
       groupId: sl.groupId,
       text: sl.text,
+      adjustment: sl.adjustment,
     };
     for (const sc of sl.cels) {
       const cel: Cel = {

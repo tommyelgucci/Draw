@@ -1,4 +1,5 @@
 import {
+  ADJUST_FS,
   ANTS_FS,
   COMPOSITE_FS,
   COPY_FS,
@@ -202,6 +203,16 @@ export class Renderer {
       'uMask',
       'uOpacity',
       'uUseMask',
+    ]);
+    this.link('adjust', QUAD_VS, ADJUST_FS, [
+      'uMatrix',
+      'uResolution',
+      'uFlipY',
+      'uSource',
+      'uHue',
+      'uSaturation',
+      'uBrightness',
+      'uContrast',
     ]);
   }
 
@@ -736,6 +747,47 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     dst.empty = backdrop.empty && src.empty;
+    dst.version++;
+  }
+
+  /**
+   * Tono/saturación/brillo/contraste sobre `src` entero, escrito en `dst` —
+   * usado por las capas de ajuste sobre el acumulador de composición, no
+   * sobre un cel. Reemplaza el contenido de `dst` sin blending: quien llama
+   * decide aparte cómo mezclarlo con opacidad (ver `Engine.compositeGroups`,
+   * que lo funde con `composite()` normal contra el acumulador original).
+   */
+  applyAdjustment(
+    dst: Surface,
+    src: Surface,
+    adjustment: { hue: number; saturation: number; brightness: number; contrast: number },
+  ) {
+    const gl = this.gl;
+    this.ensureResident(dst);
+    this.ensureResident(src);
+    const p = this.programs.get('adjust')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(this.quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, this.docWidth, this.docHeight);
+    gl.disable(gl.BLEND);
+
+    gl.uniformMatrix3fv(p.uniforms.uMatrix, false, this.docMatrix());
+    gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
+    gl.uniform1f(p.uniforms.uFlipY, 0);
+    gl.uniform1f(p.uniforms.uHue, adjustment.hue);
+    gl.uniform1f(p.uniforms.uSaturation, adjustment.saturation);
+    gl.uniform1f(p.uniforms.uBrightness, adjustment.brightness);
+    gl.uniform1f(p.uniforms.uContrast, adjustment.contrast);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    dst.empty = src.empty;
     dst.version++;
   }
 

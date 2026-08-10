@@ -155,8 +155,22 @@ export function pickVariant(layer: Layer, frame: number): SpriteSwapVariant | nu
  * `draw`: capa normal, se dibuja y se exporta. `reference`: imagen o vídeo
  * importado para calcar (rotoscopia) — no admite trazo, bote ni selección, y
  * queda fuera de PNG/APNG/secuencia porque no es parte de la obra final.
+ * `adjustment`: no tiene dibujo propio — aplica `Layer.adjustment` a todo lo
+ * compuesto por debajo, como una capa de ajuste de Photoshop/Procreate.
  */
-export type LayerKind = 'draw' | 'reference';
+export type LayerKind = 'draw' | 'reference' | 'adjustment';
+
+/** Tono/saturación/brillo/contraste — ver `Layer.adjustment`. */
+export interface AdjustmentProps {
+  /** Radianes. */
+  hue: number;
+  /** -1..1, 0 = sin cambio. */
+  saturation: number;
+  /** -1..1, 0 = sin cambio. */
+  brightness: number;
+  /** -1..1, 0 = sin cambio. */
+  contrast: number;
+}
 
 export interface Layer {
   id: string;
@@ -199,6 +213,9 @@ export interface Layer {
    * otra capa con su `TransformTrack` normal.
    */
   text?: TextLayerProps;
+  /** Presente si `kind === 'adjustment'`: el ajuste que aplica a todo lo
+   *  compuesto por debajo. No usa `cels` — no hay dibujo propio. */
+  adjustment?: AdjustmentProps;
 }
 
 export interface TextLayerProps {

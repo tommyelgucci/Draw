@@ -196,6 +196,16 @@ export const IconText = ({ size = 20, className }: IconProps) => (
   </svg>
 );
 
+/** Deslizadores tipo ecualizador — la metáfora habitual de "ajustes". */
+export const IconAdjust = ({ size = 20, className }: IconProps) => (
+  <svg {...base(size)} className={className}>
+    <path d="M5 5v14M12 5v14M19 5v14" />
+    <circle cx="5" cy="10" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="15" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="8" r="1.8" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const IconMenu = ({ size = 20, className }: IconProps) => (
   <svg {...base(size)} className={className}>
     <path d="M4 7h16M4 12h16M4 17h16" />

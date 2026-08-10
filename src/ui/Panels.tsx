@@ -32,6 +32,7 @@ import { describeVideoSupport, exportVideo, type VideoSupport } from '../core/vi
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
+  IconAdjust,
   IconAlphaLock,
   IconAudio,
   IconChevronRight,
@@ -112,6 +113,8 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         />
         <div className="layer__meta">
           {layer.kind === 'reference' && <span className="layer__badge">Ref</span>}
+          {layer.kind === 'adjustment' && <span className="layer__badge">Ajuste</span>}
+          {layer.text && <span className="layer__badge">Texto</span>}
           {BLEND_LABELS[layer.blend]} · {Math.round(layer.opacity * 100)}%
           {layer.cels.size > 0 &&
             ` · ${layer.cels.size} ${layer.kind === 'reference' ? 'fotogramas' : 'dib.'}`}
@@ -144,47 +147,53 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         >
           <IconLock size={17} />
         </button>
-        <button
-          type="button"
-          className={`layer__toggle ${layer.alphaLock ? 'is-on' : ''}`}
-          title={
-            layer.alphaLock
-              ? 'Quitar bloqueo de alfa: se puede volver a pintar fuera del contorno'
-              : 'Bloquear alfa: sólo se puede repintar dentro del contorno ya pintado'
-          }
-          aria-label={layer.alphaLock ? 'Quitar bloqueo de alfa' : 'Bloquear alfa'}
-          aria-pressed={layer.alphaLock}
-          onClick={(e) => {
-            e.stopPropagation();
-            engine.setLayerProp(layer.id, 'alphaLock', !layer.alphaLock, 'Bloqueo de alfa');
-          }}
-        >
-          <IconAlphaLock size={17} />
-        </button>
-        {(() => {
-          const editing = engine.editingMaskLayerId === layer.id;
-          const title = !layer.mask
-            ? 'Añadir máscara'
-            : editing
-              ? 'Dejar de editar la máscara — volver a pintar la capa'
-              : 'Editar máscara: blanco revela, negro oculta';
-          return (
-            <button
-              type="button"
-              className={`layer__toggle ${layer.mask ? 'is-on' : ''} ${editing ? 'is-editing' : ''}`}
-              title={title}
-              aria-label={title}
-              aria-pressed={editing}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!layer.mask) engine.addLayerMask(layer.id);
-                else engine.setEditingMaskLayer(editing ? null : layer.id);
-              }}
-            >
-              <IconMask size={17} />
-            </button>
-          );
-        })()}
+        {/* Una capa de ajuste no tiene alfa ni dibujo propios que bloquear o
+            recortar — `rasterizeLayer` (de donde salen ambos) ni se llama
+            para ella, así que estos botones no harían nada de verdad. */}
+        {layer.kind !== 'adjustment' && (
+          <button
+            type="button"
+            className={`layer__toggle ${layer.alphaLock ? 'is-on' : ''}`}
+            title={
+              layer.alphaLock
+                ? 'Quitar bloqueo de alfa: se puede volver a pintar fuera del contorno'
+                : 'Bloquear alfa: sólo se puede repintar dentro del contorno ya pintado'
+            }
+            aria-label={layer.alphaLock ? 'Quitar bloqueo de alfa' : 'Bloquear alfa'}
+            aria-pressed={layer.alphaLock}
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.setLayerProp(layer.id, 'alphaLock', !layer.alphaLock, 'Bloqueo de alfa');
+            }}
+          >
+            <IconAlphaLock size={17} />
+          </button>
+        )}
+        {layer.kind !== 'adjustment' &&
+          (() => {
+            const editing = engine.editingMaskLayerId === layer.id;
+            const title = !layer.mask
+              ? 'Añadir máscara'
+              : editing
+                ? 'Dejar de editar la máscara — volver a pintar la capa'
+                : 'Editar máscara: blanco revela, negro oculta';
+            return (
+              <button
+                type="button"
+                className={`layer__toggle ${layer.mask ? 'is-on' : ''} ${editing ? 'is-editing' : ''}`}
+                title={title}
+                aria-label={title}
+                aria-pressed={editing}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!layer.mask) engine.addLayerMask(layer.id);
+                  else engine.setEditingMaskLayer(editing ? null : layer.id);
+                }}
+              >
+                <IconMask size={17} />
+              </button>
+            );
+          })()}
         {layer.mask && (
           <button
             type="button"
@@ -325,6 +334,15 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         <button
           type="button"
           className="action"
+          aria-label="Añadir capa de ajuste"
+          onClick={() => engine.createAdjustmentLayer()}
+        >
+          <IconAdjust size={18} />
+          <span>Ajuste</span>
+        </button>
+        <button
+          type="button"
+          className="action"
           aria-label="Duplicar capa"
           onClick={() => active && engine.duplicateLayer(active.id)}
           disabled={!active}
@@ -456,7 +474,73 @@ export function LayersPanel({ engine }: { engine: Engine }) {
         </div>
       )}
 
-      {active && (
+      {active?.adjustment && (
+        <div className="panel__section">
+          <h3 className="panel__subtitle">Ajuste</h3>
+          <Slider
+            label="Opacidad"
+            value={active.opacity}
+            min={0}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerPropLive(active.id, 'opacity', v)}
+          />
+          <Field label="Modo de fusión">
+            <select
+              value={active.blend}
+              onChange={(e) =>
+                engine.setLayerProp(active.id, 'blend', e.target.value as BlendMode, 'Modo de fusión')
+              }
+            >
+              {BLEND_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {BLEND_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Slider
+            label="Tono"
+            value={(active.adjustment.hue * 180) / Math.PI}
+            min={-180}
+            max={180}
+            format={(v) => `${Math.round(v)}°`}
+            onChange={(v) =>
+              engine.setLayerAdjustment(active.id, { hue: (v * Math.PI) / 180 })
+            }
+          />
+          <Slider
+            label="Saturación"
+            value={active.adjustment.saturation}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { saturation: v })}
+          />
+          <Slider
+            label="Brillo"
+            value={active.adjustment.brightness}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { brightness: v })}
+          />
+          <Slider
+            label="Contraste"
+            value={active.adjustment.contrast}
+            min={-1}
+            max={1}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { contrast: v })}
+          />
+          <p className="hint">
+            Afecta a todo lo que hay por debajo, no a un dibujo propio — como cualquier
+            capa, se puede ocultar, reordenar o borrar sin tocar las de abajo.
+          </p>
+        </div>
+      )}
+
+      {active && !active.adjustment && (
         <div className="panel__section">
           <Slider
             label="Opacidad"
