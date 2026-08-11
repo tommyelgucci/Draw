@@ -97,6 +97,22 @@ await page.waitForTimeout(150);
 const inkLarge = await compositedDarkCount(around(docCenter, 120));
 check('un tamaño de letra mayor dentro de la misma zona deja más tinta', inkLarge > inkSmall, `${inkSmall} -> ${inkLarge}`);
 
+console.log('\n— El selector de tipografía cambia la fuente —');
+const fontSelect = page.locator('.panel__section .field', { hasText: 'Tipografía' }).locator('select');
+check('aparece el selector de tipografía', (await fontSelect.count()) === 1);
+const fontBefore = await page.evaluate(() => window.__trace.activeLayer.text.fontFamily);
+check('por defecto usa la fuente predeterminada', fontBefore === 'sans-serif', fontBefore);
+const inkBeforeFont = await compositedDarkCount(around(docCenter, 120));
+await fontSelect.selectOption({ label: 'Impacto' });
+await page.waitForTimeout(150);
+const fontAfter = await page.evaluate(() => window.__trace.activeLayer.text.fontFamily);
+check('elegir "Impacto" cambia fontFamily', fontAfter.includes('Impact'), fontAfter);
+const inkAfterFont = await compositedDarkCount(around(docCenter, 120));
+// No se compara "más o menos tinta" (una fuente no es necesariamente más
+// ancha que otra) — sólo que el compuesto sigue teniendo texto real tras
+// cambiar de fuente, para no dejar pasar un fallo silencioso de render.
+check('sigue habiendo tinta tras cambiar de fuente', inkAfterFont > 100, `${inkBeforeFont} -> ${inkAfterFont}`);
+
 const alignBtns = page.locator('.panel__section .segmented button');
 check('aparecen los 3 botones de alineación', (await alignBtns.count()) === 3);
 await alignBtns.nth(0).click();
@@ -158,6 +174,7 @@ const roundTrip = await page.evaluate(async () => {
 });
 check('la capa de texto sobrevive guardar/reabrir', roundTrip.length === 1, JSON.stringify(roundTrip));
 check('conserva sus propiedades', roundTrip[0]?.bold === true && roundTrip[0]?.italic === true);
+check('conserva la tipografía elegida', roundTrip[0]?.fontFamily?.includes('Impact'), roundTrip[0]?.fontFamily);
 
 console.log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));

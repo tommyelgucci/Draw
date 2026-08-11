@@ -296,6 +296,23 @@ function LayerGroupHeader({
   );
 }
 
+/**
+ * Tipografías del selector de capa de texto. Nombres "web-safe" con su
+ * familia genérica de reserva (`, serif`/`, sans-serif`/...) — si el
+ * dispositivo no tiene la fuente nombrada, Canvas 2D cae a esa categoría en
+ * vez de a lo que sea que el navegador use por defecto, así que el texto
+ * sigue pareciéndose a lo que se eligió aunque no sea pixel-idéntico.
+ */
+const TEXT_FONT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Predeterminada', value: 'sans-serif' },
+  { label: 'Serif', value: 'Georgia, serif' },
+  { label: 'Elegante', value: '"Times New Roman", serif' },
+  { label: 'Redondeada', value: '"Trebuchet MS", sans-serif' },
+  { label: 'Monoespaciada', value: '"Courier New", monospace' },
+  { label: 'Manuscrita', value: '"Comic Sans MS", cursive' },
+  { label: 'Impacto', value: 'Impact, sans-serif' },
+];
+
 export function LayersPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const setPanel = useUI((s) => s.setPanel);
@@ -449,6 +466,18 @@ export function LayersPanel({ engine }: { engine: Engine }) {
               value={active.text.text}
               onChange={(e) => engine.setTextLayerProps(active.id, { text: e.target.value })}
             />
+          </Field>
+          <Field label="Tipografía">
+            <select
+              value={active.text.fontFamily}
+              onChange={(e) => engine.setTextLayerProps(active.id, { fontFamily: e.target.value })}
+            >
+              {TEXT_FONT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value} style={{ fontFamily: opt.value }}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </Field>
           <Slider
             label="Tamaño"
