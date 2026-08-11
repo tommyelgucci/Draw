@@ -149,6 +149,30 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         >
           <IconLock size={17} />
         </button>
+        {layer.kind === 'reference' && (
+          <button
+            type="button"
+            className={`layer__toggle ${layer.includeInExport ? 'is-on' : ''}`}
+            title={
+              layer.includeInExport
+                ? 'Quitar de la exportación: vuelve a ser sólo una guía para calcar'
+                : 'Incluir en la exportación: sale de fondo en el PNG/vídeo final, no sólo como guía'
+            }
+            aria-label={layer.includeInExport ? 'Quitar de la exportación' : 'Incluir en la exportación'}
+            aria-pressed={!!layer.includeInExport}
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.setLayerProp(
+                layer.id,
+                'includeInExport',
+                !layer.includeInExport,
+                'Incluir referencia en exportación',
+              );
+            }}
+          >
+            <IconDownload size={17} />
+          </button>
+        )}
         {/* Una capa de ajuste no tiene alfa ni dibujo propios que bloquear o
             recortar — `rasterizeLayer` (de donde salen ambos) ni se llama
             para ella, así que estos botones no harían nada de verdad. */}

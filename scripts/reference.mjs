@@ -331,6 +331,122 @@ if (!uiVideoBytes) {
   check('cancelar no dispara ningún alert()', dialogs.length === 0, dialogs.join(' | '));
 }
 
+log('\n— Referencia opcional de fondo en la exportación (includeInExport) —');
+// Proyecto propio, self-contained: no depende del estado que dejaron las
+// secciones anteriores (deshacer, cancelar...).
+const includeExportSetup = await page.evaluate(async () => {
+  const e = window.__trace;
+  const mod = await import('/src/core/io.ts');
+  const { DEFAULT_BRUSHES } = await import('/src/core/brush.ts');
+
+  e.newProject(320, 240, 12, 1);
+
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 240;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#00ff00';
+  ctx.fillRect(0, 0, 320, 240);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  await mod.importReferenceImage(e, new File([blob], 'ref.png', { type: 'image/png' }));
+  const refLayer = e.activeLayer;
+  // Opacidad reducida por defecto (0.6, ver sección "Imagen de referencia"
+  // más arriba) a propósito para calcar mejor — pero eso mezcla el verde
+  // puro con el papel blanco al componer, y el umbral de color de aquí
+  // abajo asume verde puro. Full opacidad aísla la comprobación a lo que
+  // importa: si la capa entra o no en la exportación, no cuánto se ve.
+  e.setLayerProp(refLayer.id, 'opacity', 1, 'Opacidad');
+
+  e.addLayer();
+  const strokeCtx = { brush: DEFAULT_BRUSHES.find((b) => !b.erase), color: { r: 0, g: 0, b: 0 } };
+  e.beginStroke({ x: 100, y: 100, pressure: 1, altitude: 0, azimuth: 0, time: performance.now() }, strokeCtx);
+  e.moveStroke([{ x: 140, y: 140, pressure: 1, altitude: 0, azimuth: 0, time: performance.now() + 16 }]);
+  e.endStroke();
+
+  return { refLayerId: refLayer.id, includeInExportByDefault: !!refLayer.includeInExport };
+});
+check(
+  'por defecto una referencia sigue sin marcar para exportar',
+  includeExportSetup.includeInExportByDefault === false,
+);
+
+const countExportColors = () =>
+  page.evaluate(() => {
+    const e = window.__trace;
+    const data = e.renderFrameToImageData(e.currentFrame).data;
+    let green = 0;
+    let black = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      if (g > 200 && r < 60 && b < 60) green++;
+      if (r < 60 && g < 60 && b < 60) black++;
+    }
+    return { green, black };
+  });
+
+const beforeColors = await countExportColors();
+check('sin el interruptor, sigue sin verde en la exportación', beforeColors.green === 0, `${beforeColors.green} px`);
+check('el trazo sí sale', beforeColors.black > 0, `${beforeColors.black} px`);
+
+// Interruptor real desde el panel, no sólo la API del motor — abre el panel
+// de Capas y toca el botón nuevo de la fila de la capa de referencia.
+await page.evaluate(() => window.__uiStore.getState().setPanel('layers'));
+await page.waitForTimeout(150);
+const toggleBtn = page.locator(`li[data-layer-id="${includeExportSetup.refLayerId}"] button[title*="Incluir en la exportación"]`);
+check('el botón de incluir en exportación aparece en el panel', (await toggleBtn.count()) === 1);
+await toggleBtn.click();
+await page.waitForTimeout(100);
+
+const afterFlag = await page.evaluate(
+  (id) => !!window.__trace.doc.layers.find((l) => l.id === id).includeInExport,
+  includeExportSetup.refLayerId,
+);
+check('el clic en el botón activa includeInExport', afterFlag === true);
+const afterColors = await countExportColors();
+check('con el interruptor activo, el verde de la referencia sale de fondo', afterColors.green > 0, `${afterColors.green} px`);
+check('el trazo sigue encima', afterColors.black > 0, `${afterColors.black} px`);
+
+log('\n— El interruptor sobrevive guardar y reabrir —');
+const persisted = await page.evaluate(async () => {
+  const e = window.__trace;
+  const { serializeProject, deserializeProject } = await import('/src/core/io.ts');
+  const bytes = await serializeProject(e);
+  const { doc } = await deserializeProject(e, bytes);
+  const ref = doc.layers.find((l) => l.kind === 'reference');
+  return { includeInExport: !!ref?.includeInExport };
+});
+check('includeInExport se guarda y se recupera en true', persisted.includeInExport === true);
+
+log('\n— documentIsEmpty respeta el interruptor —');
+const emptyCheck = await page.evaluate(async () => {
+  const e = window.__trace;
+  const mod = await import('/src/core/io.ts');
+
+  e.newProject(200, 200, 12, 1);
+  const c = document.createElement('canvas');
+  c.width = 200;
+  c.height = 200;
+  c.getContext('2d').fillRect(0, 0, 200, 200);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  await mod.importReferenceImage(e, new File([blob], 'r.png', { type: 'image/png' }));
+  const layer = e.activeLayer;
+
+  const emptyBefore = mod.documentIsEmpty(e.doc);
+  e.setLayerProp(layer.id, 'includeInExport', true, 'test');
+  const emptyAfter = mod.documentIsEmpty(e.doc);
+  return { emptyBefore, emptyAfter };
+});
+check(
+  'sin marcar, un documento con sólo una referencia se considera vacío',
+  emptyCheck.emptyBefore === true,
+);
+check(
+  'marcado para exportar, ya no se considera vacío',
+  emptyCheck.emptyAfter === false,
+);
+
 log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 
