@@ -56,6 +56,9 @@ interface SerializedLayer {
   text?: TextLayerProps;
   /** Ausente en capas que no son de ajuste. */
   adjustment?: AdjustmentProps;
+  /** Sólo tiene efecto en capas de referencia — ver `Layer.includeInExport`.
+   *  Ausente en proyectos anteriores a esta función, normaliza a `false`. */
+  includeInExport?: boolean;
 }
 
 interface SerializedBone {
@@ -391,6 +394,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
         hasMask,
         text: layer.text,
         adjustment: layer.adjustment,
+        includeInExport: layer.includeInExport,
       });
     }
 
@@ -496,6 +500,7 @@ export async function deserializeProject(
       groupId: sl.groupId,
       text: sl.text,
       adjustment: sl.adjustment,
+      includeInExport: sl.includeInExport ?? false,
     };
     for (const sc of sl.cels) {
       const cel: Cel = {
@@ -892,8 +897,9 @@ export function newProjectId(): string {
 /** Fotogramas que realmente tienen dibujo, para avisar antes de exportar. */
 export function documentIsEmpty(doc: TraceDocument): boolean {
   for (const layer of doc.layers) {
-    // Una capa de referencia no cuenta: no sale en la exportación.
-    if (layer.kind === 'reference') continue;
+    // Una capa de referencia no cuenta salvo que se haya marcado para salir
+    // en la exportación (`includeInExport`) — ahí sí es parte de la obra.
+    if (layer.kind === 'reference' && !layer.includeInExport) continue;
     for (let f = 0; f < doc.frameCount; f++) {
       const cel = celAt(layer, f);
       if (cel && !cel.surface.empty) return false;

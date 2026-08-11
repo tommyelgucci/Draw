@@ -216,6 +216,18 @@ export interface Layer {
   /** Presente si `kind === 'adjustment'`: el ajuste que aplica a todo lo
    *  compuesto por debajo. No usa `cels` — no hay dibujo propio. */
   adjustment?: AdjustmentProps;
+  /**
+   * Sólo tiene efecto en una capa `kind === 'reference'`: por defecto una
+   * capa de referencia es material para calcar y queda fuera de toda
+   * exportación (PNG/APNG/secuencia/vídeo), igual que antes de este campo.
+   * Con esto en `true` se compone igual que cualquier otra capa a la hora
+   * de exportar — para el caso de "vídeo real con dibujo animado encima"
+   * (imagen o vídeo de referencia de fondo, opcional). Sigue sin admitir
+   * trazo, bote ni selección: esa restricción es sobre EDITAR la capa, no
+   * sobre exportarla, y sigue teniendo sentido — es material para calcar,
+   * no para pintar encima.
+   */
+  includeInExport?: boolean;
 }
 
 export interface TextLayerProps {

@@ -3130,13 +3130,15 @@ export class Engine {
     startAcc?: Surface;
     /** Omite el papel: el fantasma del onion skin sólo debe llevar el dibujo. */
     transparent?: boolean;
-    /** Deja fuera las capas de referencia: no son parte de la obra final. */
+    /** Deja fuera las capas de referencia — salvo las que se marcaron
+     *  explícitamente para exportar (`Layer.includeInExport`): son la
+     *  excepción a "no son parte de la obra final". */
     excludeReference?: boolean;
   }): Surface {
     const r = this.renderer;
     const { frame, ping, includeWet } = opts;
     const layers = opts.excludeReference
-      ? this.doc.layers.filter((l) => l.kind !== 'reference')
+      ? this.doc.layers.filter((l) => l.kind !== 'reference' || l.includeInExport)
       : this.doc.layers;
     const groups = buildClipGroups(layers);
     const from = opts.from ?? 0;

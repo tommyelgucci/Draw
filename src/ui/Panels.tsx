@@ -149,6 +149,30 @@ function LayerRow({ engine, layer, nested }: { engine: Engine; layer: Layer; nes
         >
           <IconLock size={17} />
         </button>
+        {layer.kind === 'reference' && (
+          <button
+            type="button"
+            className={`layer__toggle ${layer.includeInExport ? 'is-on' : ''}`}
+            title={
+              layer.includeInExport
+                ? 'Quitar de la exportación: vuelve a ser sólo una guía para calcar'
+                : 'Incluir en la exportación: sale de fondo en el PNG/vídeo final, no sólo como guía'
+            }
+            aria-label={layer.includeInExport ? 'Quitar de la exportación' : 'Incluir en la exportación'}
+            aria-pressed={!!layer.includeInExport}
+            onClick={(e) => {
+              e.stopPropagation();
+              engine.setLayerProp(
+                layer.id,
+                'includeInExport',
+                !layer.includeInExport,
+                'Incluir referencia en exportación',
+              );
+            }}
+          >
+            <IconDownload size={17} />
+          </button>
+        )}
         {/* Una capa de ajuste no tiene alfa ni dibujo propios que bloquear o
             recortar — `rasterizeLayer` (de donde salen ambos) ni se llama
             para ella, así que estos botones no harían nada de verdad. */}
@@ -271,6 +295,23 @@ function LayerGroupHeader({
     </div>
   );
 }
+
+/**
+ * Tipografías del selector de capa de texto. Nombres "web-safe" con su
+ * familia genérica de reserva (`, serif`/`, sans-serif`/...) — si el
+ * dispositivo no tiene la fuente nombrada, Canvas 2D cae a esa categoría en
+ * vez de a lo que sea que el navegador use por defecto, así que el texto
+ * sigue pareciéndose a lo que se eligió aunque no sea pixel-idéntico.
+ */
+const TEXT_FONT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Predeterminada', value: 'sans-serif' },
+  { label: 'Serif', value: 'Georgia, serif' },
+  { label: 'Elegante', value: '"Times New Roman", serif' },
+  { label: 'Redondeada', value: '"Trebuchet MS", sans-serif' },
+  { label: 'Monoespaciada', value: '"Courier New", monospace' },
+  { label: 'Manuscrita', value: '"Comic Sans MS", cursive' },
+  { label: 'Impacto', value: 'Impact, sans-serif' },
+];
 
 export function LayersPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
@@ -425,6 +466,18 @@ export function LayersPanel({ engine }: { engine: Engine }) {
               value={active.text.text}
               onChange={(e) => engine.setTextLayerProps(active.id, { text: e.target.value })}
             />
+          </Field>
+          <Field label="Tipografía">
+            <select
+              value={active.text.fontFamily}
+              onChange={(e) => engine.setTextLayerProps(active.id, { fontFamily: e.target.value })}
+            >
+              {TEXT_FONT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value} style={{ fontFamily: opt.value }}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </Field>
           <Slider
             label="Tamaño"

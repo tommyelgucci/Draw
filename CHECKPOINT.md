@@ -120,8 +120,16 @@ npm run build             466 kB / 140 kB gzip
   cel por fotograma del documento con sostenido automático — no hizo falta
   inventar un tipo de dato nuevo.
 - La capa de referencia no admite trazo, bote ni selección (bloqueado en el
-  motor, no sólo en la interfaz) y queda fuera de PNG/APNG/secuencia: es
-  material para calcar, no parte de la obra.
+  motor, no sólo en la interfaz) y por defecto queda fuera de PNG/APNG/vídeo:
+  es material para calcar, no parte de la obra — salvo que se marque
+  **"Incluir en la exportación"** (interruptor nuevo en su fila del panel de
+  Capas, `Layer.includeInExport`). Con eso activo entra en la composición
+  final igual que cualquier otra capa, de fondo bajo el dibujo animado —
+  para mezclar vídeo real con animación encima (Roger Rabbit, Chip y Dale).
+  Sigue sin poder dibujarse sobre ella: esa restricción es de EDITAR, no de
+  exportar. `documentIsEmpty` (el aviso antes de exportar) también respeta
+  el interruptor: con él activo, una referencia sola ya cuenta como
+  contenido.
 - El vídeo se extrae buscando (`seek`) fotograma a fotograma a la fps del
   documento, no reproduciendo en tiempo real: así el cel *n* es el fotograma
   exacto, no lo que caiga a 60 Hz. Si la duración no cabe en el documento
