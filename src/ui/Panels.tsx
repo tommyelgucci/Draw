@@ -6,7 +6,12 @@ import {
   type BlendMode,
   type RGB,
 } from '../core/types';
-import { BUILTIN_TEXTURES, generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
+import {
+  BUILTIN_TEXTURES,
+  generateBrushTexturePixels,
+  type BuiltinTextureId,
+  type CustomTexture,
+} from '../core/brushTexture';
 import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS } from '../core/brush';
 import {
   MAX_FRAME_COUNT,
@@ -25,6 +30,7 @@ import {
   exportFramePNG,
   exportSequenceZip,
   importAudioTrack,
+  importCustomBrushTexture,
   importReferenceImage,
   importReferenceVideo,
   serializeProject,
@@ -879,6 +885,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
   const quickShapeEnabled = useUI((s) => s.quickShapeEnabled);
   const quickShapePrecision = useUI((s) => s.quickShapePrecision);
   const setQuickShapePrecision = useUI((s) => s.setQuickShapePrecision);
+  const textureFileInput = useRef<HTMLInputElement>(null);
 
   return (
     <Panel title="Pincel" onClose={() => setPanel(null)} width={310}>
@@ -1033,10 +1040,50 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
               onClick={() => updateBrush({ textureId: t.id })}
             />
           ))}
+          {(engine?.doc.customTextures ?? []).map((t) => (
+            <CustomTextureSwatch
+              key={t.id}
+              texture={t}
+              active={brush.textureId === t.id}
+              onClick={() => updateBrush({ textureId: t.id })}
+              onRemove={() => {
+                if (brush.textureId === t.id) updateBrush({ textureId: null });
+                engine?.removeCustomTexture(t.id);
+              }}
+            />
+          ))}
         </div>
         <p className="hint">
           Cada estampa lleva esta máscara de cobertura en vez de un círculo liso: es lo
           que da la textura granulada del lápiz o la salpicadura del aerógrafo.
+        </p>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          disabled={!engine}
+          onClick={() => textureFileInput.current?.click()}
+        >
+          <IconImage size={16} /> Importar textura…
+        </button>
+        <input
+          ref={textureFileInput}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file || !engine) return;
+            const label = file.name.replace(/\.[^.]+$/, '');
+            const tex = await importCustomBrushTexture(file, label);
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+          }}
+        />
+        <p className="hint">
+          Se guarda con este proyecto (viaja en el .trace), no con la app: cada quien
+          importa las suyas. Usa el canal de transparencia del PNG como forma de la
+          estampa — una imagen sin transparencia entra como un cuadrado sólido.
         </p>
 
         <h3 className="panel__subtitle">QuickShape</h3>
@@ -1190,6 +1237,61 @@ function TextureSwatch({
       <canvas className="texture-chip__canvas" ref={ref} width={size} height={size} />
       <span>{label}</span>
     </button>
+  );
+}
+
+/** Igual que `TextureSwatch`, pero lee el buffer guardado en el documento en
+ *  vez de generarlo — mismo tamaño fijo (`BRUSH_TEXTURE_SIZE`) para todas,
+ *  reescalado al tamaño de la miniatura con el propio canvas. */
+function CustomTextureSwatch({
+  texture,
+  active,
+  onClick,
+  onRemove,
+}: {
+  texture: CustomTexture;
+  active: boolean;
+  onClick: () => void;
+  onRemove: () => void;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const size = 40;
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const full = Math.round(Math.sqrt(texture.pixels.length / 4));
+    const src = document.createElement('canvas');
+    src.width = full;
+    src.height = full;
+    src
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(texture.pixels.buffer as ArrayBuffer), full, full), 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(src, 0, 0, full, full, 0, 0, size, size);
+  }, [texture]);
+
+  return (
+    <div className="pose-cell">
+      <button
+        type="button"
+        className={`brush-chip ${active ? 'is-active' : ''}`}
+        onClick={onClick}
+        title={texture.label}
+      >
+        <canvas className="texture-chip__canvas" ref={ref} width={size} height={size} />
+        <span>{texture.label}</span>
+      </button>
+      <button
+        type="button"
+        className="pose-cell__remove"
+        aria-label={`Quitar ${texture.label}`}
+        onClick={onRemove}
+      >
+        <IconTrash size={12} />
+      </button>
+    </div>
   );
 }
 

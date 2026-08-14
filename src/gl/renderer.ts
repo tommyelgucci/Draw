@@ -10,7 +10,6 @@ import {
   STAMP_FS,
   STAMP_VS,
 } from './shaders';
-import { generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import { extractRect } from '../core/flood';
 import { mat3Identity, type Mat3 } from '../core/math';
 import type { Mesh } from '../core/rig';
@@ -86,9 +85,10 @@ export class Renderer {
    *  vértices pesa kilobytes, no megabytes, frente a una superficie del
    *  tamaño del documento — ver plan de diseño del módulo de rig. */
   private meshGPU = new Map<string, { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; ibo: WebGLBuffer; indexCount: number }>();
-  /** Máscaras de punta de pincel, generadas una vez y cacheadas por id: no
-   * dependen del tamaño del documento, así que sobreviven a `setDocumentSize`. */
-  private brushTextures = new Map<BuiltinTextureId, WebGLTexture>();
+  /** Máscaras de punta de pincel, generadas o subidas una vez y cacheadas
+   * por id (integrada o `CustomTexture.id`): no dependen del tamaño del
+   * documento, así que sobreviven a `setDocumentSize`. */
+  private brushTextures = new Map<string, WebGLTexture>();
   private resident = new Set<Surface>();
   private clock = 0;
   private maxResident = MAX_RESIDENT;
@@ -433,17 +433,20 @@ export class Renderer {
    * ---------------------------------------------------------------- */
 
   /**
-   * Textura de máscara para una punta de pincel con textura, generada la
-   * primera vez que se pide y cacheada después. `null` (punta lisa) no pasa
-   * por aquí: lo resuelve el llamador antes de invocar este método.
+   * Textura de máscara para una punta de pincel con textura, generada o
+   * subida la primera vez que se pide y cacheada después. `null` (punta
+   * lisa) no pasa por aquí: lo resuelve el llamador antes de invocar este
+   * método. `resolvePixels` sólo se llama en un fallo de caché — así una
+   * textura integrada (cara de generar, con cientos de `paintDot`) no se
+   * recalcula en cada estampa, sólo la primera vez.
    */
-  getBrushTexture(id: BuiltinTextureId): WebGLTexture {
+  getBrushTexture(id: string, resolvePixels: () => Uint8Array): WebGLTexture {
     const cached = this.brushTextures.get(id);
     if (cached) return cached;
 
     const gl = this.gl;
     const size = 128;
-    const pixels = generateBrushTexturePixels(id, size);
+    const pixels = resolvePixels();
     const levels = Math.floor(Math.log2(size)) + 1;
 
     const tex = gl.createTexture()!;

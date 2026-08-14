@@ -2,6 +2,7 @@ import { unzipSync, zipSync, type ZipOptions } from 'fflate';
 import type { Engine } from './engine';
 import { deleteSpillBytes, readSpillBytes, writeSpillBytes } from '../gl/opfsCache';
 import type { Surface } from '../gl/renderer';
+import { BRUSH_TEXTURE_SIZE, type CustomTexture } from './brushTexture';
 import { historyOpByteLength, type HistoryOp } from './historyOps';
 import {
   celAt,
@@ -115,6 +116,9 @@ interface SerializedDoc {
   /** Ausente en proyectos sin pista de audio; el archivo real va aparte,
    *  bajo `audio/<id>` — ver `normalizeAudioTrack`. */
   audio?: AudioTrack;
+  /** Ausente en proyectos sin texturas de pincel importadas. El PNG de cada
+   *  una va aparte, bajo `textures/<id>.png`. */
+  customTextures?: { id: string; label: string }[];
   /** Racha más reciente de pasos de deshacer persistidos — ver
    *  `packHistory`/`unpackHistory`. Ausente en proyectos sin nada que
    *  persistir (historial vacío, o ninguno de los últimos pasos era de un
@@ -147,6 +151,17 @@ function canvasFromImageData(data: ImageData): HTMLCanvasElement {
   c.height = data.height;
   c.getContext('2d')!.putImageData(data, 0, 0);
   return c;
+}
+
+/** `drawImage` reescala si `bitmap` no mide ya `size`×`size` — así una
+ *  textura vieja guardada a otro tamaño no rompe al reabrir. */
+function bitmapToPixels(bitmap: ImageBitmap, size: number): Uint8Array {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(bitmap, 0, 0, size, size);
+  return new Uint8Array(ctx.getImageData(0, 0, size, size).data.buffer);
 }
 
 function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
@@ -402,6 +417,17 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       files[`audio/${doc.audio.id}`] = engine.audioBytes;
     }
 
+    const customTextures: { id: string; label: string }[] = [];
+    for (const tex of doc.customTextures) {
+      customTextures.push({ id: tex.id, label: tex.label });
+      const imgData = new ImageData(
+        new Uint8ClampedArray(tex.pixels.buffer as ArrayBuffer),
+        BRUSH_TEXTURE_SIZE,
+        BRUSH_TEXTURE_SIZE,
+      );
+      files[`textures/${tex.id}.png`] = await canvasToPngBytes(canvasFromImageData(imgData));
+    }
+
     const { steps: historySteps, patches: historyPatches } = packHistory(engine);
 
     const meta: SerializedDoc = {
@@ -421,6 +447,7 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       meshes: doc.meshes,
       layerGroups: doc.layerGroups,
       audio: doc.audio,
+      customTextures: customTextures.length > 0 ? customTextures : undefined,
       history: historySteps.length > 0 ? historySteps : undefined,
     };
     files['trace.json'] = new TextEncoder().encode(JSON.stringify(meta));
@@ -478,6 +505,14 @@ export async function deserializeProject(
   doc.skeletons = normalizeSkeletons(meta.skeletons);
   doc.meshes = normalizeMeshes(meta.meshes);
   doc.layerGroups = normalizeLayerGroups(meta.layerGroups);
+
+  for (const t of meta.customTextures ?? []) {
+    const png = files[`textures/${t.id}.png`];
+    if (!png) continue;
+    const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }));
+    doc.customTextures.push({ id: t.id, label: t.label, pixels: bitmapToPixels(bitmap, BRUSH_TEXTURE_SIZE) });
+    bitmap.close();
+  }
 
   engine.renderer.setDocumentSize(doc.width, doc.height);
 
@@ -956,6 +991,24 @@ export async function importAudioTrack(engine: Engine, file: File): Promise<void
     await ctx.close();
   }
   engine.setAudioTrack(bytes, file.type || 'audio/mpeg', baseName(file.name), duration, peaks);
+}
+
+/**
+ * Decodifica una imagen propia como textura de punta de pincel: mismo
+ * formato que las 4 integradas (RGBA8 128×128, sólo importa el canal alfa
+ * como cobertura — ver `brushTexture.ts`). Toma el alfa del PNG de origen
+ * tal cual, sin inventar una máscara a partir del brillo: si la imagen no
+ * trae transparencia real, el resultado es un cuadrado sólido — mejor eso,
+ * explicable, que adivinar mal en silencio. No toca el documento: el
+ * llamador decide si guardarla con `engine.addCustomTexture`.
+ */
+export async function importCustomBrushTexture(file: File, label: string): Promise<CustomTexture> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    return { id: uid('tex'), label, pixels: bitmapToPixels(bitmap, BRUSH_TEXTURE_SIZE) };
+  } finally {
+    bitmap.close();
+  }
 }
 
 /** Imagen suelta: una capa de referencia con un único cel sostenido. */

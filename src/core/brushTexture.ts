@@ -23,6 +23,29 @@ export const BUILTIN_TEXTURES: { id: BuiltinTextureId; label: string }[] = [
   { id: 'splatter', label: 'Salpicadura' },
 ];
 
+const BUILTIN_IDS: readonly string[] = BUILTIN_TEXTURES.map((t) => t.id);
+
+export function isBuiltinTextureId(id: string): id is BuiltinTextureId {
+  return BUILTIN_IDS.includes(id);
+}
+
+/** Tamaño fijo de toda textura de punta, integrada o importada — el mismo
+ *  que ya sube `gl/renderer.ts` a la GPU. */
+export const BRUSH_TEXTURE_SIZE = 128;
+
+/**
+ * Textura de punta importada por quien dibuja, a diferencia de las 4
+ * integradas: mismo formato de buffer (RGBA8, sólo importa el alfa como
+ * cobertura), pero los píxeles vienen de un PNG propio, no de un generador
+ * determinista. Vive en `TraceDocument` — es un activo del proyecto que
+ * viaja con el `.trace`, no parte del kit que se distribuye con la app.
+ */
+export interface CustomTexture {
+  id: string;
+  label: string;
+  pixels: Uint8Array;
+}
+
 const SEEDS: Record<BuiltinTextureId, number> = {
   grain: 0x9e3779b1,
   chalk: 0x85ebca77,

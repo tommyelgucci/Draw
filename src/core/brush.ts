@@ -53,8 +53,13 @@ export interface BrushPreset {
   aspect: number;
   /** Borra en vez de pintar. */
   erase: boolean;
-  /** Máscara de cobertura por estampa; `null` = punta lisa (el círculo de siempre). */
-  textureId: BuiltinTextureId | null;
+  /**
+   * Máscara de cobertura por estampa; `null` = punta lisa (el círculo de
+   * siempre). Un `BuiltinTextureId` referencia una de las 4 integradas;
+   * cualquier otro string referencia un `CustomTexture.id` del documento
+   * activo (importada por quien dibuja) — ver `Engine.resolveTexturePixels`.
+   */
+  textureId: BuiltinTextureId | string | null;
 }
 
 export const DEFAULT_BRUSHES: BrushPreset[] = [
