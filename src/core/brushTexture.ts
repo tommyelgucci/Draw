@@ -489,3 +489,86 @@ export function generateBurstTexturePixels(
 
   return buf;
 }
+
+/**
+ * Púas paralelas (peine, cerdas): varias marcas alargadas horizontales
+ * apiladas en carriles regulares, cada una con su propia semilla de
+ * aspereza de borde y longitud — un peine es esto con poca variación entre
+ * púas; unas cerdas gastadas, con mucha. Con `angleJitter` del pincel en 0
+ * salen todas alineadas (peine); subiéndolo, cada estampa gira al azar y
+ * el resultado se dispersa como mechones de pelo o césped — la orientación
+ * no vive en la textura, vive en cómo se estampa cada copia.
+ */
+export interface RakeTextureParams {
+  seed: number;
+  count: number;
+  /** 0..1: longitud de cada púa como fracción del lienzo. */
+  length: number;
+  /** 0..1: grosor de cada púa respecto al carril que le toca. */
+  thickness: number;
+  /** 0..1: cuánto varía la longitud de una púa a otra. */
+  irregularity: number;
+  /** 0..1: cuánto tiembla el borde de cada púa. */
+  roughness: number;
+  opacity: number;
+}
+
+export function generateRakeTexturePixels(
+  params: RakeTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const rand = mulberry32(params.seed);
+  const count = Math.max(2, Math.round(params.count));
+  const laneHeight = size / count;
+  const cx = size / 2;
+
+  for (let lane = 0; lane < count; lane++) {
+    const cy = laneHeight * (lane + 0.5);
+    const halfLen = (size / 2) * params.length * (1 + (rand() * 2 - 1) * params.irregularity * 0.6);
+    if (halfLen <= 0) continue;
+    const baseHalfThick = Math.max(0.5, laneHeight * 0.5 * params.thickness);
+
+    const CONTROLS = 16;
+    const edgeNoise = Array.from({ length: CONTROLS + 1 }, () => rand() * 2 - 1);
+    const noiseAt = (u: number) => {
+      const t = u * CONTROLS;
+      const i0 = Math.floor(t);
+      const i1 = Math.min(CONTROLS, i0 + 1);
+      const f = t - i0;
+      return edgeNoise[i0] * (1 - f) + edgeNoise[i1] * f;
+    };
+
+    const y0 = Math.max(0, Math.floor(cy - baseHalfThick - 2));
+    const y1 = Math.min(size - 1, Math.ceil(cy + baseHalfThick + 2));
+    const x0 = Math.max(0, Math.floor(cx - halfLen - 2));
+    const x1 = Math.min(size - 1, Math.ceil(cx + halfLen + 2));
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - cy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx;
+        const u = Math.min(1, Math.max(0, (dx / halfLen + 1) / 2));
+        // Las púas se afinan un poco hacia la punta siempre, aunque la marca
+        // alargada suelta deje elegir — así se leen como púas, no como barras.
+        const endTaper = 1 - 0.5 * smoothstep(0.6, 1, Math.abs(dx) / halfLen);
+        const wobble = 1 + noiseAt(u) * params.roughness * 0.6;
+        const halfThickHere = Math.max(0.5, baseHalfThick * endTaper * wobble);
+        const lenFalloff = 1 - smoothstep(halfLen * 0.85, halfLen, Math.abs(dx));
+        const edge = Math.abs(dy) - halfThickHere;
+        const edgeAlpha = 1 - smoothstep(-1.2, 1.2, edge);
+        const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * params.opacity;
+        const idx = (y * size + x) * 4 + 3;
+        const v = Math.round(a * 255);
+        if (v > buf[idx]) buf[idx] = v;
+      }
+    }
+  }
+
+  return buf;
+}

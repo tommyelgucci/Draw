@@ -45,6 +45,11 @@ export interface BrushPreset {
   scatter: number;
   /** La punta gira siguiendo la dirección del trazo. */
   followDirection: boolean;
+  /** Giro aleatorio por estampa, 0..1 (fracción de ±90°) — lo que separa un
+   *  peine de púas fijas (0) de un mechón de pelo o césped disperso (>0):
+   *  misma textura alargada, orientación de cada estampa al azar en vez de
+   *  todas alineadas con el trazo. */
+  angleJitter: number;
   /** Afina ambos extremos del trazo hasta un punto, 0 = sin afinar. La
    * longitud real en píxeles escala con `size` (ver `taperScale`), así que
    * el mismo valor se ve proporcional en una punta fina que en una gruesa. */
@@ -81,6 +86,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.12,
     scatter: 0.05,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.3,
     aspect: 1,
     erase: false,
@@ -106,6 +112,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.15,
     scatter: 0.08,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.15,
     aspect: 1,
     erase: false,
@@ -130,6 +137,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.1,
     scatter: 0.04,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.25,
     aspect: 0.9,
     erase: false,
@@ -152,6 +160,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.2,
     scatter: 0.15,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.1,
     aspect: 0.7,
     erase: false,
@@ -176,6 +185,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.45,
     aspect: 1,
     erase: false,
@@ -200,6 +210,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.2,
     aspect: 1,
     erase: false,
@@ -224,6 +235,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    angleJitter: 0,
     taper: 0.15,
     aspect: 0.15,
     erase: false,
@@ -246,6 +258,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: true,
+    angleJitter: 0,
     taper: 0,
     aspect: 0.35,
     erase: false,
@@ -270,6 +283,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.08,
     scatter: 0.12,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.15,
     aspect: 0.85,
     erase: false,
@@ -294,6 +308,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: false,
+    angleJitter: 0,
     taper: 0.1,
     aspect: 1,
     erase: false,
@@ -318,6 +333,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.03,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.1,
     aspect: 0.9,
     erase: false,
@@ -341,6 +357,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: true,
+    angleJitter: 0,
     taper: 0.1,
     aspect: 0.8,
     erase: false,
@@ -365,6 +382,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    angleJitter: 0,
     taper: 0,
     aspect: 1,
     erase: false,
@@ -390,6 +408,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0.1,
     followDirection: false,
+    angleJitter: 0,
     taper: 0,
     aspect: 1,
     erase: false,
@@ -412,6 +431,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.2,
     scatter: 0.2,
     followDirection: false,
+    angleJitter: 0,
     taper: 0,
     aspect: 0.7,
     erase: false,
@@ -434,10 +454,64 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0.05,
     scatter: 0.05,
     followDirection: true,
+    angleJitter: 0,
     taper: 0,
     aspect: 0.6,
     erase: false,
     textureId: 'canvas',
+  },
+  {
+    id: 'grass-scatter',
+    name: 'Césped disperso',
+    category: 'texture',
+    size: 26,
+    opacity: 1,
+    flow: 0.9,
+    hardness: 0.75,
+    spacing: 0.05,
+    pressureSize: 0.2,
+    pressureOpacity: 0.2,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.2,
+    jitterSize: 0.15,
+    scatter: 0.55,
+    followDirection: false,
+    // Punta elíptica muy alargada + giro al azar en cada estampa, sin
+    // ninguna textura: la misma combinación que usan classic/long_grass y
+    // classic/short_grass de MyPaint (CC0) para el mismo efecto — aspect
+    // aquí es el inverso de su elliptical_dab_ratio (3.8-3.9).
+    angleJitter: 0.8,
+    taper: 0,
+    aspect: 0.22,
+    erase: false,
+    textureId: null,
+  },
+  {
+    id: 'hair-scatter',
+    name: 'Pelo disperso',
+    category: 'texture',
+    size: 16,
+    opacity: 1,
+    flow: 0.95,
+    hardness: 0.65,
+    spacing: 0.04,
+    pressureSize: 0.15,
+    pressureOpacity: 0.15,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.2,
+    jitterSize: 0.2,
+    scatter: 0.4,
+    followDirection: false,
+    // Misma mecánica que "Césped disperso" con hebras más finas y algo
+    // menos de dispersión — como experimental/fur de MyPaint
+    // (elliptical_dab_ratio 10, hardness 0.6).
+    angleJitter: 0.6,
+    taper: 0,
+    aspect: 0.12,
+    erase: false,
+    textureId: null,
   },
 
   // --- Borradores -------------------------------------------------------
@@ -458,6 +532,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    angleJitter: 0,
     taper: 0,
     aspect: 1,
     erase: true,
@@ -482,6 +557,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     jitterSize: 0,
     scatter: 0,
     followDirection: false,
+    angleJitter: 0,
     taper: 0,
     aspect: 1,
     erase: true,
@@ -749,6 +825,9 @@ export class StrokeBuilder {
         angle = a.azimuth;
         size *= 1 + tilt * 0.6;
       }
+    }
+    if (b.angleJitter > 0) {
+      angle += (Math.random() - 0.5) * 2 * b.angleJitter * (Math.PI / 2);
     }
 
     return {

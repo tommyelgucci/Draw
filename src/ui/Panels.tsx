@@ -12,12 +12,14 @@ import {
   generateBrushTexturePixels,
   generateBurstTexturePixels,
   generateParametricTexturePixels,
+  generateRakeTexturePixels,
   generateStreakTexturePixels,
   generateWispTexturePixels,
   type BuiltinTextureId,
   type BurstTextureParams,
   type CustomTexture,
   type ParametricTextureParams,
+  type RakeTextureParams,
   type StreakTextureParams,
   type WispTextureParams,
 } from '../core/brushTexture';
@@ -1026,6 +1028,20 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           onChange={(v) => updateBrush({ scatter: v })}
         />
         <Slider
+          label="Giro al azar"
+          value={brush.angleJitter}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => updateBrush({ angleJitter: v })}
+        />
+        <p className="hint">
+          Con una textura de trazo (marca alargada, sección "Generar trazo") y algo
+          de dispersión, esto reparte muchas hebras giradas al azar por el ancho del
+          trazo — un mechón de pelo o césped disperso. En 0%, todas las hebras salen
+          alineadas, como las púas de un peine.
+        </p>
+        <Slider
           label="Punta achatada"
           value={brush.aspect}
           min={0.05}
@@ -1100,6 +1116,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
         <StreakGeneratorSection engine={engine} updateBrush={updateBrush} />
         <WispGeneratorSection engine={engine} updateBrush={updateBrush} />
         <BurstGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <RakeGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1472,6 +1489,7 @@ const STREAK_PRESETS: {
 }[] = [
   { label: 'Cicatriz', values: { length: 0.7, thickness: 0.12, taper: 0.6, roughness: 0.6, opacity: 0.9 } },
   { label: 'Subrayado', values: { length: 0.85, thickness: 0.08, taper: 0.05, roughness: 0.05, opacity: 1 } },
+  { label: 'Brizna', values: { length: 0.9, thickness: 0.04, taper: 0.75, roughness: 0.15, opacity: 1 } },
 ];
 
 /**
@@ -1584,7 +1602,9 @@ function StreakGeneratorSection({
       <p className="hint">
         Se orienta con la rotación de cada estampa — recta por defecto. Aspereza al
         mínimo y puntas romas da un subrayado limpio; al máximo, un borde rasgado de
-        cicatriz o arañazo.
+        cicatriz o arañazo. "Brizna" (fina y muy afilada) más "Dispersión" y "Giro al
+        azar" (mandos de Dinámicas, arriba) reparten muchas hebras al azar por el
+        trazo — pelo o césped disperso, no una sola marca.
       </p>
     </div>
   );
@@ -1824,6 +1844,133 @@ function BurstGeneratorSection({
       <p className="hint">
         Irregularidad baja da un asterisco regular; alta, un estallido de rayos
         desiguales — más rayos y menos grosor da algo más parecido a una chispa.
+      </p>
+    </div>
+  );
+}
+
+const RAKE_PRESETS: {
+  label: string;
+  values: { count: number; length: number; thickness: number; irregularity: number; roughness: number; opacity: number };
+}[] = [
+  { label: 'Peine', values: { count: 7, length: 0.85, thickness: 0.9, irregularity: 0.08, roughness: 0.1, opacity: 1 } },
+  { label: 'Cerdas', values: { count: 14, length: 0.7, thickness: 0.55, irregularity: 0.35, roughness: 0.45, opacity: 0.85 } },
+];
+
+/**
+ * Quinto generador: varias marcas alargadas en carriles paralelos dentro de
+ * la misma textura — peine, cerdas. Distinto de "Generar trazo" en que ahí
+ * es una marca sola; aquí son varias a la vez, del mismo tirón de pincel.
+ * Combinado con "Giro al azar" (mandos de Dinámicas, arriba) cada estampa
+ * gira al azar y el conjunto se lee como un mechón disperso en vez de un
+ * peine fijo — la orientación no vive en la textura, vive en el estampado.
+ */
+function RakeGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [count, setCount] = useState(8);
+  const [length, setLength] = useState(0.8);
+  const [thickness, setThickness] = useState(0.7);
+  const [irregularity, setIrregularity] = useState(0.15);
+  const [roughness, setRoughness] = useState(0.2);
+  const [opacity, setOpacity] = useState(1);
+  const [label, setLabel] = useState('Peine');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: RakeTextureParams = { seed, count, length, thickness, irregularity, roughness, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateRakeTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, count, length, thickness, irregularity, roughness, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar púas…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {RAKE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setCount(p.values.count);
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setIrregularity(p.values.irregularity);
+              setRoughness(p.values.roughness);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Número de púas" value={count} min={2} max={20} step={1} format={(v) => `${Math.round(v)}`} onChange={setCount} />
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Irregularidad" value={irregularity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setIrregularity} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateRakeTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Peine');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Grosor alto casi sin hueco entre púas da un peine sólido; menos grosor y
+        más irregularidad, cerdas sueltas. Sube "Giro al azar" para que cada
+        estampa caiga en un ángulo distinto — el peine se dispersa en mechones.
       </p>
     </div>
   );
