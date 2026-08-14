@@ -60,7 +60,7 @@ export interface BrushPreset {
   erase: boolean;
   /**
    * Máscara de cobertura por estampa; `null` = punta lisa (el círculo de
-   * siempre). Un `BuiltinTextureId` referencia una de las 4 integradas;
+   * siempre). Un `BuiltinTextureId` referencia una de las integradas;
    * cualquier otro string referencia un `CustomTexture.id` del documento
    * activo (importada por quien dibuja) — ver `Engine.resolveTexturePixels`.
    */
@@ -73,6 +73,21 @@ export interface BrushPreset {
    * mezcla digital plana en la misma dirección.
    */
   pigmentMix: number;
+  /**
+   * 0..1: en vez de depositar el color activo del pincel, arrastra el color
+   * que YA está pintado bajo la punta — pintura húmeda que se mezcla al
+   * arrastrar el dedo, no un depósito de color fijo. 0 es el comportamiento
+   * de siempre. Sólo recoge de lo que ya estaba en el cel ANTES de este
+   * trazo (no de lo que el propio trazo lleva pintado hasta ahora) — ver
+   * `Engine.sampleSmudgeColor`.
+   */
+  smudge: number;
+  /**
+   * 0..1: cuánta "memoria" tiene el color recogido de una estampa a la
+   * siguiente — alto lo deja diluirse despacio, bajo lo actualiza casi al
+   * instante con lo que haya justo debajo. Sin efecto si `smudge` es 0.
+   */
+  smudgeLength: number;
 }
 
 export const DEFAULT_BRUSHES: BrushPreset[] = [
@@ -99,6 +114,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     // Lisa por defecto: es el pincel activo al abrir la app y no debe
     // cambiar el trazo de siempre. La textura queda disponible para quien
     // la busque en el panel.
@@ -126,6 +143,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     // A este tamaño el grano ya se lee: por debajo de ~12px se pierde (ver
     // CHECKPOINT.md, deuda conocida).
     textureId: 'grain',
@@ -152,6 +171,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.9,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'grain',
   },
   {
@@ -176,6 +197,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.7,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'chalk',
   },
 
@@ -202,6 +225,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -228,6 +253,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -254,6 +281,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.15,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -278,6 +307,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.35,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
 
@@ -304,6 +335,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.85,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'canvas',
   },
   {
@@ -330,6 +363,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     // La textura de tiza, a baja intensidad, se lee como el granulado del
     // pigmento asentándose en el papel húmedo.
     textureId: 'chalk',
@@ -356,6 +391,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.9,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     // Mate y opaco, sin grano: la acuarela ya cubre ese territorio.
     textureId: null,
   },
@@ -381,6 +418,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.8,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'canvas',
   },
 
@@ -407,6 +446,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     // Con flujo tan bajo, cualquier textura lo deja casi invisible: liso.
     textureId: null,
   },
@@ -434,6 +475,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'splatter',
   },
   {
@@ -458,6 +501,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.7,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'chalk',
   },
   {
@@ -482,6 +527,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.6,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'canvas',
   },
   {
@@ -510,6 +557,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.22,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -537,6 +586,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.12,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -566,6 +617,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 0.35,
     erase: false,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'flat',
   },
   {
@@ -592,7 +645,43 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     // Un poco de mezcla de pigmento: cubrir mucha área de una pasada pide
     // que se note dónde se solapa, no sólo un alfa plano encima.
     pigmentMix: 0.15,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: 'flat',
+  },
+  {
+    id: 'smudge',
+    name: 'Difuminar',
+    category: 'paint',
+    size: 50,
+    opacity: 1,
+    flow: 1,
+    hardness: 0.35,
+    // Espaciado apretado a propósito: "Difuminar" recoge color de nuevo
+    // en cada tanda de estampas (ver `Engine.updateSmudgeColor`), así que
+    // un espaciado amplio se notaría como saltos de color en vez de un
+    // arrastre continuo.
+    spacing: 0.06,
+    pressureSize: 0.2,
+    pressureOpacity: 0,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.3,
+    jitterSize: 0,
+    scatter: 0,
+    followDirection: false,
+    angleJitter: 0,
+    taper: 0,
+    aspect: 1,
+    erase: false,
+    pigmentMix: 0,
+    // smudge=0.9: casi todo lo que sale es lo que ya había pintado bajo la
+    // punta, no el color activo — igual que arrastrar pintura húmeda con el
+    // dedo. smudgeLength moderado: cambia con soltura al cruzar de un color
+    // a otro sin temblar de una estampa a la siguiente.
+    smudge: 0.9,
+    smudgeLength: 0.55,
+    textureId: null,
   },
 
   // --- Borradores -------------------------------------------------------
@@ -618,6 +707,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: true,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
   {
@@ -644,6 +735,8 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     aspect: 1,
     erase: true,
     pigmentMix: 0,
+    smudge: 0,
+    smudgeLength: 0.5,
     textureId: null,
   },
 ];
