@@ -74,6 +74,7 @@ import {
 } from './selection';
 import {
   clamp,
+  lerp,
   mat3Apply,
   mat3FromTRS,
   mat3Identity,
@@ -336,6 +337,11 @@ export class Engine {
   private strokeLayer: Layer | null = null;
   private strokeCtx: StrokeContext | null = null;
   private strokeRect: Rect = emptyRect();
+  /** Color que va arrastrando "Difuminar" (`brush.smudge`) de una estampa a
+   *  la siguiente — `null` hasta la primera muestra del trazo. Se reinicia
+   *  en cada `beginStroke`: el arrastre no debe "recordar" nada del trazo
+   *  anterior. Ver `sampleSmudgeColor` y `drawToWet`. */
+  private smudgeColor: RGB | null = null;
   private createdCelFrame = -1;
   /** Fotograma vigente al empezar el trazo — hace falta junto a
    *  `createdCelFrame` para resolver el cel sostenido correcto al persistir
@@ -2238,6 +2244,7 @@ export class Engine {
     this.tailStamps = [];
     this.strokeLen = 0;
     this.lastTailPos = null;
+    this.smudgeColor = null;
 
     this.renderer.clear(this.renderer.scratch('wet'));
     this.renderer.clear(this.renderer.scratch('predict'));
@@ -2405,12 +2412,82 @@ export class Engine {
     const wet = this.renderer.scratch('wet');
     const texId = ctx.brush.textureId;
     const allStamps = [...stamps, ...this.mirrorStamps(stamps)];
+    const color = ctx.brush.smudge > 0 ? this.updateSmudgeColor(stamps[0], ctx) : ctx.color;
     this.renderer.drawStamps(
       wet,
       allStamps,
-      ctx.color,
+      color,
       texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
     );
+  }
+
+  /**
+   * Color de esta tanda de estampas para "Difuminar" — se muestrea UNA vez
+   * por tanda (en la posición de la primera estampa), no por estampa
+   * individual: leer la GPU en cada una saturaría el arrastre de sincronías
+   * de más sin que se note el arrastre más suave, ya que `moveStroke` ya
+   * agrupa varias estampas por fotograma.
+   *
+   * `smudgeColor` es la "cubeta" que se va diluyendo: en cada tanda se
+   * mezcla con lo recién muestreado según `smudgeLength` (alto = cambia
+   * despacio, bajo = casi al instante), y el color final de la estampa es
+   * esa cubeta mezclada con el color activo del pincel según `smudge` (1 =
+   * sólo lo recogido del lienzo, nada de pigmento nuevo).
+   */
+  private updateSmudgeColor(first: Stamp, ctx: StrokeContext): RGB {
+    if (!this.strokeCel) return ctx.color;
+    const halfExtent = Math.min(20, Math.max(2, first.size * 0.25));
+    const sampled = this.sampleSmudgeColor(this.strokeCel.surface, first.x, first.y, halfExtent);
+    if (sampled) {
+      this.smudgeColor = this.smudgeColor
+        ? {
+            r: lerp(sampled.r, this.smudgeColor.r, ctx.brush.smudgeLength),
+            g: lerp(sampled.g, this.smudgeColor.g, ctx.brush.smudgeLength),
+            b: lerp(sampled.b, this.smudgeColor.b, ctx.brush.smudgeLength),
+          }
+        : sampled;
+    }
+    // Sin nada recogido todavía (lienzo vacío bajo el primer toque): se
+    // pinta con el color activo del pincel, como cualquier trazo normal,
+    // hasta que el arrastre encuentre algo que recoger.
+    const bucket = this.smudgeColor ?? ctx.color;
+    return {
+      r: lerp(ctx.color.r, bucket.r, ctx.brush.smudge),
+      g: lerp(ctx.color.g, bucket.g, ctx.brush.smudge),
+      b: lerp(ctx.color.b, bucket.b, ctx.brush.smudge),
+    };
+  }
+
+  /** Color medio bajo un punto de UN cel (no la composición de capas
+   *  visibles — a diferencia de `pickColor`, "Difuminar" arrastra la pintura
+   *  del propio cel que se está pintando, no lo que se vea encima o debajo).
+   *  Promedia un cuadro pequeño en vez de leer un solo píxel, para que el
+   *  arrastre no tiemble con el grano de una textura; `null` si el área está
+   *  vacía (nada que recoger). Los píxeles vienen premultiplicados: sumar
+   *  RGB y alfa por separado y dividir da la media ponderada por cobertura,
+   *  sin necesidad de despremultiplicar píxel a píxel. */
+  private sampleSmudgeColor(surface: Surface, x: number, y: number, halfExtent: number): RGB | null {
+    const rect = {
+      x: Math.max(0, Math.round(x - halfExtent)),
+      y: Math.max(0, Math.round(y - halfExtent)),
+      x2: Math.min(this.doc.width, Math.round(x + halfExtent)),
+      y2: Math.min(this.doc.height, Math.round(y + halfExtent)),
+    };
+    if (rect.x2 <= rect.x || rect.y2 <= rect.y) return null;
+    const px = this.renderer.readRect(surface, rect);
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    let sumA = 0;
+    const n = px.length / 4;
+    for (let i = 0; i < n; i++) {
+      sumR += px[i * 4];
+      sumG += px[i * 4 + 1];
+      sumB += px[i * 4 + 2];
+      sumA += px[i * 4 + 3];
+    }
+    if (sumA === 0) return null;
+    return { r: sumR / sumA, g: sumG / sumA, b: sumB / sumA };
   }
 
   /** Al soltar el lápiz ya se sabe la longitud real del trazo: lo que

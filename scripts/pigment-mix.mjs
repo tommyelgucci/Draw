@@ -152,12 +152,14 @@ await page.evaluate(
 const erased = await pixelAt(cx, cy);
 check('borrar con pigmentMix=1 en el pincel sigue reduciendo el alfa a 0, no mezcla color', erased[3] < 10, JSON.stringify(erased));
 
-console.log('\n— El kit por defecto (los 20 presets, todos con pigmentMix=0) sigue intacto —');
-const kitOk = await page.evaluate(async () => {
+console.log('\n— El kit por defecto: sólo "Brocha ancha" trae mezcla de pigmento —');
+const kitCheck = await page.evaluate(async () => {
   const { DEFAULT_BRUSHES } = await import('/src/core/brush.ts');
-  return DEFAULT_BRUSHES.every((b) => b.pigmentMix === 0);
+  return DEFAULT_BRUSHES.filter((b) => b.pigmentMix > 0).map((b) => b.id);
 });
-check('ningún preset por defecto trae la mezcla activada', kitOk);
+// "wide-wash" la usa a propósito (cubrir mucha área de una pasada pide que
+// se note dónde se solapa) — ver su comentario en brush.ts.
+check('sólo el preset "wide-wash" trae la mezcla activada', kitCheck.length === 1 && kitCheck[0] === 'wide-wash', JSON.stringify(kitCheck));
 
 console.log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));

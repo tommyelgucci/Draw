@@ -62,11 +62,43 @@ async function inkRatio(centerY, halfHeight) {
   );
 }
 
+log('\n— Geometría en frío de "Plana": una barra ancha, no una gota redonda —');
+const flatGeometry = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const pixels = mod.generateBrushTexturePixels('flat', size);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, inkPx = 0;
+    // Anchura de cada fila con tinta — una barra rasgada tiene que variar
+    // fila a fila (bordes irregulares), no ser el mismo ancho constante en
+    // todas (eso sería un rectángulo perfecto sin rasgar).
+    const rowWidths = new Set();
+    for (let y = 0; y < size; y++) {
+      let rowMinX = Infinity, rowMaxX = -Infinity;
+      for (let x = 0; x < size; x++) {
+        if (pixels[(y * size + x) * 4 + 3] > 40) {
+          inkPx++;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          if (x < rowMinX) rowMinX = x;
+          if (x > rowMaxX) rowMaxX = x;
+        }
+      }
+      if (rowMaxX >= rowMinX) rowWidths.add(rowMaxX - rowMinX);
+    }
+    return { inkPx, w: maxX - minX, h: maxY - minY, distinctRowWidths: rowWidths.size };
+  });
+});
+check('"Plana" pinta algo medible', flatGeometry.inkPx > 0, `${flatGeometry.inkPx}px`);
+check('"Plana" es mucho más ancha que alta (barra, no gota)', flatGeometry.w > flatGeometry.h * 1.8, JSON.stringify(flatGeometry));
+check('el borde superior/inferior varía fila a fila (rasgado, no un rectángulo perfecto)', flatGeometry.distinctRowWidths > 5, `${flatGeometry.distinctRowWidths} anchos distintos`);
+
 log('\n— Selector de textura —');
 await page.click('.rail--top [aria-label="Pincel"]');
 await page.waitForTimeout(300);
 const chipCount = await page.locator('.texture-grid .brush-chip').count();
-check('cinco opciones (lisa + 4 integradas)', chipCount === 5, `${chipCount}`);
+check('seis opciones (lisa + 5 integradas)', chipCount === 6, `${chipCount}`);
 await page.screenshot({ path: `${out}/brush-tex-00-panel.png` });
 
 // Pincel grande y de flujo alto: así el hueco de la textura se nota de sobra.

@@ -154,6 +154,163 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
+ * "Colores del racimo" es un degradado de la BASE a la PUNTA de cada
+ * hebra, no un color al azar por hebra — corrección tras el comentario de
+ * que el fuego generado salía "sólido y plano": el fuego real es casi
+ * blanco en la base (más calor) y se enfría hacia la punta.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Colores del racimo" degrada de la base a la punta de cada hebra —');
+const gradientResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const params = {
+      seed: 9, count: 1, bladeLength: 0.8, lengthVariation: 0, thickness: 0.1,
+      taper: 0.2, roughness: 0, curl: 0, glow: 0, sparks: 0, spread: 0, angleSpread: 0, opacity: 1,
+      colors: [{ r: 255, g: 255, b: 255 }, { r: 255, g: 0, b: 0 }],
+    };
+    const pixels = mod.generateClusterTexturePixels(params, size);
+    const baseY = size * 0.9;
+    const len = size * 0.5 * params.bladeLength;
+    // Cerca de la base (u≈0.15, ya pasado el ensanche de arranque) y cerca
+    // de la punta (u≈0.85, antes del afinado final) — dos filas, un color
+    // esperado distinto en cada una.
+    const sampleRow = (u) => {
+      const y = Math.round(baseY - len * u);
+      const cx = Math.round(size / 2);
+      const i = (y * size + cx) * 4;
+      return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2], a: pixels[i + 3] };
+    };
+    return { nearBase: sampleRow(0.15), nearTip: sampleRow(0.85) };
+  });
+});
+check(
+  'cerca de la base domina el primer color (blanco)',
+  gradientResult.nearBase.a > 120 && gradientResult.nearBase.g > 180 && gradientResult.nearBase.b > 180,
+  JSON.stringify(gradientResult.nearBase),
+);
+check(
+  'cerca de la punta domina el segundo color (rojo, sin verde ni azul)',
+  gradientResult.nearTip.a > 120 && gradientResult.nearTip.r > 180 && gradientResult.nearTip.g < 80 && gradientResult.nearTip.b < 80,
+  JSON.stringify(gradientResult.nearTip),
+);
+
+/* ------------------------------------------------------------------ *
+ * "Halo" añade un borde difuminado más ancho que el núcleo nítido —
+ * "bordes suaves" en vez de un recorte duro.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Halo" difumina el borde más allá del núcleo nítido —');
+const glowResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const base = {
+      seed: 4, count: 1, bladeLength: 0.6, lengthVariation: 0, thickness: 0.12,
+      taper: 0.2, roughness: 0, curl: 0, spread: 0, angleSpread: 0, opacity: 1,
+    };
+    // A media hebra, justo FUERA del núcleo nítido (halfThick teórico +
+    // unos px de más): con halo alto debe quedar algo de alfa ahí; sin
+    // halo, nada.
+    const y = Math.round(size * 0.9 - size * 0.5 * base.bladeLength * 0.5);
+    const halfThickPx = (size * base.thickness) / 2;
+    const alphaJustOutsideCore = (pixels) => {
+      const cx = Math.round(size / 2 + halfThickPx + 4);
+      return pixels[(y * size + cx) * 4 + 3];
+    };
+    const noGlow = alphaJustOutsideCore(mod.generateClusterTexturePixels({ ...base, glow: 0 }, size));
+    const withGlow = alphaJustOutsideCore(mod.generateClusterTexturePixels({ ...base, glow: 0.9 }, size));
+    return { noGlow, withGlow };
+  });
+});
+check(
+  'sin halo, justo fuera del núcleo no hay alfa',
+  glowResult.noGlow < 10,
+  `alfa=${glowResult.noGlow}`,
+);
+check(
+  'con halo alto, justo fuera del núcleo sí hay algo de alfa (el halo suave)',
+  glowResult.withGlow > 20,
+  `alfa=${glowResult.withGlow}`,
+);
+
+/* ------------------------------------------------------------------ *
+ * "Chispas" salpica motas sueltas por encima de las puntas.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Chispas" salpica motas sueltas por encima de las puntas —');
+const sparksResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const base = {
+      seed: 2, count: 6, bladeLength: 0.5, lengthVariation: 0.1, thickness: 0.08,
+      taper: 0.6, roughness: 0.2, curl: 0.2, glow: 0, spread: 0.6, angleSpread: 0.2, opacity: 1,
+    };
+    // Fila más alta (número de fila más bajo) con algo de tinta: sin
+    // chispas, la marca el racimo (base - largo). Con chispas, algunas
+    // motas se sueltan por encima de eso, así que ese punto debe subir
+    // (número de fila aún más bajo) — no fijamos un umbral absoluto en
+    // píxeles, comparamos contra el propio racimo sin chispas.
+    const topInkRow = (pixels) => {
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (pixels[(y * size + x) * 4 + 3] > 40) return y;
+        }
+      }
+      return size;
+    };
+    const noSparksTop = topInkRow(mod.generateClusterTexturePixels({ ...base, sparks: 0 }, size));
+    const withSparksTop = topInkRow(mod.generateClusterTexturePixels({ ...base, sparks: 1 }, size));
+    return { noSparksTop, withSparksTop };
+  });
+});
+check(
+  'con chispas al máximo, aparece tinta por encima de donde llega el racimo sin chispas',
+  sparksResult.withSparksTop < sparksResult.noSparksTop,
+  `sin chispas: fila ${sparksResult.noSparksTop}, con chispas: fila ${sparksResult.withSparksTop}`,
+);
+
+/* ------------------------------------------------------------------ *
+ * "baseAngle" cambia hacia dónde crecen las hebras — 0 (pelaje, para
+ * arrastrar el pincel) debe dar una mancha más ANCHA que ALTA; el valor
+ * por defecto (-PI/2, césped/hojas/fuego/pelo) da lo contrario.
+ * ------------------------------------------------------------------ */
+console.log('\n— "baseAngle" en 0 da una mancha ancha, no una columna alta —');
+const baseAngleResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const params = {
+      seed: 6, count: 20, bladeLength: 0.95, lengthVariation: 0.15, thickness: 0.03,
+      taper: 0.4, roughness: 0.2, curl: 0.08, glow: 0, sparks: 0, spread: 0.4, angleSpread: 0.12, opacity: 1,
+      layout: 'parallel',
+    };
+    const bbox = (pixels) => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (pixels[(y * size + x) * 4 + 3] > 40) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return { w: maxX - minX, h: maxY - minY };
+    };
+    const horizontal = bbox(mod.generateClusterTexturePixels({ ...params, baseAngle: 0 }, size));
+    const vertical = bbox(mod.generateClusterTexturePixels(params, size)); // sin baseAngle: por defecto -PI/2
+    return { horizontal, vertical };
+  });
+});
+check(
+  'baseAngle=0 da una mancha más ancha que alta (pelaje, horizontal)',
+  baseAngleResult.horizontal.w > baseAngleResult.horizontal.h,
+  JSON.stringify(baseAngleResult.horizontal),
+);
+check(
+  'sin baseAngle (por defecto) da una mancha más alta que ancha (césped, vertical)',
+  baseAngleResult.vertical.h > baseAngleResult.vertical.w,
+  JSON.stringify(baseAngleResult.vertical),
+);
+
+/* ------------------------------------------------------------------ *
  * Panel real: abrir, cambiar preset, crear textura.
  * ------------------------------------------------------------------ */
 console.log('\n— Panel del generador de racimo: presets y creación —');
@@ -181,6 +338,22 @@ await page.locator('.preset-row .chip', { hasText: 'Hojas' }).click();
 await page.waitForTimeout(150);
 const afterPreset = await previewPixelSample();
 check('el preset "Hojas" cambia la vista previa', afterPreset !== beforePreset, `${beforePreset} → ${afterPreset}`);
+
+console.log('\n— Los presets de pelaje existen y se pueden elegir —');
+await page.locator('.preset-row .chip', { hasText: 'Pelaje corto' }).click();
+await page.waitForTimeout(150);
+const furPreview = await previewPixelSample();
+check('el preset "Pelaje corto" pinta algo (no queda en blanco)', furPreview > 0, `${furPreview}`);
+await page.locator('.preset-row .chip', { hasText: 'Pelaje largo' }).click();
+await page.waitForTimeout(150);
+const furLongPreview = await previewPixelSample();
+check('el preset "Pelaje largo" cambia la vista previa respecto a "Pelaje corto"', furLongPreview !== furPreview, `${furPreview} → ${furLongPreview}`);
+
+// Vuelve a un preset en "Dispersa" — los de pelaje ya dejan "Paralela"
+// puesta, y si no se resetea el siguiente chequeo compara Paralela contra
+// sí misma.
+await page.locator('.preset-row .chip', { hasText: 'Hojas' }).click();
+await page.waitForTimeout(150);
 
 console.log('\n— "Distribución": Dispersa/Paralela cambia la vista previa —');
 const beforeLayout = await previewPixelSample();
