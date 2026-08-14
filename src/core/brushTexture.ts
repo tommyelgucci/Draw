@@ -242,3 +242,80 @@ export function generateParametricTexturePixels(
 
   return buf;
 }
+
+/**
+ * Marca alargada (cicatriz, subrayado, arañazo): una franja horizontal con
+ * las puntas afiladas o romas y el borde limpio o rasgado, según los
+ * parámetros — no un tarro cerrado de "cicatriz" y otro de "subrayado",
+ * sino los dos extremos del mismo mando de aspereza. Distinta forma de base
+ * a `ParametricTextureParams` (dispersión radial): aquí todo se mide a lo
+ * largo de un eje, así que necesita su propio generador, no una rama del
+ * de motas. Como cualquier textura de punta, se orienta con la rotación de
+ * cada estampa — recta por defecto, alineada con la dirección del trazo si
+ * el pincel ya gira con él.
+ */
+export interface StreakTextureParams {
+  seed: number;
+  /** 0..1: fracción del lienzo de textura que ocupa la longitud. */
+  length: number;
+  /** 0..1: grosor en el centro, como fracción del lienzo. */
+  thickness: number;
+  /** 0..1: cuánto se afinan las puntas — 0 quedan romas, 1 casi en punta. */
+  taper: number;
+  /** 0..1: cuánto tiembla el borde respecto a una franja perfectamente recta. */
+  roughness: number;
+  opacity: number;
+}
+
+export function generateStreakTexturePixels(
+  params: StreakTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const halfLen = (params.length * size) / 2;
+  if (halfLen <= 0) return buf;
+
+  const rand = mulberry32(params.seed);
+  // Puntos de control del temblor del borde, interpolados a lo largo de la
+  // marca: una onda coherente, no ruido por píxel — ruido por píxel se vería
+  // como estática, no como un borde rasgado de verdad.
+  const CONTROLS = 24;
+  const edgeNoise = Array.from({ length: CONTROLS + 1 }, () => rand() * 2 - 1);
+  const noiseAt = (u: number) => {
+    const t = u * CONTROLS;
+    const i0 = Math.floor(t);
+    const i1 = Math.min(CONTROLS, i0 + 1);
+    const f = t - i0;
+    return edgeNoise[i0] * (1 - f) + edgeNoise[i1] * f;
+  };
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const baseHalfThick = (params.thickness * size) / 2;
+  const reach = halfLen + baseHalfThick + 2;
+
+  for (let y = 0; y < size; y++) {
+    const dy = y - cy;
+    for (let x = 0; x < size; x++) {
+      const dx = x - cx;
+      if (Math.abs(dx) > reach) continue;
+      const u = Math.min(1, Math.max(0, (dx / halfLen + 1) / 2));
+      const endTaper = 1 - params.taper * smoothstep(0.5, 1, Math.abs(dx) / halfLen);
+      const wobble = 1 + noiseAt(u) * params.roughness * 0.6;
+      const halfThickHere = Math.max(0.5, baseHalfThick * endTaper * wobble);
+      const lenFalloff = 1 - smoothstep(halfLen * 0.85, halfLen, Math.abs(dx));
+      const edge = Math.abs(dy) - halfThickHere;
+      const edgeAlpha = 1 - smoothstep(-1.5, 1.5, edge);
+      const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * params.opacity;
+      buf[(y * size + x) * 4 + 3] = Math.round(a * 255);
+    }
+  }
+
+  return buf;
+}

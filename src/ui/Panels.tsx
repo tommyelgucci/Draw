@@ -11,9 +11,11 @@ import {
   BUILTIN_TEXTURES,
   generateBrushTexturePixels,
   generateParametricTexturePixels,
+  generateStreakTexturePixels,
   type BuiltinTextureId,
   type CustomTexture,
   type ParametricTextureParams,
+  type StreakTextureParams,
 } from '../core/brushTexture';
 import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS, type BrushPreset } from '../core/brush';
 import {
@@ -1091,6 +1093,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           estampa — una imagen sin transparencia entra como un cuadrado sólido.
         </p>
         <TextureGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <StreakGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1327,6 +1330,21 @@ function paramsFromSliders(s: {
 }
 
 /**
+ * Puntos de partida para los cinco mandos — no cambian lo que puede hacer el
+ * generador, sólo ahorran encontrar a tientas la zona de valores de un
+ * estilo reconocible. Ajustados a mano contra el aspecto general de esa
+ * clase de textura, no calcados de ninguna imagen concreta.
+ */
+const TEXTURE_PRESETS: {
+  label: string;
+  values: { weave: number; density: number; size: number; opacity: number; dust: number };
+}[] = [
+  { label: 'Salpicadura', values: { weave: 0, density: 0.22, size: 0.85, opacity: 0.9, dust: 0.55 } },
+  { label: 'Luciérnagas', values: { weave: 0, density: 0.12, size: 0.2, opacity: 0.8, dust: 0.25 } },
+  { label: 'Destellos', values: { weave: 0, density: 0.06, size: 0.15, opacity: 1, dust: 0.5 } },
+];
+
+/**
  * Generador procedural por parámetros: en vez de elegir entre las 4 texturas
  * integradas o importar un PNG ajeno, se ajustan cuatro mandos continuos
  * (trama, densidad, tamaño, opacidad de mota, más polvo suelto) y se ve el
@@ -1349,6 +1367,7 @@ function TextureGeneratorSection({
   const [size, setSize] = useState(0.4);
   const [opacity, setOpacity] = useState(0.7);
   const [dust, setDust] = useState(0);
+  const [label, setLabel] = useState('Generada');
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   const params = paramsFromSliders({ seed, weave, density, size, opacity, dust });
@@ -1375,8 +1394,35 @@ function TextureGeneratorSection({
 
   return (
     <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
       <div className="texture-generator__preview">
         <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {TEXTURE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setWeave(p.values.weave);
+              setDensity(p.values.density);
+              setSize(p.values.size);
+              setOpacity(p.values.opacity);
+              setDust(p.values.dust);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
       <Slider label="Trama" value={weave} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setWeave} />
       <Slider label="Densidad de motas" value={density} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDensity} />
@@ -1395,10 +1441,11 @@ function TextureGeneratorSection({
           onClick={() => {
             if (!engine) return;
             const pixels = generateParametricTexturePixels(params, BRUSH_TEXTURE_SIZE);
-            const tex: CustomTexture = { id: uid('tex'), label: 'Generada', pixels };
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
             engine.addCustomTexture(tex);
             updateBrush({ textureId: tex.id });
             setOpen(false);
+            setLabel('Generada');
           }}
         >
           <IconPlus size={16} />
@@ -1408,6 +1455,130 @@ function TextureGeneratorSection({
       <p className="hint">
         Matemática pura sobre una semilla al azar: no mira ni copia ninguna imagen, así
         que el resultado es tan tuyo como cualquiera de las 4 integradas.
+      </p>
+    </div>
+  );
+}
+
+const STREAK_PRESETS: {
+  label: string;
+  values: { length: number; thickness: number; taper: number; roughness: number; opacity: number };
+}[] = [
+  { label: 'Cicatriz', values: { length: 0.7, thickness: 0.12, taper: 0.6, roughness: 0.6, opacity: 0.9 } },
+  { label: 'Subrayado', values: { length: 0.85, thickness: 0.08, taper: 0.05, roughness: 0.05, opacity: 1 } },
+];
+
+/**
+ * Segundo generador, con forma de base distinta al de motas: una marca
+ * alargada a lo largo de un eje (longitud, grosor, cuánto se afinan las
+ * puntas, cuánto tiembla el borde) en vez de dispersión radial — cicatrices,
+ * subrayados o arañazos son el mismo mando de aspereza en extremos
+ * opuestos, no dos moldes cerrados. Mismo mecanismo de guardado que el
+ * generador de motas y el importador (`engine.addCustomTexture`).
+ */
+function StreakGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [length, setLength] = useState(0.7);
+  const [thickness, setThickness] = useState(0.12);
+  const [taper, setTaper] = useState(0.4);
+  const [roughness, setRoughness] = useState(0.4);
+  const [opacity, setOpacity] = useState(0.9);
+  const [label, setLabel] = useState('Trazo');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: StreakTextureParams = { seed, length, thickness, taper, roughness, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateStreakTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, length, thickness, taper, roughness, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar trazo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {STREAK_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setTaper(p.values.taper);
+              setRoughness(p.values.roughness);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.02} max={0.6} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Puntas afiladas" value={taper} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTaper} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateStreakTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Trazo');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Se orienta con la rotación de cada estampa — recta por defecto. Aspereza al
+        mínimo y puntas romas da un subrayado limpio; al máximo, un borde rasgado de
+        cicatriz o arañazo.
       </p>
     </div>
   );
