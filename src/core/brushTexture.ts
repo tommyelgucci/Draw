@@ -21,13 +21,14 @@
  * propio color por sorpresa.
  */
 
-export type BuiltinTextureId = 'grain' | 'chalk' | 'canvas' | 'splatter';
+export type BuiltinTextureId = 'grain' | 'chalk' | 'canvas' | 'splatter' | 'flat';
 
 export const BUILTIN_TEXTURES: { id: BuiltinTextureId; label: string }[] = [
   { id: 'grain', label: 'Grano' },
   { id: 'chalk', label: 'Tiza' },
   { id: 'canvas', label: 'Lienzo' },
   { id: 'splatter', label: 'Salpicadura' },
+  { id: 'flat', label: 'Plana' },
 ];
 
 const BUILTIN_IDS: readonly string[] = BUILTIN_TEXTURES.map((t) => t.id);
@@ -41,7 +42,7 @@ export function isBuiltinTextureId(id: string): id is BuiltinTextureId {
 export const BRUSH_TEXTURE_SIZE = 128;
 
 /**
- * Textura de punta importada por quien dibuja, a diferencia de las 4
+ * Textura de punta importada por quien dibuja, a diferencia de las
  * integradas: mismo formato de buffer (RGBA8, sólo importa el alfa como
  * cobertura), pero los píxeles vienen de un PNG propio, no de un generador
  * determinista. Vive en `TraceDocument` — es un activo del proyecto que
@@ -62,6 +63,7 @@ const SEEDS: Record<BuiltinTextureId, number> = {
   chalk: 0x85ebca77,
   canvas: 0xc2b2ae63,
   splatter: 0x27d4eb2f,
+  flat: 0x165667b1,
 };
 
 /** PRNG determinista: la textura debe ser igual en cada sesión, no ruido nuevo cada vez. */
@@ -221,13 +223,87 @@ export function generateBrushTexturePixels(id: BuiltinTextureId, size = 128): Ui
       }
       break;
     }
+    case 'flat': {
+      // Barra sólida horizontal, no una punta redonda achatada: bordes
+      // superior/inferior rasgados (cerdas que se separan, no un rectángulo
+      // perfecto) y vetas internas de opacidad (cada cerda deja su propia
+      // marca) — lo que distingue una brocha plana real de una elipse lisa
+      // aplastada. Pensada para combinarse con `aspect` bajo y
+      // `followDirection: false` en el pincel (ver DEFAULT_BRUSHES en
+      // brush.ts): un ángulo fijo, ancha al arrastrar de canto, fina al
+      // arrastrar de perfil — como una brocha plana sostenida quieta.
+      const cx = size / 2;
+      const cy = size / 2;
+      const halfW = size * 0.42;
+      const halfH = size * 0.16;
+
+      const EDGE_CONTROLS = 20;
+      const topNoise = Array.from({ length: EDGE_CONTROLS + 1 }, () => rand());
+      const botNoise = Array.from({ length: EDGE_CONTROLS + 1 }, () => rand());
+      const noiseAt = (arr: number[], u: number) => {
+        const t = u * (arr.length - 1);
+        const i0 = Math.floor(t);
+        const i1 = Math.min(arr.length - 1, i0 + 1);
+        const f = t - i0;
+        return arr[i0] * (1 - f) + arr[i1] * f;
+      };
+
+      // Vetas de cerdas: franjas verticales estrechas (no un degradado por
+      // toda la anchura) con su propia opacidad, para que se lean como
+      // cerdas individuales, no como una sombra suave.
+      const BRISTLE_W = 2.5;
+      const streakCols = Math.ceil((halfW * 2) / BRISTLE_W) + 2;
+      const streakVals = Array.from({ length: streakCols }, () => 0.55 + rand() * 0.45);
+      const streakAt = (px: number) => {
+        const t = px / BRISTLE_W;
+        const i0 = Math.max(0, Math.min(streakCols - 1, Math.floor(t)));
+        const i1 = Math.min(streakCols - 1, i0 + 1);
+        const f = Math.min(1, Math.max(0, t - i0));
+        return streakVals[i0] * (1 - f) + streakVals[i1] * f;
+      };
+
+      const x0 = Math.max(0, Math.floor(cx - halfW - 2));
+      const x1 = Math.min(size - 1, Math.ceil(cx + halfW + 2));
+      const y0 = Math.max(0, Math.floor(cy - halfH - 2));
+      const y1 = Math.min(size - 1, Math.ceil(cy + halfH + 2));
+
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const u = Math.min(1, Math.max(0, (dx / halfW + 1) / 2));
+          if (u <= 0 || u >= 1) continue;
+
+          // Cada borde "come" una fracción distinta del grosor desde su
+          // lado — así el corte queda irregular, no una franja perfecta.
+          const topEat = noiseAt(topNoise, u) * halfH * 0.7;
+          const botEat = noiseAt(botNoise, u) * halfH * 0.7;
+          const localTop = -halfH + topEat;
+          const localBot = halfH - botEat;
+          if (localTop >= localBot) continue;
+          const edge = Math.max(localTop - dy, dy - localBot);
+          const edgeAlpha = 1 - smoothstep(-1, 1, edge);
+
+          // Extremos izquierdo/derecho: transición corta en vez de un
+          // corte cuadrado perfecto.
+          const endFade = smoothstep(0, 0.02, u) * (1 - smoothstep(0.98, 1, u));
+
+          const a = edgeAlpha * endFade * streakAt(x - x0);
+          const idx = (y * size + x) * 4 + 3;
+          const v = Math.round(Math.min(1, Math.max(0, a)) * 255);
+          if (v > buf[idx]) buf[idx] = v;
+        }
+      }
+      break;
+    }
   }
 
   return buf;
 }
 
 /**
- * Parámetros del generador procedural libre: las 4 integradas de arriba son
+ * Parámetros del generador procedural libre: "grano"/"tiza"/"lienzo"/
+ * "salpicadura" (no "plana", que es una forma distinta, ver más abajo) son
  * en el fondo esto mismo con valores fijos (trama para "lienzo", motas para
  * "grano"/"tiza", polvo para "tiza"/"salpicadura") — aquí quedan continuos,
  * para ajustar un estilo en vez de elegir entre cuatro moldes cerrados.

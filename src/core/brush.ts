@@ -539,6 +539,61 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     pigmentMix: 0,
     textureId: null,
   },
+  {
+    id: 'flat-brush',
+    name: 'Pincel plano',
+    category: 'paint',
+    size: 90,
+    opacity: 1,
+    flow: 0.85,
+    hardness: 0.85,
+    spacing: 0.12,
+    pressureSize: 0.2,
+    pressureOpacity: 0.2,
+    tiltAspect: 0,
+    velocitySize: 0,
+    smoothing: 0.25,
+    jitterSize: 0.05,
+    scatter: 0,
+    // `followDirection: false` es lo que hace que sea plano de verdad, no
+    // sólo una elipse achatada: mantiene el mismo ángulo fijo sin importar
+    // hacia dónde se arrastre, así que un trazo de canto sale ancho y uno
+    // de perfil sale fino — el filo de una brocha plana sostenida quieta,
+    // no una punta que gira con el trazo.
+    followDirection: false,
+    angleJitter: 0,
+    taper: 0,
+    aspect: 0.35,
+    erase: false,
+    pigmentMix: 0,
+    textureId: 'flat',
+  },
+  {
+    id: 'wide-wash',
+    name: 'Brocha ancha',
+    category: 'paint',
+    size: 130,
+    opacity: 0.85,
+    flow: 0.6,
+    hardness: 0.5,
+    spacing: 0.15,
+    pressureSize: 0.15,
+    pressureOpacity: 0.25,
+    tiltAspect: 0.1,
+    velocitySize: 0,
+    smoothing: 0.3,
+    jitterSize: 0.08,
+    scatter: 0.03,
+    followDirection: false,
+    angleJitter: 0,
+    taper: 0,
+    aspect: 0.3,
+    erase: false,
+    // Un poco de mezcla de pigmento: cubrir mucha área de una pasada pide
+    // que se note dónde se solapa, no sólo un alfa plano encima.
+    pigmentMix: 0.15,
+    textureId: 'flat',
+  },
 
   // --- Borradores -------------------------------------------------------
   {

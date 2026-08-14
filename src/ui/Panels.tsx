@@ -1386,7 +1386,7 @@ const TEXTURE_PRESETS: {
 ];
 
 /**
- * Generador procedural por parámetros: en vez de elegir entre las 4 texturas
+ * Generador procedural por parámetros: en vez de elegir entre las texturas
  * integradas o importar un PNG ajeno, se ajustan cuatro mandos continuos
  * (trama, densidad, tamaño, opacidad de mota, más polvo suelto) y se ve el
  * resultado en vivo — cálculo puro sobre una semilla, no mira ninguna imagen
@@ -1495,7 +1495,7 @@ function TextureGeneratorSection({
       </div>
       <p className="hint">
         Matemática pura sobre una semilla al azar: no mira ni copia ninguna imagen, así
-        que el resultado es tan tuyo como cualquiera de las 4 integradas.
+        que el resultado es tan tuyo como cualquiera de las integradas.
       </p>
     </div>
   );
