@@ -797,6 +797,13 @@ export interface ClusterTextureParams {
    *  0 desactiva. Reutiliza `paintDot`, con el color de la parada más
    *  cercana a la punta si hay `colors`. */
   sparks?: number;
+  /** Radianes: dirección en la que crecen las hebras, medida como en
+   *  `paintBlade` (0 = hacia +X, -PI/2 = hacia arriba). Por defecto -PI/2
+   *  (césped/hojas/fuego/pelo, crecen "del suelo hacia arriba"). El pelaje
+   *  usa 0 (horizontal) — no porque el pelo "crezca de lado", sino porque
+   *  esta textura se usa arrastrando el pincel, y el eje horizontal de la
+   *  textura es el que se alinea con la dirección del trazo. */
+  baseAngle?: number;
 }
 
 export function generateClusterTexturePixels(
@@ -816,11 +823,18 @@ export function generateClusterTexturePixels(
   const curl = params.curl ?? 0;
   const glow = params.glow ?? 0;
   const colors = params.colors;
-  // Base cerca del borde inferior del lienzo: las hebras nacen "del suelo"
-  // y crecen hacia arriba (ángulo base -90°, hacia v=0 — ver la convención
-  // Y-hacia-abajo de la cabecera del archivo), como una mata real.
-  const baseY = size * 0.9;
-  let minTipY = baseY;
+  const baseAngle = params.baseAngle ?? -Math.PI / 2;
+  // Las bases se reparten en la línea perpendicular a `baseAngle`, cerca del
+  // borde opuesto a hacia donde crecen — para el césped de siempre (hacia
+  // arriba) eso es cerca del borde inferior, como antes. `dir` es hacia
+  // dónde crecen; `perp` es el eje a lo largo del cual se reparten.
+  const dirX = Math.cos(baseAngle);
+  const dirY = Math.sin(baseAngle);
+  const perpX = -dirY;
+  const perpY = dirX;
+  const originX = size / 2 - dirX * size * 0.4;
+  const originY = size / 2 - dirY * size * 0.4;
+  let minTipY = originY;
 
   for (let i = 0; i < count; i++) {
     // "parallel": reparte las bases en fila (como un peine) en vez de al
@@ -828,20 +842,24 @@ export function generateClusterTexturePixels(
     // dispersión pedida — salvo una hebra suelta de vez en cuando (flyaway),
     // que sí toma el abanico completo, igual que un pelo rebelde de verdad.
     const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
-    const bx = parallel
-      ? size / 2 + t * size * 0.5 * params.spread + (rand() * 2 - 1) * size * 0.015
-      : size / 2 + (rand() * 2 - 1) * size * 0.5 * params.spread;
-    const by = baseY - rand() * size * 0.05;
+    const spreadJitter = parallel ? (rand() * 2 - 1) * size * 0.015 : 0;
+    const spreadOffset = parallel
+      ? t * size * 0.5 * params.spread + spreadJitter
+      : (rand() * 2 - 1) * size * 0.5 * params.spread;
+    const alongJitter = rand() * size * 0.05;
+    const bx = originX + perpX * spreadOffset + dirX * alongJitter;
+    const by = originY + perpY * spreadOffset + dirY * alongJitter;
     const len = size * 0.5 * params.bladeLength * (1 + (rand() * 2 - 1) * params.lengthVariation);
     const isFlyaway = parallel && rand() < 0.12;
     const angleSpreadHere = parallel && !isFlyaway ? params.angleSpread * 0.2 : params.angleSpread;
-    const angle = -Math.PI / 2 + (rand() * 2 - 1) * (Math.PI / 2) * angleSpreadHere;
+    const angle = baseAngle + (rand() * 2 - 1) * (Math.PI / 2) * angleSpreadHere;
     const halfThick = Math.max(0.5, (size * params.thickness) / 2);
     const curlHere = (rand() * 2 - 1) * curl;
     paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, curlHere, glow, params.opacity, rand, colors);
-    // Punta aproximada (ángulo mayormente vertical, así que restar `len` en
-    // y es suficiente para saber dónde salpicar chispas por encima).
-    minTipY = Math.min(minTipY, by - len);
+    // Punta aproximada — sólo se usa para las chispas, pensadas para el caso
+    // vertical (fuego); con otras direcciones sigue siendo una aproximación
+    // razonable de "por dónde asoman las puntas".
+    minTipY = Math.min(minTipY, by + dirY * len);
   }
 
   const sparks = params.sparks ?? 0;

@@ -267,6 +267,50 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
+ * "baseAngle" cambia hacia dónde crecen las hebras — 0 (pelaje, para
+ * arrastrar el pincel) debe dar una mancha más ANCHA que ALTA; el valor
+ * por defecto (-PI/2, césped/hojas/fuego/pelo) da lo contrario.
+ * ------------------------------------------------------------------ */
+console.log('\n— "baseAngle" en 0 da una mancha ancha, no una columna alta —');
+const baseAngleResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const params = {
+      seed: 6, count: 20, bladeLength: 0.95, lengthVariation: 0.15, thickness: 0.03,
+      taper: 0.4, roughness: 0.2, curl: 0.08, glow: 0, sparks: 0, spread: 0.4, angleSpread: 0.12, opacity: 1,
+      layout: 'parallel',
+    };
+    const bbox = (pixels) => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (pixels[(y * size + x) * 4 + 3] > 40) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return { w: maxX - minX, h: maxY - minY };
+    };
+    const horizontal = bbox(mod.generateClusterTexturePixels({ ...params, baseAngle: 0 }, size));
+    const vertical = bbox(mod.generateClusterTexturePixels(params, size)); // sin baseAngle: por defecto -PI/2
+    return { horizontal, vertical };
+  });
+});
+check(
+  'baseAngle=0 da una mancha más ancha que alta (pelaje, horizontal)',
+  baseAngleResult.horizontal.w > baseAngleResult.horizontal.h,
+  JSON.stringify(baseAngleResult.horizontal),
+);
+check(
+  'sin baseAngle (por defecto) da una mancha más alta que ancha (césped, vertical)',
+  baseAngleResult.vertical.h > baseAngleResult.vertical.w,
+  JSON.stringify(baseAngleResult.vertical),
+);
+
+/* ------------------------------------------------------------------ *
  * Panel real: abrir, cambiar preset, crear textura.
  * ------------------------------------------------------------------ */
 console.log('\n— Panel del generador de racimo: presets y creación —');
@@ -294,6 +338,22 @@ await page.locator('.preset-row .chip', { hasText: 'Hojas' }).click();
 await page.waitForTimeout(150);
 const afterPreset = await previewPixelSample();
 check('el preset "Hojas" cambia la vista previa', afterPreset !== beforePreset, `${beforePreset} → ${afterPreset}`);
+
+console.log('\n— Los presets de pelaje existen y se pueden elegir —');
+await page.locator('.preset-row .chip', { hasText: 'Pelaje corto' }).click();
+await page.waitForTimeout(150);
+const furPreview = await previewPixelSample();
+check('el preset "Pelaje corto" pinta algo (no queda en blanco)', furPreview > 0, `${furPreview}`);
+await page.locator('.preset-row .chip', { hasText: 'Pelaje largo' }).click();
+await page.waitForTimeout(150);
+const furLongPreview = await previewPixelSample();
+check('el preset "Pelaje largo" cambia la vista previa respecto a "Pelaje corto"', furLongPreview !== furPreview, `${furPreview} → ${furLongPreview}`);
+
+// Vuelve a un preset en "Dispersa" — los de pelaje ya dejan "Paralela"
+// puesta, y si no se resetea el siguiente chequeo compara Paralela contra
+// sí misma.
+await page.locator('.preset-row .chip', { hasText: 'Hojas' }).click();
+await page.waitForTimeout(150);
 
 console.log('\n— "Distribución": Dispersa/Paralela cambia la vista previa —');
 const beforeLayout = await previewPixelSample();

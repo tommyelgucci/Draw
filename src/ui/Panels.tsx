@@ -2010,6 +2010,10 @@ const CLUSTER_PRESETS: {
     angleSpread: number;
     opacity: number;
     layout: 'scatter' | 'parallel';
+    /** Ver `ClusterTextureParams.baseAngle`. Ausente = -PI/2 (hacia
+     *  arriba, césped/hojas/fuego/pelo). El pelaje usa 0 (horizontal, para
+     *  alinearse con la dirección del trazo al arrastrar). */
+    baseAngle?: number;
   };
   /** Colores sugeridos (de la base de cada hebra a su punta, ver
    *  `lerpColorStops` en brushTexture.ts) si se activa "Colores del
@@ -2042,6 +2046,22 @@ const CLUSTER_PRESETS: {
     label: 'Mechón',
     values: { count: 20, bladeLength: 0.85, lengthVariation: 0.2, thickness: 0.02, taper: 0.85, roughness: 0.1, curl: 0.2, glow: 0, sparks: 0, spread: 0.5, angleSpread: 0.4, opacity: 1, layout: 'parallel' },
     colorHint: ['#4a2416', '#8a5232', '#c98a55'],
+  },
+  {
+    label: 'Pelaje corto',
+    // baseAngle=0: crece en horizontal, no "hacia arriba" — pensado para
+    // arrastrar el pincel (como la referencia real "Oily Bristles": una
+    // mancha de líneas apretadas, no un mechón suelto). `spread` gobierna
+    // el eje VERTICAL aquí (perpendicular a `baseAngle`) y `bladeLength` el
+    // horizontal — spread bajo + hebras largas es lo que da un parche
+    // ancho y bajo en vez de una columna alta y estrecha.
+    values: { count: 22, bladeLength: 0.95, lengthVariation: 0.15, thickness: 0.035, taper: 0.4, roughness: 0.2, curl: 0.08, glow: 0.15, sparks: 0, spread: 0.4, angleSpread: 0.12, opacity: 1, layout: 'parallel', baseAngle: 0 },
+    colorHint: ['#2b1b12', '#5c3d28', '#a67c52'],
+  },
+  {
+    label: 'Pelaje largo',
+    values: { count: 16, bladeLength: 1, lengthVariation: 0.25, thickness: 0.025, taper: 0.6, roughness: 0.2, curl: 0.15, glow: 0.2, sparks: 0, spread: 0.5, angleSpread: 0.18, opacity: 0.95, layout: 'parallel', baseAngle: 0 },
+    colorHint: ['#241a14', '#6b4a30', '#c9a06a'],
   },
 ];
 
@@ -2076,6 +2096,7 @@ function ClusterGeneratorSection({
   const [angleSpread, setAngleSpread] = useState(0.35);
   const [opacity, setOpacity] = useState(1);
   const [layout, setLayout] = useState<'scatter' | 'parallel'>('scatter');
+  const [baseAngle, setBaseAngle] = useState<number | undefined>(undefined);
   const [colorCount, setColorCount] = useState(0);
   const [color1, setColor1] = useState<RGB>(hexToRgb('#1e3d18'));
   const [color2, setColor2] = useState<RGB>(hexToRgb('#4f9143'));
@@ -2086,7 +2107,7 @@ function ClusterGeneratorSection({
   const to255 = (c: RGB) => ({ r: Math.round(c.r * 255), g: Math.round(c.g * 255), b: Math.round(c.b * 255) });
   const colors = colorCount > 0 ? [color1, color2, color3].slice(0, colorCount).map(to255) : undefined;
   const params: ClusterTextureParams = {
-    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, colors,
+    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, colors, baseAngle,
   };
   const previewSize = 96;
 
@@ -2099,7 +2120,7 @@ function ClusterGeneratorSection({
       .getContext('2d')!
       .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, colorCount, color1, color2, color3]);
+  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, baseAngle, colorCount, color1, color2, color3]);
 
   if (!open) {
     return (
@@ -2142,6 +2163,7 @@ function ClusterGeneratorSection({
               setAngleSpread(p.values.angleSpread);
               setOpacity(p.values.opacity);
               setLayout(p.values.layout);
+              setBaseAngle(p.values.baseAngle);
               setColor1(hexToRgb(p.colorHint[0]));
               setColor2(hexToRgb(p.colorHint[1]));
               setColor3(hexToRgb(p.colorHint[2]));
