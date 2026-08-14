@@ -49,6 +49,7 @@
     "test:history-persist": "node scripts/history-persist.mjs",
     "test:web-export": "node scripts/web-export.mjs",
     "test:custom-brush-texture": "node scripts/custom-brush-texture.mjs",
+    "test:texture-generator": "node scripts/texture-generator.mjs",
     "test:unit": "node --import ./scripts/register-ts-loader.mjs --test src/core/*.test.ts"
   },
   "dependencies": {

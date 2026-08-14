@@ -7,16 +7,20 @@ import {
   type RGB,
 } from '../core/types';
 import {
+  BRUSH_TEXTURE_SIZE,
   BUILTIN_TEXTURES,
   generateBrushTexturePixels,
+  generateParametricTexturePixels,
   type BuiltinTextureId,
   type CustomTexture,
+  type ParametricTextureParams,
 } from '../core/brushTexture';
-import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS } from '../core/brush';
+import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS, type BrushPreset } from '../core/brush';
 import {
   MAX_FRAME_COUNT,
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
+  uid,
   type Layer,
   type LayerGroup,
   type TransformProp,
@@ -62,6 +66,7 @@ import {
   IconText,
   IconTrash,
   IconVideo,
+  IconWand,
 } from './icons';
 
 /* ================================================================== *
@@ -1085,6 +1090,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           importa las suyas. Usa el canal de transparencia del PNG como forma de la
           estampa — una imagen sin transparencia entra como un cuadrado sólido.
         </p>
+        <TextureGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1291,6 +1297,118 @@ function CustomTextureSwatch({
       >
         <IconTrash size={12} />
       </button>
+    </div>
+  );
+}
+
+/** Los 5 mandos simples que expone el panel, ya traducidos a los campos finos
+ *  de `ParametricTextureParams` — así "Tamaño" y "Opacidad" siguen dando una
+ *  mota con algo de variedad propia (min≠max) en vez de un tamaño exacto. */
+function paramsFromSliders(s: {
+  seed: number;
+  weave: number;
+  density: number;
+  size: number;
+  opacity: number;
+  dust: number;
+}): ParametricTextureParams {
+  return {
+    seed: s.seed,
+    weave: s.weave,
+    dotDensity: s.density,
+    dotCells: 14,
+    dotSizeMin: s.size * 0.4,
+    dotSizeMax: Math.min(1, s.size * 0.4 + 0.35),
+    dotOpacityMin: s.opacity * 0.5,
+    dotOpacityMax: Math.min(1, s.opacity * 0.5 + 0.5),
+    dustCount: Math.round(s.dust * 300),
+    dustOpacityMax: s.dust * 0.6,
+  };
+}
+
+/**
+ * Generador procedural por parámetros: en vez de elegir entre las 4 texturas
+ * integradas o importar un PNG ajeno, se ajustan cuatro mandos continuos
+ * (trama, densidad, tamaño, opacidad de mota, más polvo suelto) y se ve el
+ * resultado en vivo — cálculo puro sobre una semilla, no mira ninguna imagen
+ * de nadie. "Crear textura" guarda el resultado con el mismo mecanismo que
+ * ya usa el importador (`engine.addCustomTexture`), así que hereda gratis el
+ * guardado con el proyecto, la miniatura y el botón de quitar.
+ */
+function TextureGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [weave, setWeave] = useState(0);
+  const [density, setDensity] = useState(0.5);
+  const [size, setSize] = useState(0.4);
+  const [opacity, setOpacity] = useState(0.7);
+  const [dust, setDust] = useState(0);
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params = paramsFromSliders({ seed, weave, density, size, opacity, dust });
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateParametricTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, weave, density, size, opacity, dust]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar textura…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <Slider label="Trama" value={weave} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setWeave} />
+      <Slider label="Densidad de motas" value={density} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDensity} />
+      <Slider label="Tamaño de mota" value={size} min={0.05} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSize} />
+      <Slider label="Opacidad de mota" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <Slider label="Polvo" value={dust} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDust} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateParametricTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label: 'Generada', pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Matemática pura sobre una semilla al azar: no mira ni copia ninguna imagen, así
+        que el resultado es tan tuyo como cualquiera de las 4 integradas.
+      </p>
     </div>
   );
 }

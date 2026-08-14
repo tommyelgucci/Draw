@@ -170,3 +170,75 @@ export function generateBrushTexturePixels(id: BuiltinTextureId, size = 128): Ui
 
   return buf;
 }
+
+/**
+ * Parámetros del generador procedural libre: las 4 integradas de arriba son
+ * en el fondo esto mismo con valores fijos (trama para "lienzo", motas para
+ * "grano"/"tiza", polvo para "tiza"/"salpicadura") — aquí quedan continuos,
+ * para ajustar un estilo en vez de elegir entre cuatro moldes cerrados.
+ * Cálculo puro sobre `seed`: no mira ni copia ninguna imagen, así que el
+ * resultado no hereda derechos de nadie más que de quien mueve los mandos.
+ */
+export interface ParametricTextureParams {
+  seed: number;
+  /** 0 = sin trama de fondo, 1 = tejido de lienzo marcado. */
+  weave: number;
+  /** 0..1: probabilidad de que caiga una mota en cada celda de la rejilla. */
+  dotDensity: number;
+  /** Celdas por lado de la rejilla — más celdas, motas más finas y numerosas. */
+  dotCells: number;
+  dotSizeMin: number;
+  dotSizeMax: number;
+  dotOpacityMin: number;
+  dotOpacityMax: number;
+  /** Motas de polvo sueltas, muy pequeñas, encima de la capa principal. */
+  dustCount: number;
+  dustOpacityMax: number;
+}
+
+export function generateParametricTexturePixels(
+  params: ParametricTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const rand = mulberry32(params.seed);
+
+  if (params.weave > 0) {
+    const freq = (Math.PI * 2 * 9) / size;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const weave = 0.55 + 0.35 * Math.sin(x * freq) * Math.sin(y * freq);
+        const a = Math.min(1, Math.max(0, weave)) * params.weave;
+        buf[(y * size + x) * 4 + 3] = Math.round(a * 255);
+      }
+    }
+  }
+
+  if (params.dotDensity > 0) {
+    const cols = Math.max(2, Math.min(32, Math.round(params.dotCells)));
+    const cell = size / cols;
+    for (let gy = 0; gy < cols; gy++) {
+      for (let gx = 0; gx < cols; gx++) {
+        if (rand() > params.dotDensity) continue;
+        const cx = gx * cell + rand() * cell;
+        const cy = gy * cell + rand() * cell;
+        const r = cell * (params.dotSizeMin + rand() * (params.dotSizeMax - params.dotSizeMin));
+        const peak = params.dotOpacityMin + rand() * (params.dotOpacityMax - params.dotOpacityMin);
+        paintDot(buf, size, cx, cy, r, peak);
+      }
+    }
+  }
+
+  for (let i = 0; i < params.dustCount; i++) {
+    const r = size * (0.005 + rand() * 0.015);
+    paintDot(buf, size, rand() * size, rand() * size, r, rand() * params.dustOpacityMax);
+  }
+
+  return buf;
+}
