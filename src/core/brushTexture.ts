@@ -572,3 +572,132 @@ export function generateRakeTexturePixels(
 
   return buf;
 }
+
+/**
+ * Pinta UNA hebra (hoja, brizna, pelo) que nace en `(bx,by)` y crece hacia
+ * `angle` — a diferencia de la marca alargada suelta (centrada, simétrica
+ * hacia los dos lados), esto crece en una sola dirección desde una base,
+ * como brota de verdad una brizna del suelo. Reutilizada muchas veces por
+ * `generateClusterTexturePixels` con posición y ángulo distintos cada vez.
+ */
+function paintBlade(
+  buf: Uint8Array,
+  size: number,
+  bx: number,
+  by: number,
+  angle: number,
+  len: number,
+  halfThick: number,
+  taper: number,
+  roughness: number,
+  opacity: number,
+  rand: () => number,
+) {
+  if (len <= 0) return;
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const reach = len + halfThick + 2;
+  const x0 = Math.max(0, Math.floor(bx - reach));
+  const x1 = Math.min(size - 1, Math.ceil(bx + reach));
+  const y0 = Math.max(0, Math.floor(by - reach));
+  const y1 = Math.min(size - 1, Math.ceil(by + reach));
+
+  const CONTROLS = 10;
+  const edgeNoise = Array.from({ length: CONTROLS + 1 }, () => rand() * 2 - 1);
+  const noiseAt = (u: number) => {
+    const t = u * CONTROLS;
+    const i0 = Math.floor(t);
+    const i1 = Math.min(CONTROLS, i0 + 1);
+    const f = t - i0;
+    return edgeNoise[i0] * (1 - f) + edgeNoise[i1] * f;
+  };
+
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - bx;
+      const dy = y - by;
+      // Coordenadas locales a lo largo del eje de la hebra (0 en la base,
+      // `len` en la punta) y perpendiculares a él.
+      const along = dx * c + dy * s;
+      if (along < -1 || along > len + 1) continue;
+      const perp = -dx * s + dy * c;
+      const u = Math.min(1, Math.max(0, along / len));
+
+      const tipTaper = 1 - taper * smoothstep(0.4, 1, u);
+      // Nace fina desde la base, como una brizna de verdad — sin esto el
+      // arranque queda cortado en seco, un rectángulo con una punta.
+      const baseTaper = smoothstep(0, 0.1, u);
+      const wobble = 1 + noiseAt(u) * roughness * 0.5;
+      const halfThickHere = Math.max(0.4, halfThick * tipTaper * Math.max(0.12, baseTaper) * wobble);
+
+      const lenFalloff = along < 0 ? 0 : 1 - smoothstep(len * 0.85, len, along);
+      const edge = Math.abs(perp) - halfThickHere;
+      const edgeAlpha = 1 - smoothstep(-1, 1, edge);
+      const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * opacity;
+
+      const idx = (y * size + x) * 4 + 3;
+      const v = Math.round(a * 255);
+      if (v > buf[idx]) buf[idx] = v;
+    }
+  }
+}
+
+/**
+ * Racimo/manojo: varias hebras (brizna, hoja, pelo) dentro de la MISMA
+ * textura, cada una con su propia posición, ángulo y longitud — a
+ * diferencia de "Generar trazo" (una sola marca por textura) o de
+ * `angleJitter` (que dispersa la orientación entre estampas SUCESIVAS de un
+ * arrastre), aquí una sola estampa ya es el manojo entero, igual que
+ * "Salpicadura" ya mete varias motas en un solo cuadro — no hace falta
+ * arrastrar para que se note.
+ */
+export interface ClusterTextureParams {
+  seed: number;
+  count: number;
+  /** 0..1: longitud de cada hebra, como fracción del lienzo. */
+  bladeLength: number;
+  /** 0..1: cuánto varía la longitud de una hebra a otra. */
+  lengthVariation: number;
+  /** 0..1: grosor de cada hebra. */
+  thickness: number;
+  /** 0..1: cuánto se afina hacia la punta. */
+  taper: number;
+  /** 0..1: aspereza del borde de cada hebra. */
+  roughness: number;
+  /** 0..1: cuánto se abren las bases a lo ancho del lienzo — poco da un
+   *  mechón apretado, mucho da una mata que ocupa casi todo el cuadro. */
+  spread: number;
+  /** 0..1: cuánto varía el ángulo de cada hebra respecto a "hacia arriba". */
+  angleSpread: number;
+  opacity: number;
+}
+
+export function generateClusterTexturePixels(
+  params: ClusterTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const rand = mulberry32(params.seed);
+  const count = Math.max(1, Math.round(params.count));
+  // Base cerca del borde inferior del lienzo: las hebras nacen "del suelo"
+  // y crecen hacia arriba (ángulo base -90°, hacia v=0 — ver la convención
+  // Y-hacia-abajo de la cabecera del archivo), como una mata real.
+  const baseY = size * 0.9;
+
+  for (let i = 0; i < count; i++) {
+    const bx = size / 2 + (rand() * 2 - 1) * size * 0.5 * params.spread;
+    const by = baseY - rand() * size * 0.05;
+    const len = size * 0.5 * params.bladeLength * (1 + (rand() * 2 - 1) * params.lengthVariation);
+    const angle = -Math.PI / 2 + (rand() * 2 - 1) * (Math.PI / 2) * params.angleSpread;
+    const halfThick = Math.max(0.5, (size * params.thickness) / 2);
+    paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, params.opacity, rand);
+  }
+
+  return buf;
+}

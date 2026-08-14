@@ -11,12 +11,14 @@ import {
   BUILTIN_TEXTURES,
   generateBrushTexturePixels,
   generateBurstTexturePixels,
+  generateClusterTexturePixels,
   generateParametricTexturePixels,
   generateRakeTexturePixels,
   generateStreakTexturePixels,
   generateWispTexturePixels,
   type BuiltinTextureId,
   type BurstTextureParams,
+  type ClusterTextureParams,
   type CustomTexture,
   type ParametricTextureParams,
   type RakeTextureParams,
@@ -1132,6 +1134,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
         <WispGeneratorSection engine={engine} updateBrush={updateBrush} />
         <BurstGeneratorSection engine={engine} updateBrush={updateBrush} />
         <RakeGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <ClusterGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1986,6 +1989,165 @@ function RakeGeneratorSection({
         Grosor alto casi sin hueco entre púas da un peine sólido; menos grosor y
         más irregularidad, cerdas sueltas. Sube "Giro al azar" para que cada
         estampa caiga en un ángulo distinto — el peine se dispersa en mechones.
+      </p>
+    </div>
+  );
+}
+
+const CLUSTER_PRESETS: {
+  label: string;
+  values: {
+    count: number;
+    bladeLength: number;
+    lengthVariation: number;
+    thickness: number;
+    taper: number;
+    roughness: number;
+    spread: number;
+    angleSpread: number;
+    opacity: number;
+  };
+}[] = [
+  {
+    label: 'Mata de césped',
+    values: { count: 14, bladeLength: 0.75, lengthVariation: 0.35, thickness: 0.05, taper: 0.7, roughness: 0.25, spread: 0.8, angleSpread: 0.35, opacity: 1 },
+  },
+  {
+    label: 'Hojas',
+    values: { count: 9, bladeLength: 0.4, lengthVariation: 0.4, thickness: 0.14, taper: 0.5, roughness: 0.3, spread: 0.9, angleSpread: 0.6, opacity: 0.95 },
+  },
+  {
+    label: 'Mechón',
+    values: { count: 20, bladeLength: 0.85, lengthVariation: 0.2, thickness: 0.02, taper: 0.85, roughness: 0.1, spread: 0.5, angleSpread: 0.2, opacity: 1 },
+  },
+];
+
+/**
+ * Sexto generador: varias hebras dentro de la MISMA textura, cada una con su
+ * propia posición y ángulo — a diferencia de "Generar trazo" (una marca) o
+ * de "Giro al azar" (dispersa la orientación entre estampas sucesivas de un
+ * arrastre), aquí una sola estampa ya es el manojo entero. Es la respuesta
+ * directa a "que no dibuje sólo una brizna o una hoja, que dibuje varias" —
+ * mismo principio que ya usa "Salpicadura" metiendo varias motas en un solo
+ * cuadro, aplicado a hebras en vez de puntos.
+ */
+function ClusterGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [count, setCount] = useState(14);
+  const [bladeLength, setBladeLength] = useState(0.75);
+  const [lengthVariation, setLengthVariation] = useState(0.35);
+  const [thickness, setThickness] = useState(0.05);
+  const [taper, setTaper] = useState(0.7);
+  const [roughness, setRoughness] = useState(0.25);
+  const [spread, setSpread] = useState(0.8);
+  const [angleSpread, setAngleSpread] = useState(0.35);
+  const [opacity, setOpacity] = useState(1);
+  const [label, setLabel] = useState('Mata de césped');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: ClusterTextureParams = {
+    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, spread, angleSpread, opacity,
+  };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateClusterTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, spread, angleSpread, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar racimo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {CLUSTER_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setCount(p.values.count);
+              setBladeLength(p.values.bladeLength);
+              setLengthVariation(p.values.lengthVariation);
+              setThickness(p.values.thickness);
+              setTaper(p.values.taper);
+              setRoughness(p.values.roughness);
+              setSpread(p.values.spread);
+              setAngleSpread(p.values.angleSpread);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Número de hebras" value={count} min={2} max={30} step={1} format={(v) => `${Math.round(v)}`} onChange={setCount} />
+      <Slider label="Longitud" value={bladeLength} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setBladeLength} />
+      <Slider label="Variación de longitud" value={lengthVariation} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLengthVariation} />
+      <Slider label="Grosor" value={thickness} min={0.01} max={0.3} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Puntas afiladas" value={taper} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTaper} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Extensión" value={spread} min={0.05} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSpread} />
+      <Slider label="Abanico de ángulo" value={angleSpread} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setAngleSpread} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateClusterTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Mata de césped');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Una sola estampa ya es el manojo entero — no hace falta arrastrar ni subir
+        "Giro al azar" para que se note. Las hebras nacen desde abajo y crecen hacia
+        arriba; "Abanico de ángulo" controla cuánto se abren respecto a vertical.
       </p>
     </div>
   );

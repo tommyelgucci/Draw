@@ -54,6 +54,7 @@
     "test:wisp-burst-generator": "node scripts/wisp-burst-generator.mjs",
     "test:rake-angle-jitter": "node scripts/rake-angle-jitter.mjs",
     "test:pigment-mix": "node scripts/pigment-mix.mjs",
+    "test:cluster-generator": "node scripts/cluster-generator.mjs",
     "test:unit": "node --import ./scripts/register-ts-loader.mjs --test src/core/*.test.ts"
   },
   "dependencies": {
