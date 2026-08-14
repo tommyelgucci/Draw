@@ -2451,7 +2451,14 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(cel.surface, rect);
-    this.mergeStroke(cel.surface, this.renderer.scratch('wet'), ctx.brush.opacity, ctx.brush.erase, layer);
+    this.mergeStroke(
+      cel.surface,
+      this.renderer.scratch('wet'),
+      ctx.brush.opacity,
+      ctx.brush.erase,
+      layer,
+      ctx.brush.pigmentMix,
+    );
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
 
@@ -2693,7 +2700,7 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(p.cel.surface, rect);
-    this.mergeStroke(p.cel.surface, wet, p.ctx.brush.opacity, p.ctx.brush.erase, p.layer);
+    this.mergeStroke(p.cel.surface, wet, p.ctx.brush.opacity, p.ctx.brush.erase, p.layer, p.ctx.brush.pigmentMix);
     const after = this.renderer.readRect(p.cel.surface, rect);
     this.renderer.clear(wet);
 
@@ -3426,18 +3433,51 @@ export class Engine {
    * verdad usando el bloqueo de alfa como máscara — en vez de un shader
    * nuevo sólo para multiplicar dos máscaras. Sin ninguna de las dos
    * activa (el caso normal), es exactamente el `drawOver` de siempre.
+   *
+   * Con `pigmentMix > 0` (y sin borrar — borrar no tiene "color" que
+   * mezclar) el fundido final pasa por `mixOver` en vez de `drawOver`: hace
+   * falta una copia de `dst` en un scratch aparte porque `MIX_FS` lee el
+   * color de debajo en el propio shader, no vía el blend fijo de la GPU
+   * (ver `Renderer.mixOver`) — WebGL2 no deja leer y escribir la misma
+   * textura en un pase, la misma razón por la que `composite()` pide tres
+   * superficies.
    */
-  private mergeStroke(dst: Surface, src: Surface, opacity: number, erase: boolean, layer: Layer) {
+  private mergeStroke(
+    dst: Surface,
+    src: Surface,
+    opacity: number,
+    erase: boolean,
+    layer: Layer,
+    pigmentMix = 0,
+  ) {
     const selMask = this.clipMask;
     const lockMask = layer.alphaLock ? this.alphaLockMask(dst) : null;
+
+    let finalSrc = src;
+    let finalMask = selMask ?? lockMask;
     if (selMask && lockMask) {
       const pre = this.renderer.scratch('paintmask');
       this.renderer.clear(pre);
       this.renderer.drawOver(pre, src, 1, undefined, false, selMask);
-      this.renderer.drawOver(dst, pre, opacity, undefined, erase, lockMask);
+      finalSrc = pre;
+      finalMask = lockMask;
+    }
+
+    if (!erase && pigmentMix > 0) {
+      let mixSrc = finalSrc;
+      if (finalMask) {
+        const masked = this.renderer.scratch('mixMasked');
+        this.renderer.clear(masked);
+        this.renderer.drawOver(masked, finalSrc, 1, undefined, false, finalMask);
+        mixSrc = masked;
+      }
+      const backdrop = this.renderer.scratch('mixBackdrop');
+      this.renderer.copy(backdrop, dst, 1);
+      this.renderer.mixOver(dst, backdrop, mixSrc, { opacity, pigmentMix });
       return;
     }
-    this.renderer.drawOver(dst, src, opacity, undefined, erase, selMask ?? lockMask);
+
+    this.renderer.drawOver(dst, finalSrc, opacity, undefined, erase, finalMask);
   }
 
   private selectionSurfaceCanvas(): HTMLCanvasElement {

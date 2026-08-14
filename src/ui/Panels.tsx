@@ -1049,6 +1049,21 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           format={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => updateBrush({ aspect: v })}
         />
+        <Slider
+          label="Mezcla de pigmento"
+          value={brush.pigmentMix}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => updateBrush({ pigmentMix: v })}
+        />
+        <p className="hint">
+          Al soltar el trazo, se funde con lo que hubiera debajo como pigmento en vez
+          de superponerse en alfa plano: se oscurece y satura donde se cruza con otro
+          color, en vez de aclararse hacia un promedio gris — no es una simulación
+          física de pigmento, pero se aparta de la mezcla digital en esa dirección.
+          En 0% no cambia nada respecto a como pintaba antes.
+        </p>
 
         <h3 className="panel__subtitle">Textura de punta</h3>
         <div className="texture-grid">

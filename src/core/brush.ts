@@ -65,6 +65,14 @@ export interface BrushPreset {
    * activo (importada por quien dibuja) — ver `Engine.resolveTexturePixels`.
    */
   textureId: BuiltinTextureId | string | null;
+  /**
+   * 0..1: cuánto se funde el trazo terminado con lo que ya había debajo como
+   * pigmento (espacio lineal + mezcla multiplicativa) en vez de superponerse
+   * en alfa plano — ver `gl/shaders.ts` (`MIX_FS`). 0 es el comportamiento de
+   * siempre. No es una simulación física de pigmento, sólo se aparta de la
+   * mezcla digital plana en la misma dirección.
+   */
+  pigmentMix: number;
 }
 
 export const DEFAULT_BRUSHES: BrushPreset[] = [
@@ -90,6 +98,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.3,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     // Lisa por defecto: es el pincel activo al abrir la app y no debe
     // cambiar el trazo de siempre. La textura queda disponible para quien
     // la busque en el panel.
@@ -116,6 +125,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.15,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     // A este tamaño el grano ya se lee: por debajo de ~12px se pierde (ver
     // CHECKPOINT.md, deuda conocida).
     textureId: 'grain',
@@ -141,6 +151,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.25,
     aspect: 0.9,
     erase: false,
+    pigmentMix: 0,
     textureId: 'grain',
   },
   {
@@ -164,6 +175,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.1,
     aspect: 0.7,
     erase: false,
+    pigmentMix: 0,
     textureId: 'chalk',
   },
 
@@ -189,6 +201,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.45,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
   {
@@ -214,6 +227,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.2,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
   {
@@ -239,6 +253,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.15,
     aspect: 0.15,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
   {
@@ -262,6 +277,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 0.35,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
 
@@ -287,6 +303,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.15,
     aspect: 0.85,
     erase: false,
+    pigmentMix: 0,
     textureId: 'canvas',
   },
   {
@@ -312,6 +329,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.1,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     // La textura de tiza, a baja intensidad, se lee como el granulado del
     // pigmento asentándose en el papel húmedo.
     textureId: 'chalk',
@@ -337,6 +355,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.1,
     aspect: 0.9,
     erase: false,
+    pigmentMix: 0,
     // Mate y opaco, sin grano: la acuarela ya cubre ese territorio.
     textureId: null,
   },
@@ -361,6 +380,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0.1,
     aspect: 0.8,
     erase: false,
+    pigmentMix: 0,
     textureId: 'canvas',
   },
 
@@ -386,6 +406,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     // Con flujo tan bajo, cualquier textura lo deja casi invisible: liso.
     textureId: null,
   },
@@ -412,6 +433,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 1,
     erase: false,
+    pigmentMix: 0,
     textureId: 'splatter',
   },
   {
@@ -435,6 +457,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 0.7,
     erase: false,
+    pigmentMix: 0,
     textureId: 'chalk',
   },
   {
@@ -458,6 +481,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 0.6,
     erase: false,
+    pigmentMix: 0,
     textureId: 'canvas',
   },
   {
@@ -485,6 +509,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 0.22,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
   {
@@ -511,6 +536,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 0.12,
     erase: false,
+    pigmentMix: 0,
     textureId: null,
   },
 
@@ -536,6 +562,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 1,
     erase: true,
+    pigmentMix: 0,
     textureId: null,
   },
   {
@@ -561,6 +588,7 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     taper: 0,
     aspect: 1,
     erase: true,
+    pigmentMix: 0,
     textureId: null,
   },
 ];

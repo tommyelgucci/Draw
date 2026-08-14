@@ -4,6 +4,7 @@ import {
   COMPOSITE_FS,
   COPY_FS,
   MAX_SKIN_BONES,
+  MIX_FS,
   PRESENT_FS,
   QUAD_VS,
   SKIN_VS,
@@ -177,6 +178,15 @@ export class Renderer {
       'uMask',
       'uOpacity',
       'uUseMask',
+    ]);
+    this.link('mix', QUAD_VS, MIX_FS, [
+      'uMatrix',
+      'uResolution',
+      'uFlipY',
+      'uSource',
+      'uBackdrop',
+      'uOpacity',
+      'uPigmentMix',
     ]);
     this.link('ants', QUAD_VS, ANTS_FS, [
       'uMatrix',
@@ -767,6 +777,47 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     dst.empty = backdrop.empty && src.empty;
+    dst.version++;
+  }
+
+  /**
+   * `dst = mezclaDePigmento(backdrop, src)` — mismo requisito de tres
+   * superficies distintas que `composite()`, y por la misma razón: el
+   * shader de `MIX_FS` necesita leer el color de debajo a la vez que
+   * escribe el resultado, así que `backdrop` no puede ser `dst`. Quien
+   * llama es responsable de haber copiado el `dst` de antes ahí (ver
+   * `Engine.mergeStroke`) — este método no lo hace por si el llamador ya
+   * tiene esa copia hecha por otra razón.
+   */
+  mixOver(dst: Surface, backdrop: Surface, src: Surface, opts: { opacity: number; pigmentMix: number }) {
+    const gl = this.gl;
+    this.ensureResident(dst);
+    this.ensureResident(backdrop);
+    this.ensureResident(src);
+    const p = this.programs.get('mix')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(this.quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, this.docWidth, this.docHeight);
+    gl.disable(gl.BLEND);
+
+    gl.uniformMatrix3fv(p.uniforms.uMatrix, false, this.docMatrix());
+    gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
+    gl.uniform1f(p.uniforms.uFlipY, 0);
+    gl.uniform1f(p.uniforms.uOpacity, opts.opacity);
+    gl.uniform1f(p.uniforms.uPigmentMix, opts.pigmentMix);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, backdrop.tex);
+    gl.uniform1i(p.uniforms.uBackdrop, 1);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!src.empty) dst.empty = false;
     dst.version++;
   }
 

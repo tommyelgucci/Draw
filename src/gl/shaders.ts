@@ -174,6 +174,84 @@ void main() {
 `;
 
 /**
+ * Mezcla de pigmento al fundir un trazo terminado sobre el cel — alternativa
+ * a la superposición alfa plana de `COPY_FS`/`drawOver`.
+ *
+ * La base (`flatMix`) es la MISMA mezcla en sRGB directo que ya hace
+ * `drawOver` por blending fijo de la GPU — a propósito, no una versión en
+ * espacio lineal: si la base cambiara de fórmula, `uPigmentMix=0` dejaría
+ * de coincidir con el resultado de siempre y el mando saltaría de golpe en
+ * cuanto se moviera un poco de 0%, en vez de partir suave desde "sin
+ * cambio". Por encima de esa base se mezcla (`mix`, ya en sRGB) hacia
+ * `subtractiveMix`: los mismos dos colores convertidos a espacio lineal y
+ * combinados con una media geométrica ponderada por canal en vez de una
+ * media aritmética — así un canal que un color deja en casi cero (el rojo
+ * del cian, el azul del amarillo) tira el resultado hacia abajo en vez de
+ * promediarse con el canal alto del otro color, que es lo que hace que
+ * pintura de verdad se ensucie/oscurezca al mezclarse en vez de aclararse
+ * hacia gris — sin ser una simulación física de pigmento (eso exige datos
+ * espectrales reales por pigmento, que no hay aquí). `uPigmentMix` pesa
+ * cuánto de ese tirón se aplica, y además por `bd.a`: sin tinta debajo
+ * todavía no hay nada con qué mezclar, así que cae en la base sola.
+ */
+export const MIX_FS = /* glsl */ `#version 300 es
+precision highp float;
+
+in vec2 vUV;
+
+uniform sampler2D uSource;   // premultiplicado — tinta húmeda del trazo
+uniform sampler2D uBackdrop; // premultiplicado — cel antes del trazo
+uniform float uOpacity;
+uniform float uPigmentMix; // 0..1
+
+out vec4 fragColor;
+
+vec3 unpremul(vec4 c) { return c.a > 0.0 ? c.rgb / c.a : vec3(0.0); }
+
+float srgbToLinear(float c) {
+  return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+float linearToSrgb(float c) {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+vec3 srgbToLinear3(vec3 c) { return vec3(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b)); }
+vec3 linearToSrgb3(vec3 c) { return vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b)); }
+
+void main() {
+  vec4 src = texture(uSource, vUV);
+  vec4 bd = texture(uBackdrop, vUV);
+
+  float as = src.a * uOpacity;
+  float ao = as + bd.a * (1.0 - as);
+
+  vec3 srcStraight = unpremul(src);
+  vec3 bdStraight = unpremul(bd);
+
+  // Peso del ingrediente nuevo en la mezcla, para las dos fórmulas.
+  float t = clamp(as, 0.0, 1.0);
+
+  // Idéntico a lo que produce drawOver con blending fijo: el punto de
+  // partida cuando uPigmentMix está en 0.
+  vec3 flatMix = mix(bdStraight, srcStraight, t);
+
+  vec3 srcLin = srgbToLinear3(srcStraight);
+  vec3 bdLin = srgbToLinear3(bdStraight);
+  // Suelo pequeño antes de la potencia: con un canal en 0.0 exacto,
+  // pow(0.0, 0.0) queda indefinido en algunas GPU y podría anular un canal
+  // válido del otro color cuando t ronda 0 o 1.
+  vec3 srcSafe = max(srcLin, 1.0e-4);
+  vec3 bdSafe = max(bdLin, 1.0e-4);
+  vec3 subtractiveLin = pow(bdSafe, vec3(1.0 - t)) * pow(srcSafe, vec3(t));
+  vec3 subtractiveMix = linearToSrgb3(clamp(subtractiveLin, 0.0, 1.0));
+
+  float mixAmount = uPigmentMix * bd.a;
+  vec3 resultSrgb = mix(flatMix, subtractiveMix, mixAmount);
+
+  fragColor = vec4(clamp(resultSrgb, 0.0, 1.0) * ao, ao);
+}
+`;
+
+/**
  * Cota de huesos por esqueleto que puede subir un solo `uniform mat3[]` sin
  * pasar a texturas — de sobra para un rig de personaje 2D. Si algún rig la
  * excede, la alternativa es un UBO o una textura de matrices; no merece la

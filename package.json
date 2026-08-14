@@ -53,6 +53,7 @@
     "test:streak-generator": "node scripts/streak-generator.mjs",
     "test:wisp-burst-generator": "node scripts/wisp-burst-generator.mjs",
     "test:rake-angle-jitter": "node scripts/rake-angle-jitter.mjs",
+    "test:pigment-mix": "node scripts/pigment-mix.mjs",
     "test:unit": "node --import ./scripts/register-ts-loader.mjs --test src/core/*.test.ts"
   },
   "dependencies": {
