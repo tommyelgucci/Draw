@@ -1596,6 +1596,7 @@ const WISP_PRESETS: {
 }[] = [
   { label: 'Humo', values: { spread: 0.55, turbulence: 0.6, density: 0.5, opacity: 0.8 } },
   { label: 'Niebla', values: { spread: 0.9, turbulence: 0.25, density: 0.65, opacity: 0.5 } },
+  { label: 'Acuarela', values: { spread: 0.85, turbulence: 0.3, density: 0.4, opacity: 0.65 } },
 ];
 
 /**
