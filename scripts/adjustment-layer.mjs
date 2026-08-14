@@ -66,6 +66,7 @@ await page.waitForTimeout(150);
 
 const before = await avgColor(block);
 check('el bloque es rojo antes de cualquier ajuste', before.r > 200 && before.g < 60 && before.b < 60, JSON.stringify(before));
+const drawLayerId = await page.evaluate(() => window.__trace.activeLayerId);
 
 console.log('\n— Crear una capa de ajuste desde el panel de Capas —');
 await page.evaluate(() => window.__uiStore.getState().setPanel('layers'));
@@ -135,6 +136,56 @@ check(
   Math.abs(restored.r - before.r) < 5 && Math.abs(restored.g - before.g) < 5,
   JSON.stringify(restored),
 );
+
+console.log('\n— Posterizar reduce el color a pocos niveles por canal —');
+// Un bloque a 0.6 (por encima de la mitad): con sólo 2 niveles por canal
+// (blanco y negro puro) debe redondear hacia arriba, al blanco — y uno a
+// 0.4 (por debajo) hacia abajo, al negro. Prueba directa de la cuantización
+// del shader, no sólo "el color cambia".
+const highBlock = { x: 700, y: 620, x2: 900, y2: 720 };
+const lowBlock = { x: 900, y: 620, x2: 1100, y2: 720 };
+// Escritura directa del cel, no `fillSelection` — eso deja un paso de
+// deshacer, y más abajo el test de "deshacer quita la capa de ajuste"
+// asume que el tope de la pila es justo esa capa, no un trazo posterior.
+await page.evaluate(
+  ({ drawLayerId, highBlock, lowBlock }) => {
+    const e = window.__trace;
+    const layer = e.doc.layers.find((l) => l.id === drawLayerId);
+    const cel = [...layer.cels.values()][0];
+    const paint = (r) => {
+      const w = r.x2 - r.x;
+      const h = r.y2 - r.y;
+      const px = new Uint8Array(w * h * 4);
+      for (let i = 0; i < w * h; i++) {
+        px[i * 4] = r.v;
+        px[i * 4 + 1] = r.v;
+        px[i * 4 + 2] = r.v;
+        px[i * 4 + 3] = 255;
+      }
+      e.renderer.writeRect(cel.surface, r, px);
+    };
+    paint({ ...highBlock, v: Math.round(0.6 * 255) });
+    paint({ ...lowBlock, v: Math.round(0.4 * 255) });
+    e.touch();
+  },
+  { drawLayerId, highBlock, lowBlock },
+);
+await page.waitForTimeout(150);
+
+const highOff = await avgColor(highBlock);
+check('posterizar en 0 (desactivado) deja 0.6 sin redondear a blanco ni negro puro', highOff.r > 130 && highOff.r < 175, JSON.stringify(highOff));
+
+await page.evaluate(() => window.__trace.setLayerAdjustment(window.__trace.activeLayerId, { posterize: 2 }));
+await page.waitForTimeout(150);
+const highOn = await avgColor(highBlock);
+const lowOn = await avgColor(lowBlock);
+check('con 2 niveles, 0.6 redondea hacia arriba (blanco)', highOn.r > 240, JSON.stringify(highOn));
+check('con 2 niveles, 0.4 redondea hacia abajo (negro)', lowOn.r < 15, JSON.stringify(lowOn));
+
+await page.evaluate(() => window.__trace.setLayerAdjustment(window.__trace.activeLayerId, { posterize: 0 }));
+await page.waitForTimeout(150);
+const highRestored = await avgColor(highBlock);
+check('posterize=0 restaura el color sin redondear', Math.abs(highRestored.r - highOff.r) < 5, JSON.stringify(highRestored));
 
 console.log('\n— La opacidad de la capa de ajuste mezcla el efecto —');
 // La desaturación en HSV de un rojo puro (S=1, V=1) da blanco, no un gris a

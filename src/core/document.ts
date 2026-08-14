@@ -161,7 +161,7 @@ export function pickVariant(layer: Layer, frame: number): SpriteSwapVariant | nu
  */
 export type LayerKind = 'draw' | 'reference' | 'adjustment';
 
-/** Tono/saturación/brillo/contraste — ver `Layer.adjustment`. */
+/** Tono/saturación/brillo/contraste/posterizar — ver `Layer.adjustment`. */
 export interface AdjustmentProps {
   /** Radianes. */
   hue: number;
@@ -171,6 +171,10 @@ export interface AdjustmentProps {
   brightness: number;
   /** -1..1, 0 = sin cambio. */
   contrast: number;
+  /** Niveles por canal, 0 = sin cambio (color continuo); si no, entero
+   *  2..32 — menos niveles, más plano y "cartel". Ausente en proyectos
+   *  anteriores a este campo, normaliza a 0 — ver `Engine.compositeGroups`. */
+  posterize?: number;
 }
 
 export interface Layer {

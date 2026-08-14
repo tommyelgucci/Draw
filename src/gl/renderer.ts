@@ -229,6 +229,7 @@ export class Renderer {
       'uHue',
       'uSaturation',
       'uBrightness',
+      'uPosterize',
       'uContrast',
     ]);
   }
@@ -840,7 +841,7 @@ export class Renderer {
   applyAdjustment(
     dst: Surface,
     src: Surface,
-    adjustment: { hue: number; saturation: number; brightness: number; contrast: number },
+    adjustment: { hue: number; saturation: number; brightness: number; contrast: number; posterize?: number },
   ) {
     const gl = this.gl;
     this.ensureResident(dst);
@@ -859,6 +860,9 @@ export class Renderer {
     gl.uniform1f(p.uniforms.uSaturation, adjustment.saturation);
     gl.uniform1f(p.uniforms.uBrightness, adjustment.brightness);
     gl.uniform1f(p.uniforms.uContrast, adjustment.contrast);
+    // Ausente en proyectos anteriores a este campo (ver AdjustmentProps en
+    // document.ts) — 0 desactiva la cuantización en el shader.
+    gl.uniform1f(p.uniforms.uPosterize, adjustment.posterize ?? 0);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, src.tex);

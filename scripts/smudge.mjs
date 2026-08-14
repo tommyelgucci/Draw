@@ -87,8 +87,6 @@ async function dragStroke(brushPatch, color, x0, x1, y, steps = 12) {
   );
 }
 
-const RED = { r: 0.8, g: 0.05, b: 0.05 };
-const BLUE = { r: 0.05, g: 0.05, b: 0.8 };
 const GREEN = { r: 0.05, g: 0.8, b: 0.05 };
 const cx = 300;
 const cy = 300;
