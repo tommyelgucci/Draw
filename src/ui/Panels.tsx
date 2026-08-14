@@ -30,6 +30,7 @@ import {
   serializeProject,
 } from '../core/io';
 import { describeVideoSupport, exportImageSequenceAsVideo, exportVideo, type VideoSupport } from '../core/video';
+import { buildLoopEmbedSnippet, buildScrollEmbedSnippet } from '../core/webExport';
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
@@ -1677,6 +1678,8 @@ export function ExportPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const [progress, setProgress] = useState<string | null>(null);
   const [videoQuality, setVideoQuality] = useState(0.7);
+  const [framesFolder, setFramesFolder] = useState('frames');
+  const [copied, setCopied] = useState<string | null>(null);
   // Consultar los códecs es asíncrono, pero el resultado no cambia durante la
   // sesión. Hasta que responde se muestra el botón deshabilitado.
   const [videoSupport, setVideoSupport] = useState<VideoSupport>({
@@ -1707,6 +1710,17 @@ export function ExportPanel({ engine }: { engine: Engine }) {
     } finally {
       setBusy(null);
       setProgress(null);
+    }
+  };
+
+  const copySnippet = async (which: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
+    } catch (err) {
+      console.error(err);
+      alert('No se pudo copiar al portapapeles.');
     }
   };
 
@@ -1880,6 +1894,40 @@ export function ExportPanel({ engine }: { engine: Engine }) {
         El vídeo es lo que sirve para publicar y para montar en un editor. El APNG
         conserva transparencia y color sin pérdida pero pesa mucho más; la secuencia de
         PNG es la opción sin pérdidas para seguir trabajando en otro programa.
+      </p>
+
+      <h3 className="panel__subtitle">Exportar para web</h3>
+      <p className="hint">
+        Descarga primero el APNG o la secuencia de PNG de arriba; estos botones sólo
+        copian el fragmento HTML que los incrusta, no generan un archivo nuevo.
+      </p>
+      <button
+        className="btn btn--ghost"
+        onClick={() =>
+          copySnippet('loop', buildLoopEmbedSnippet(engine, `${safeName}.png`))
+        }
+      >
+        <IconCopy size={16} /> Código de inserción · loop transparente (APNG)
+      </button>
+      <div className="field-row">
+        <Field label="Carpeta de fotogramas en tu web">
+          <input value={framesFolder} onChange={(e) => setFramesFolder(e.target.value)} />
+        </Field>
+      </div>
+      <button
+        className="btn btn--ghost"
+        onClick={() =>
+          copySnippet('scroll', buildScrollEmbedSnippet(engine, framesFolder || 'frames'))
+        }
+      >
+        <IconCopy size={16} /> Código de inserción · animación con el scroll
+      </button>
+      {copied && <p className="hint">Copiado al portapapeles.</p>}
+      <p className="hint">
+        El loop es un simple {'<img>'}: el navegador anima el APNG solo. El de scroll
+        dibuja la secuencia de PNG en un {'<canvas>'} fijo y avanza el fotograma según
+        cuánto se ha desplazado la página — descomprime el .zip de la secuencia en la
+        carpeta indicada, junto al HTML donde pegues el código.
       </p>
 
       <h3 className="panel__subtitle">Time-lapse</h3>
