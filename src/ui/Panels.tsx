@@ -10,12 +10,16 @@ import {
   BRUSH_TEXTURE_SIZE,
   BUILTIN_TEXTURES,
   generateBrushTexturePixels,
+  generateBurstTexturePixels,
   generateParametricTexturePixels,
   generateStreakTexturePixels,
+  generateWispTexturePixels,
   type BuiltinTextureId,
+  type BurstTextureParams,
   type CustomTexture,
   type ParametricTextureParams,
   type StreakTextureParams,
+  type WispTextureParams,
 } from '../core/brushTexture';
 import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS, type BrushPreset } from '../core/brush';
 import {
@@ -1094,6 +1098,8 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
         </p>
         <TextureGeneratorSection engine={engine} updateBrush={updateBrush} />
         <StreakGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <WispGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <BurstGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1579,6 +1585,244 @@ function StreakGeneratorSection({
         Se orienta con la rotación de cada estampa — recta por defecto. Aspereza al
         mínimo y puntas romas da un subrayado limpio; al máximo, un borde rasgado de
         cicatriz o arañazo.
+      </p>
+    </div>
+  );
+}
+
+const WISP_PRESETS: {
+  label: string;
+  values: { spread: number; turbulence: number; density: number; opacity: number };
+}[] = [
+  { label: 'Humo', values: { spread: 0.55, turbulence: 0.6, density: 0.5, opacity: 0.8 } },
+  { label: 'Niebla', values: { spread: 0.9, turbulence: 0.25, density: 0.65, opacity: 0.5 } },
+];
+
+/**
+ * Tercer generador: contorno redondeado deformado por ruido en vez de
+ * dispersión de motas o marca alargada — humo, niebla, nube.
+ */
+function WispGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [spread, setSpread] = useState(0.6);
+  const [turbulence, setTurbulence] = useState(0.5);
+  const [density, setDensity] = useState(0.5);
+  const [opacity, setOpacity] = useState(0.7);
+  const [label, setLabel] = useState('Humo');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: WispTextureParams = { seed, spread, turbulence, density, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateWispTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, spread, turbulence, density, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar humo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {WISP_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setSpread(p.values.spread);
+              setTurbulence(p.values.turbulence);
+              setDensity(p.values.density);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Extensión" value={spread} min={0.15} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSpread} />
+      <Slider label="Turbulencia" value={turbulence} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTurbulence} />
+      <Slider label="Densidad interna" value={density} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDensity} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateWispTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Humo');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Turbulencia baja da una nube redondeada; alta, zarcillos sueltos que se
+        deshilachan por el borde.
+      </p>
+    </div>
+  );
+}
+
+const BURST_PRESETS: {
+  label: string;
+  values: { spokeCount: number; length: number; thickness: number; irregularity: number; coreSize: number; opacity: number };
+}[] = [
+  { label: 'Destello', values: { spokeCount: 8, length: 0.85, thickness: 0.08, irregularity: 0.3, coreSize: 0.15, opacity: 1 } },
+  { label: 'Chispa', values: { spokeCount: 16, length: 0.6, thickness: 0.04, irregularity: 0.7, coreSize: 0.08, opacity: 0.9 } },
+];
+
+/**
+ * Cuarto generador: rayos que salen de un núcleo, medidos en polar — lente,
+ * chispa, estrella, sol. Ni motas ni un eje recto ni un contorno de ruido.
+ */
+function BurstGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [spokeCount, setSpokeCount] = useState(8);
+  const [length, setLength] = useState(0.8);
+  const [thickness, setThickness] = useState(0.06);
+  const [irregularity, setIrregularity] = useState(0.3);
+  const [coreSize, setCoreSize] = useState(0.12);
+  const [opacity, setOpacity] = useState(1);
+  const [label, setLabel] = useState('Destello');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: BurstTextureParams = { seed, spokeCount, length, thickness, irregularity, coreSize, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateBurstTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, spokeCount, length, thickness, irregularity, coreSize, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar destello…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {BURST_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setSpokeCount(p.values.spokeCount);
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setIrregularity(p.values.irregularity);
+              setCoreSize(p.values.coreSize);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Número de rayos" value={spokeCount} min={3} max={24} step={1} format={(v) => `${Math.round(v)}`} onChange={setSpokeCount} />
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.01} max={0.25} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Irregularidad" value={irregularity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setIrregularity} />
+      <Slider label="Núcleo" value={coreSize} min={0} max={0.4} format={(v) => `${Math.round(v * 100)}%`} onChange={setCoreSize} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateBurstTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Destello');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Irregularidad baja da un asterisco regular; alta, un estallido de rayos
+        desiguales — más rayos y menos grosor da algo más parecido a una chispa.
       </p>
     </div>
   );

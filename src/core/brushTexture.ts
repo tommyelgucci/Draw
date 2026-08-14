@@ -69,6 +69,33 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/**
+ * Ruido de valor 2D: una rejilla gruesa de valores al azar, interpolados
+ * suavemente entre nudos — a diferencia de `mulberry32` puro (independiente
+ * píxel a píxel, se ve como estática), esto da variación continua y
+ * orgánica, lo que hace falta para un jirón de humo en vez de más motas.
+ */
+function makeValueNoise(rand: () => number, cells: number) {
+  const grid = new Float32Array((cells + 1) * (cells + 1));
+  for (let i = 0; i < grid.length; i++) grid[i] = rand();
+  return (u: number, v: number) => {
+    const gx = Math.min(cells - 1e-6, Math.max(0, u * cells));
+    const gy = Math.min(cells - 1e-6, Math.max(0, v * cells));
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    const fx = smoothstep(0, 1, gx - x0);
+    const fy = smoothstep(0, 1, gy - y0);
+    const stride = cells + 1;
+    const v00 = grid[y0 * stride + x0];
+    const v10 = grid[y0 * stride + x0 + 1];
+    const v01 = grid[(y0 + 1) * stride + x0];
+    const v11 = grid[(y0 + 1) * stride + x0 + 1];
+    const a = v00 * (1 - fx) + v10 * fx;
+    const b = v01 * (1 - fx) + v11 * fx;
+    return a * (1 - fy) + b * fy;
+  };
+}
+
 /** Pinta un punto suave en el canal alfa de `buf`, sin oscurecer lo ya pintado. */
 function paintDot(buf: Uint8Array, size: number, cx: number, cy: number, r: number, peak: number) {
   if (r <= 0) return;
@@ -315,6 +342,149 @@ export function generateStreakTexturePixels(
       const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * params.opacity;
       buf[(y * size + x) * 4 + 3] = Math.round(a * 255);
     }
+  }
+
+  return buf;
+}
+
+/**
+ * Jirón de humo/niebla/nube: un contorno redondeado deformado por ruido de
+ * valor de dos escalas (una gruesa para el contorno general, una fina para
+ * el detalle interno) — tercera forma de base, ni dispersión radial ni eje
+ * recto, así que tampoco reutiliza los otros dos generadores.
+ */
+export interface WispTextureParams {
+  seed: number;
+  /** 0..1: cuánto del lienzo ocupa la nube antes de disolverse. */
+  spread: number;
+  /** 0..1: cuánto se retuerce el contorno — bajo da una nube redondeada, alto da zarcillos sueltos. */
+  turbulence: number;
+  /** 0..1: cuánto relleno interno hay frente a huecos. */
+  density: number;
+  opacity: number;
+}
+
+export function generateWispTexturePixels(
+  params: WispTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const rand = mulberry32(params.seed);
+  const coarse = makeValueNoise(rand, 5);
+  const fine = makeValueNoise(rand, 12);
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = size * 0.5 * Math.max(0.15, params.spread);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.hypot(dx, dy) / radius;
+      if (dist > 1.7) continue;
+      const warp = (coarse(x / size, y / size) - 0.5) * 2 * params.turbulence;
+      const shaped = dist - warp * 0.6;
+      const contour = 1 - smoothstep(0.3, 1.15, shaped);
+      const detail = 0.35 + 0.65 * (params.density * 0.5 + fine(x / size, y / size) * 0.5);
+      const a = Math.min(1, Math.max(0, contour * detail)) * params.opacity;
+      buf[(y * size + x) * 4 + 3] = Math.round(a * 255);
+    }
+  }
+
+  return buf;
+}
+
+/**
+ * Destello radial (lente, chispa, estrella, sol): rayos que salen de un
+ * núcleo central, afinándose hasta un punto, con longitud y ángulo con
+ * algo de temblor propio — cuarta forma de base, mide en polar (radio +
+ * ángulo) en vez de en un eje recto como la marca alargada.
+ */
+export interface BurstTextureParams {
+  seed: number;
+  spokeCount: number;
+  /** 0..1: longitud de los rayos como fracción del lienzo. */
+  length: number;
+  /** 0..1: grosor de cada rayo en la base. */
+  thickness: number;
+  /** 0..1: cuánto varían longitud y ángulo de un rayo a otro. */
+  irregularity: number;
+  /** 0..1: tamaño del núcleo brillante central; 0 = sin núcleo. */
+  coreSize: number;
+  opacity: number;
+}
+
+function angleDistance(a: number, b: number): number {
+  let d = Math.abs(a - b) % (Math.PI * 2);
+  if (d > Math.PI) d = Math.PI * 2 - d;
+  return d;
+}
+
+export function generateBurstTexturePixels(
+  params: BurstTextureParams,
+  size = BRUSH_TEXTURE_SIZE,
+): Uint8Array {
+  const buf = new Uint8Array(size * size * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = 255;
+    buf[i + 1] = 255;
+    buf[i + 2] = 255;
+    buf[i + 3] = 0;
+  }
+  const rand = mulberry32(params.seed);
+  const spokeCount = Math.max(2, Math.round(params.spokeCount));
+  const angleStep = (Math.PI * 2) / spokeCount;
+  const spokeAngles = Array.from(
+    { length: spokeCount },
+    (_, i) => i * angleStep + (rand() * 2 - 1) * angleStep * 0.15 * params.irregularity,
+  );
+  const spokeLengths = Array.from(
+    { length: spokeCount },
+    () => (size / 2) * params.length * (1 + (rand() * 2 - 1) * params.irregularity * 0.7),
+  );
+  const baseHalfThick = Math.max(0.6, (params.thickness * size) / 2);
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const reach = size * 0.72;
+
+  for (let y = 0; y < size; y++) {
+    const dy = y - cy;
+    for (let x = 0; x < size; x++) {
+      const dx = x - cx;
+      const r = Math.hypot(dx, dy);
+      if (r > reach) continue;
+      const theta = Math.atan2(dy, dx);
+      let best = 0;
+      let bestDelta = Infinity;
+      for (let i = 0; i < spokeCount; i++) {
+        const d = angleDistance(theta, spokeAngles[i]);
+        if (d < bestDelta) {
+          bestDelta = d;
+          best = i;
+        }
+      }
+      const len = spokeLengths[best];
+      if (r > len) continue;
+      const crossDist = r * Math.sin(bestDelta);
+      const widthHere = baseHalfThick * Math.max(0, 1 - r / len);
+      const edge = Math.abs(crossDist) - widthHere;
+      const a = Math.min(1, Math.max(0, 1 - smoothstep(-1, 1.2, edge))) * params.opacity;
+      const idx = (y * size + x) * 4 + 3;
+      const v = Math.round(a * 255);
+      if (v > buf[idx]) buf[idx] = v;
+    }
+  }
+
+  if (params.coreSize > 0) {
+    paintDot(buf, size, cx, cy, size * 0.5 * params.coreSize, params.opacity);
   }
 
   return buf;
