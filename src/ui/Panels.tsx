@@ -11,12 +11,14 @@ import {
   BUILTIN_TEXTURES,
   generateBrushTexturePixels,
   generateBurstTexturePixels,
+  generateClusterTexturePixels,
   generateParametricTexturePixels,
   generateRakeTexturePixels,
   generateStreakTexturePixels,
   generateWispTexturePixels,
   type BuiltinTextureId,
   type BurstTextureParams,
+  type ClusterTextureParams,
   type CustomTexture,
   type ParametricTextureParams,
   type RakeTextureParams,
@@ -1132,6 +1134,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
         <WispGeneratorSection engine={engine} updateBrush={updateBrush} />
         <BurstGeneratorSection engine={engine} updateBrush={updateBrush} />
         <RakeGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <ClusterGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1986,6 +1989,237 @@ function RakeGeneratorSection({
         Grosor alto casi sin hueco entre púas da un peine sólido; menos grosor y
         más irregularidad, cerdas sueltas. Sube "Giro al azar" para que cada
         estampa caiga en un ángulo distinto — el peine se dispersa en mechones.
+      </p>
+    </div>
+  );
+}
+
+const CLUSTER_PRESETS: {
+  label: string;
+  values: {
+    count: number;
+    bladeLength: number;
+    lengthVariation: number;
+    thickness: number;
+    taper: number;
+    roughness: number;
+    curl: number;
+    spread: number;
+    angleSpread: number;
+    opacity: number;
+    layout: 'scatter' | 'parallel';
+  };
+  /** Colores sugeridos (sombra/base/brillo) si se activa "Colores del
+   *  racimo" con este preset — no se aplican solos, sólo rellenan los
+   *  selectores para no dejarlos en un negro por defecto poco útil. */
+  colorHint: [string, string, string];
+}[] = [
+  {
+    label: 'Mata de césped',
+    values: { count: 14, bladeLength: 0.75, lengthVariation: 0.35, thickness: 0.05, taper: 0.7, roughness: 0.25, curl: 0.15, spread: 0.8, angleSpread: 0.35, opacity: 1, layout: 'scatter' },
+    colorHint: ['#2f5c26', '#4f9143', '#8fce6a'],
+  },
+  {
+    label: 'Hojas',
+    values: { count: 9, bladeLength: 0.4, lengthVariation: 0.4, thickness: 0.14, taper: 0.5, roughness: 0.3, curl: 0.1, spread: 0.9, angleSpread: 0.6, opacity: 0.95, layout: 'scatter' },
+    colorHint: ['#274a1f', '#3f7a34', '#79b862'],
+  },
+  {
+    label: 'Llamas',
+    values: { count: 8, bladeLength: 0.7, lengthVariation: 0.5, thickness: 0.09, taper: 0.75, roughness: 0.35, curl: 0.4, spread: 0.75, angleSpread: 0.25, opacity: 1, layout: 'scatter' },
+    colorHint: ['#7a1a00', '#ff6a00', '#ffe066'],
+  },
+  {
+    label: 'Mechón',
+    values: { count: 20, bladeLength: 0.85, lengthVariation: 0.2, thickness: 0.02, taper: 0.85, roughness: 0.1, curl: 0.2, spread: 0.5, angleSpread: 0.4, opacity: 1, layout: 'parallel' },
+    colorHint: ['#4a2416', '#8a5232', '#c98a55'],
+  },
+];
+
+/**
+ * Sexto generador: varias hebras dentro de la MISMA textura, cada una con su
+ * propia posición y ángulo — a diferencia de "Generar trazo" (una marca) o
+ * de "Giro al azar" (dispersa la orientación entre estampas sucesivas de un
+ * arrastre), aquí una sola estampa ya es el manojo entero. Es la respuesta
+ * directa a "que no dibuje sólo una brizna o una hoja, que dibuje varias" —
+ * mismo principio que ya usa "Salpicadura" metiendo varias motas en un solo
+ * cuadro, aplicado a hebras en vez de puntos.
+ */
+function ClusterGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [count, setCount] = useState(14);
+  const [bladeLength, setBladeLength] = useState(0.75);
+  const [lengthVariation, setLengthVariation] = useState(0.35);
+  const [thickness, setThickness] = useState(0.05);
+  const [taper, setTaper] = useState(0.7);
+  const [roughness, setRoughness] = useState(0.25);
+  const [curl, setCurl] = useState(0.15);
+  const [spread, setSpread] = useState(0.8);
+  const [angleSpread, setAngleSpread] = useState(0.35);
+  const [opacity, setOpacity] = useState(1);
+  const [layout, setLayout] = useState<'scatter' | 'parallel'>('scatter');
+  const [colorCount, setColorCount] = useState(0);
+  const [color1, setColor1] = useState<RGB>(hexToRgb('#2f5c26'));
+  const [color2, setColor2] = useState<RGB>(hexToRgb('#4f9143'));
+  const [color3, setColor3] = useState<RGB>(hexToRgb('#8fce6a'));
+  const [label, setLabel] = useState('Mata de césped');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const to255 = (c: RGB) => ({ r: Math.round(c.r * 255), g: Math.round(c.g * 255), b: Math.round(c.b * 255) });
+  const colors = colorCount > 0 ? [color1, color2, color3].slice(0, colorCount).map(to255) : undefined;
+  const params: ClusterTextureParams = {
+    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, spread, angleSpread, opacity, layout, colors,
+  };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateClusterTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, spread, angleSpread, opacity, layout, colorCount, color1, color2, color3]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar racimo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {CLUSTER_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setCount(p.values.count);
+              setBladeLength(p.values.bladeLength);
+              setLengthVariation(p.values.lengthVariation);
+              setThickness(p.values.thickness);
+              setTaper(p.values.taper);
+              setRoughness(p.values.roughness);
+              setCurl(p.values.curl);
+              setSpread(p.values.spread);
+              setAngleSpread(p.values.angleSpread);
+              setOpacity(p.values.opacity);
+              setLayout(p.values.layout);
+              setColor1(hexToRgb(p.colorHint[0]));
+              setColor2(hexToRgb(p.colorHint[1]));
+              setColor3(hexToRgb(p.colorHint[2]));
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Field label="Distribución">
+        <Segmented
+          value={layout}
+          options={[
+            { value: 'scatter', label: 'Dispersa' },
+            { value: 'parallel', label: 'Paralela' },
+          ]}
+          onChange={setLayout}
+        />
+      </Field>
+      <Slider label="Número de hebras" value={count} min={1} max={30} step={1} format={(v) => `${Math.round(v)}`} onChange={setCount} />
+      <Slider label="Longitud" value={bladeLength} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setBladeLength} />
+      <Slider label="Variación de longitud" value={lengthVariation} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLengthVariation} />
+      <Slider label="Grosor" value={thickness} min={0.01} max={0.3} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Puntas afiladas" value={taper} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTaper} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Curvatura" value={curl} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setCurl} />
+      <Slider label="Extensión" value={spread} min={0.05} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSpread} />
+      <Slider label="Abanico de ángulo" value={angleSpread} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setAngleSpread} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <Field label="Colores del racimo (hasta 3)">
+        <Segmented
+          value={String(colorCount)}
+          options={[
+            { value: '0', label: 'Ninguno' },
+            { value: '1', label: '1' },
+            { value: '2', label: '2' },
+            { value: '3', label: '3' },
+          ]}
+          onChange={(v) => setColorCount(Number(v))}
+        />
+      </Field>
+      {colorCount > 0 && (
+        <div className="preset-row">
+          <Field label={colorCount === 1 ? 'Color' : 'Sombra'}>
+            <input type="color" value={rgbToHex(color1)} onChange={(e) => setColor1(hexToRgb(e.target.value))} />
+          </Field>
+          {colorCount >= 2 && (
+            <Field label={colorCount === 2 ? 'Brillo' : 'Base'}>
+              <input type="color" value={rgbToHex(color2)} onChange={(e) => setColor2(hexToRgb(e.target.value))} />
+            </Field>
+          )}
+          {colorCount >= 3 && (
+            <Field label="Brillo">
+              <input type="color" value={rgbToHex(color3)} onChange={(e) => setColor3(hexToRgb(e.target.value))} />
+            </Field>
+          )}
+        </div>
+      )}
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateClusterTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels, hasColor: colorCount > 0 ? true : undefined };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Mata de césped');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Una sola estampa ya es el manojo entero — no hace falta arrastrar ni subir
+        "Giro al azar" para que se note. Las hebras nacen desde abajo; bájalo a 1
+        hebra para una sola brizna u hoja suelta, o súbelo para una mata cargada.
+        "Dispersa" las reparte al azar, como brota vegetación; "Paralela" las peina
+        en fila casi en la misma dirección — así funciona el pelo de verdad, con
+        alguna hebra suelta rompiendo la uniformidad. Con "Colores del racimo" cada
+        hebra sale en uno de los tonos elegidos (sombra/base/brillo) en vez de un
+        color plano — el pincel activo no las tiñe mientras estén puestos.
       </p>
     </div>
   );

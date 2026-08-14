@@ -58,6 +58,10 @@ in float vHardness;
 
 uniform vec3 uColor;      // sRGB directo, 0..1
 uniform float uUseTexture;
+// Aparte de uUseTexture (si la textura pone la FORMA) — algunas texturas
+// (el generador de racimo, con sombra/base/brillo por hebra) también ponen
+// el COLOR: ver CustomTexture.hasColor en brushTexture.ts.
+uniform float uUseTextureColor;
 uniform sampler2D uTexture;
 
 out vec4 fragColor;
@@ -71,12 +75,15 @@ void main() {
   float inner = vHardness * 0.98;
   float coverage = 1.0 - smoothstep(inner, 1.0, d);
 
+  vec3 color = uColor;
   if (uUseTexture > 0.5) {
-    coverage *= texture(uTexture, vLocal * 0.5 + 0.5).a;
+    vec4 tex = texture(uTexture, vLocal * 0.5 + 0.5);
+    coverage *= tex.a;
+    if (uUseTextureColor > 0.5) color = tex.rgb;
   }
 
   float a = coverage * vAlpha;
-  fragColor = vec4(uColor * a, a);   // premultiplicado
+  fragColor = vec4(color * a, a);   // premultiplicado
 }
 `;
 

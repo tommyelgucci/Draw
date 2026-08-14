@@ -117,8 +117,10 @@ interface SerializedDoc {
    *  bajo `audio/<id>` — ver `normalizeAudioTrack`. */
   audio?: AudioTrack;
   /** Ausente en proyectos sin texturas de pincel importadas. El PNG de cada
-   *  una va aparte, bajo `textures/<id>.png`. */
-  customTextures?: { id: string; label: string }[];
+   *  una va aparte, bajo `textures/<id>.png`. `hasColor` ausente en
+   *  proyectos de antes del generador de racimo con color — ver
+   *  `CustomTexture.hasColor` en brushTexture.ts. */
+  customTextures?: { id: string; label: string; hasColor?: boolean }[];
   /** Racha más reciente de pasos de deshacer persistidos — ver
    *  `packHistory`/`unpackHistory`. Ausente en proyectos sin nada que
    *  persistir (historial vacío, o ninguno de los últimos pasos era de un
@@ -417,9 +419,9 @@ export async function serializeProject(engine: Engine): Promise<Uint8Array> {
       files[`audio/${doc.audio.id}`] = engine.audioBytes;
     }
 
-    const customTextures: { id: string; label: string }[] = [];
+    const customTextures: { id: string; label: string; hasColor?: boolean }[] = [];
     for (const tex of doc.customTextures) {
-      customTextures.push({ id: tex.id, label: tex.label });
+      customTextures.push({ id: tex.id, label: tex.label, hasColor: tex.hasColor });
       const imgData = new ImageData(
         new Uint8ClampedArray(tex.pixels.buffer as ArrayBuffer),
         BRUSH_TEXTURE_SIZE,
@@ -510,7 +512,7 @@ export async function deserializeProject(
     const png = files[`textures/${t.id}.png`];
     if (!png) continue;
     const bitmap = await createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' }));
-    doc.customTextures.push({ id: t.id, label: t.label, pixels: bitmapToPixels(bitmap, BRUSH_TEXTURE_SIZE) });
+    doc.customTextures.push({ id: t.id, label: t.label, pixels: bitmapToPixels(bitmap, BRUSH_TEXTURE_SIZE), hasColor: t.hasColor });
     bitmap.close();
   }
 
