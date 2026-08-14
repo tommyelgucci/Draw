@@ -154,6 +154,119 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
+ * "Colores del racimo" es un degradado de la BASE a la PUNTA de cada
+ * hebra, no un color al azar por hebra — corrección tras el comentario de
+ * que el fuego generado salía "sólido y plano": el fuego real es casi
+ * blanco en la base (más calor) y se enfría hacia la punta.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Colores del racimo" degrada de la base a la punta de cada hebra —');
+const gradientResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const params = {
+      seed: 9, count: 1, bladeLength: 0.8, lengthVariation: 0, thickness: 0.1,
+      taper: 0.2, roughness: 0, curl: 0, glow: 0, sparks: 0, spread: 0, angleSpread: 0, opacity: 1,
+      colors: [{ r: 255, g: 255, b: 255 }, { r: 255, g: 0, b: 0 }],
+    };
+    const pixels = mod.generateClusterTexturePixels(params, size);
+    const baseY = size * 0.9;
+    const len = size * 0.5 * params.bladeLength;
+    // Cerca de la base (u≈0.15, ya pasado el ensanche de arranque) y cerca
+    // de la punta (u≈0.85, antes del afinado final) — dos filas, un color
+    // esperado distinto en cada una.
+    const sampleRow = (u) => {
+      const y = Math.round(baseY - len * u);
+      const cx = Math.round(size / 2);
+      const i = (y * size + cx) * 4;
+      return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2], a: pixels[i + 3] };
+    };
+    return { nearBase: sampleRow(0.15), nearTip: sampleRow(0.85) };
+  });
+});
+check(
+  'cerca de la base domina el primer color (blanco)',
+  gradientResult.nearBase.a > 120 && gradientResult.nearBase.g > 180 && gradientResult.nearBase.b > 180,
+  JSON.stringify(gradientResult.nearBase),
+);
+check(
+  'cerca de la punta domina el segundo color (rojo, sin verde ni azul)',
+  gradientResult.nearTip.a > 120 && gradientResult.nearTip.r > 180 && gradientResult.nearTip.g < 80 && gradientResult.nearTip.b < 80,
+  JSON.stringify(gradientResult.nearTip),
+);
+
+/* ------------------------------------------------------------------ *
+ * "Halo" añade un borde difuminado más ancho que el núcleo nítido —
+ * "bordes suaves" en vez de un recorte duro.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Halo" difumina el borde más allá del núcleo nítido —');
+const glowResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const base = {
+      seed: 4, count: 1, bladeLength: 0.6, lengthVariation: 0, thickness: 0.12,
+      taper: 0.2, roughness: 0, curl: 0, spread: 0, angleSpread: 0, opacity: 1,
+    };
+    // A media hebra, justo FUERA del núcleo nítido (halfThick teórico +
+    // unos px de más): con halo alto debe quedar algo de alfa ahí; sin
+    // halo, nada.
+    const y = Math.round(size * 0.9 - size * 0.5 * base.bladeLength * 0.5);
+    const halfThickPx = (size * base.thickness) / 2;
+    const alphaJustOutsideCore = (pixels) => {
+      const cx = Math.round(size / 2 + halfThickPx + 4);
+      return pixels[(y * size + cx) * 4 + 3];
+    };
+    const noGlow = alphaJustOutsideCore(mod.generateClusterTexturePixels({ ...base, glow: 0 }, size));
+    const withGlow = alphaJustOutsideCore(mod.generateClusterTexturePixels({ ...base, glow: 0.9 }, size));
+    return { noGlow, withGlow };
+  });
+});
+check(
+  'sin halo, justo fuera del núcleo no hay alfa',
+  glowResult.noGlow < 10,
+  `alfa=${glowResult.noGlow}`,
+);
+check(
+  'con halo alto, justo fuera del núcleo sí hay algo de alfa (el halo suave)',
+  glowResult.withGlow > 20,
+  `alfa=${glowResult.withGlow}`,
+);
+
+/* ------------------------------------------------------------------ *
+ * "Chispas" salpica motas sueltas por encima de las puntas.
+ * ------------------------------------------------------------------ */
+console.log('\n— "Chispas" salpica motas sueltas por encima de las puntas —');
+const sparksResult = await page.evaluate(() => {
+  return import('/src/core/brushTexture.ts').then((mod) => {
+    const size = 128;
+    const base = {
+      seed: 2, count: 6, bladeLength: 0.5, lengthVariation: 0.1, thickness: 0.08,
+      taper: 0.6, roughness: 0.2, curl: 0.2, glow: 0, spread: 0.6, angleSpread: 0.2, opacity: 1,
+    };
+    // Fila más alta (número de fila más bajo) con algo de tinta: sin
+    // chispas, la marca el racimo (base - largo). Con chispas, algunas
+    // motas se sueltan por encima de eso, así que ese punto debe subir
+    // (número de fila aún más bajo) — no fijamos un umbral absoluto en
+    // píxeles, comparamos contra el propio racimo sin chispas.
+    const topInkRow = (pixels) => {
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (pixels[(y * size + x) * 4 + 3] > 40) return y;
+        }
+      }
+      return size;
+    };
+    const noSparksTop = topInkRow(mod.generateClusterTexturePixels({ ...base, sparks: 0 }, size));
+    const withSparksTop = topInkRow(mod.generateClusterTexturePixels({ ...base, sparks: 1 }, size));
+    return { noSparksTop, withSparksTop };
+  });
+});
+check(
+  'con chispas al máximo, aparece tinta por encima de donde llega el racimo sin chispas',
+  sparksResult.withSparksTop < sparksResult.noSparksTop,
+  `sin chispas: fila ${sparksResult.noSparksTop}, con chispas: fila ${sparksResult.withSparksTop}`,
+);
+
+/* ------------------------------------------------------------------ *
  * Panel real: abrir, cambiar preset, crear textura.
  * ------------------------------------------------------------------ */
 console.log('\n— Panel del generador de racimo: presets y creación —');

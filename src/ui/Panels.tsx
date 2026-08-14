@@ -2004,34 +2004,43 @@ const CLUSTER_PRESETS: {
     taper: number;
     roughness: number;
     curl: number;
+    glow: number;
+    sparks: number;
     spread: number;
     angleSpread: number;
     opacity: number;
     layout: 'scatter' | 'parallel';
   };
-  /** Colores sugeridos (sombra/base/brillo) si se activa "Colores del
+  /** Colores sugeridos (de la base de cada hebra a su punta, ver
+   *  `lerpColorStops` en brushTexture.ts) si se activa "Colores del
    *  racimo" con este preset — no se aplican solos, sólo rellenan los
    *  selectores para no dejarlos en un negro por defecto poco útil. */
   colorHint: [string, string, string];
 }[] = [
   {
     label: 'Mata de césped',
-    values: { count: 14, bladeLength: 0.75, lengthVariation: 0.35, thickness: 0.05, taper: 0.7, roughness: 0.25, curl: 0.15, spread: 0.8, angleSpread: 0.35, opacity: 1, layout: 'scatter' },
-    colorHint: ['#2f5c26', '#4f9143', '#8fce6a'],
+    values: { count: 14, bladeLength: 0.75, lengthVariation: 0.35, thickness: 0.05, taper: 0.7, roughness: 0.25, curl: 0.15, glow: 0, sparks: 0, spread: 0.8, angleSpread: 0.35, opacity: 1, layout: 'scatter' },
+    colorHint: ['#1e3d18', '#4f9143', '#a3e37a'],
   },
   {
     label: 'Hojas',
-    values: { count: 9, bladeLength: 0.4, lengthVariation: 0.4, thickness: 0.14, taper: 0.5, roughness: 0.3, curl: 0.1, spread: 0.9, angleSpread: 0.6, opacity: 0.95, layout: 'scatter' },
+    values: { count: 9, bladeLength: 0.4, lengthVariation: 0.4, thickness: 0.14, taper: 0.5, roughness: 0.3, curl: 0.1, glow: 0, sparks: 0, spread: 0.9, angleSpread: 0.6, opacity: 0.95, layout: 'scatter' },
     colorHint: ['#274a1f', '#3f7a34', '#79b862'],
   },
   {
     label: 'Llamas',
-    values: { count: 8, bladeLength: 0.7, lengthVariation: 0.5, thickness: 0.09, taper: 0.75, roughness: 0.35, curl: 0.4, spread: 0.75, angleSpread: 0.25, opacity: 1, layout: 'scatter' },
-    colorHint: ['#7a1a00', '#ff6a00', '#ffe066'],
+    // Degradado BASE→PUNTA, no un color al azar por hebra: casi blanco
+    // donde hay más calor (la base, junto al combustible), naranja en el
+    // cuerpo, rojo oscuro hacia la punta, que es la parte más fría de la
+    // llama — al revés de como estaba antes (rojo en la base). El halo y
+    // las chispas son lo otro que pedía la referencia de pinceles de fuego
+    // reales: bordes difuminados y partículas sueltas, no un recorte duro.
+    values: { count: 8, bladeLength: 0.7, lengthVariation: 0.5, thickness: 0.09, taper: 0.75, roughness: 0.35, curl: 0.4, glow: 0.5, sparks: 0.6, spread: 0.75, angleSpread: 0.25, opacity: 1, layout: 'scatter' },
+    colorHint: ['#fff3b0', '#ff7a1a', '#7a1400'],
   },
   {
     label: 'Mechón',
-    values: { count: 20, bladeLength: 0.85, lengthVariation: 0.2, thickness: 0.02, taper: 0.85, roughness: 0.1, curl: 0.2, spread: 0.5, angleSpread: 0.4, opacity: 1, layout: 'parallel' },
+    values: { count: 20, bladeLength: 0.85, lengthVariation: 0.2, thickness: 0.02, taper: 0.85, roughness: 0.1, curl: 0.2, glow: 0, sparks: 0, spread: 0.5, angleSpread: 0.4, opacity: 1, layout: 'parallel' },
     colorHint: ['#4a2416', '#8a5232', '#c98a55'],
   },
 ];
@@ -2061,21 +2070,23 @@ function ClusterGeneratorSection({
   const [taper, setTaper] = useState(0.7);
   const [roughness, setRoughness] = useState(0.25);
   const [curl, setCurl] = useState(0.15);
+  const [glow, setGlow] = useState(0);
+  const [sparks, setSparks] = useState(0);
   const [spread, setSpread] = useState(0.8);
   const [angleSpread, setAngleSpread] = useState(0.35);
   const [opacity, setOpacity] = useState(1);
   const [layout, setLayout] = useState<'scatter' | 'parallel'>('scatter');
   const [colorCount, setColorCount] = useState(0);
-  const [color1, setColor1] = useState<RGB>(hexToRgb('#2f5c26'));
+  const [color1, setColor1] = useState<RGB>(hexToRgb('#1e3d18'));
   const [color2, setColor2] = useState<RGB>(hexToRgb('#4f9143'));
-  const [color3, setColor3] = useState<RGB>(hexToRgb('#8fce6a'));
+  const [color3, setColor3] = useState<RGB>(hexToRgb('#a3e37a'));
   const [label, setLabel] = useState('Mata de césped');
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   const to255 = (c: RGB) => ({ r: Math.round(c.r * 255), g: Math.round(c.g * 255), b: Math.round(c.b * 255) });
   const colors = colorCount > 0 ? [color1, color2, color3].slice(0, colorCount).map(to255) : undefined;
   const params: ClusterTextureParams = {
-    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, spread, angleSpread, opacity, layout, colors,
+    seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, colors,
   };
   const previewSize = 96;
 
@@ -2088,7 +2099,7 @@ function ClusterGeneratorSection({
       .getContext('2d')!
       .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, spread, angleSpread, opacity, layout, colorCount, color1, color2, color3]);
+  }, [open, seed, count, bladeLength, lengthVariation, thickness, taper, roughness, curl, glow, sparks, spread, angleSpread, opacity, layout, colorCount, color1, color2, color3]);
 
   if (!open) {
     return (
@@ -2125,6 +2136,8 @@ function ClusterGeneratorSection({
               setTaper(p.values.taper);
               setRoughness(p.values.roughness);
               setCurl(p.values.curl);
+              setGlow(p.values.glow);
+              setSparks(p.values.sparks);
               setSpread(p.values.spread);
               setAngleSpread(p.values.angleSpread);
               setOpacity(p.values.opacity);
@@ -2159,6 +2172,8 @@ function ClusterGeneratorSection({
       <Slider label="Extensión" value={spread} min={0.05} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSpread} />
       <Slider label="Abanico de ángulo" value={angleSpread} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setAngleSpread} />
       <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <Slider label="Halo (bordes difuminados)" value={glow} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setGlow} />
+      <Slider label="Chispas" value={sparks} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSparks} />
       <Field label="Colores del racimo (hasta 3)">
         <Segmented
           value={String(colorCount)}
@@ -2173,16 +2188,16 @@ function ClusterGeneratorSection({
       </Field>
       {colorCount > 0 && (
         <div className="preset-row">
-          <Field label={colorCount === 1 ? 'Color' : 'Sombra'}>
+          <Field label={colorCount === 1 ? 'Color' : 'En la base'}>
             <input type="color" value={rgbToHex(color1)} onChange={(e) => setColor1(hexToRgb(e.target.value))} />
           </Field>
           {colorCount >= 2 && (
-            <Field label={colorCount === 2 ? 'Brillo' : 'Base'}>
+            <Field label={colorCount === 2 ? 'En la punta' : 'A media hebra'}>
               <input type="color" value={rgbToHex(color2)} onChange={(e) => setColor2(hexToRgb(e.target.value))} />
             </Field>
           )}
           {colorCount >= 3 && (
-            <Field label="Brillo">
+            <Field label="En la punta">
               <input type="color" value={rgbToHex(color3)} onChange={(e) => setColor3(hexToRgb(e.target.value))} />
             </Field>
           )}
@@ -2218,8 +2233,12 @@ function ClusterGeneratorSection({
         "Dispersa" las reparte al azar, como brota vegetación; "Paralela" las peina
         en fila casi en la misma dirección — así funciona el pelo de verdad, con
         alguna hebra suelta rompiendo la uniformidad. Con "Colores del racimo" cada
-        hebra sale en uno de los tonos elegidos (sombra/base/brillo) en vez de un
-        color plano — el pincel activo no las tiñe mientras estén puestos.
+        hebra pasa del color "En la base" al de "En la punta" en degradado — no un
+        color plano ni al azar — mientras estén puestos, el pincel activo no las
+        tiñe. "Halo" difumina el borde en vez de dejarlo recortado; para que de
+        verdad brille sobre un fondo oscuro (fuego, chispas, luz) pon esa capa en
+        modo "Trama" o "Añadir" en el panel de Capas — el halo por sí solo no
+        emite luz, eso es el modo de fusión.
       </p>
     </div>
   );

@@ -107,8 +107,18 @@ function makeValueNoise(rand: () => number, cells: number) {
   };
 }
 
-/** Pinta un punto suave en el canal alfa de `buf`, sin oscurecer lo ya pintado. */
-function paintDot(buf: Uint8Array, size: number, cx: number, cy: number, r: number, peak: number) {
+/** Pinta un punto suave en el canal alfa de `buf`, sin oscurecer lo ya
+ *  pintado. `color`, si se da, se escribe en el RGB igual que en
+ *  `paintBlade` — lo usa `generateClusterTexturePixels` para las chispas. */
+function paintDot(
+  buf: Uint8Array,
+  size: number,
+  cx: number,
+  cy: number,
+  r: number,
+  peak: number,
+  color?: { r: number; g: number; b: number },
+) {
   if (r <= 0) return;
   const x0 = Math.max(0, Math.floor(cx - r));
   const x1 = Math.min(size - 1, Math.ceil(cx + r));
@@ -121,7 +131,14 @@ function paintDot(buf: Uint8Array, size: number, cx: number, cy: number, r: numb
       const a = peak * (1 - smoothstep(0.55, 1, d));
       const i = (y * size + x) * 4 + 3;
       const v = Math.round(a * 255);
-      if (v > buf[i]) buf[i] = v;
+      if (v > buf[i]) {
+        buf[i] = v;
+        if (color) {
+          buf[i - 3] = color.r;
+          buf[i - 2] = color.g;
+          buf[i - 1] = color.b;
+        }
+      }
     }
   }
 }
@@ -584,6 +601,31 @@ export function generateRakeTexturePixels(
   return buf;
 }
 
+/** Interpola a lo largo de una lista de colores como paradas de un
+ *  degradado (la primera en la base de la hebra, la última en la punta) —
+ *  no un solo color plano por hebra: el fuego real es más blanco/amarillo
+ *  donde hay más calor (la base) y se enfría a naranja/rojo hacia la
+ *  punta, y hasta el pelo pintado a mano suele llevar la base más oscura
+ *  que la punta. Con un solo color no hay nada que interpolar. */
+function lerpColorStops(
+  colors: { r: number; g: number; b: number }[],
+  u: number,
+): { r: number; g: number; b: number } {
+  if (colors.length === 1) return colors[0];
+  const segs = colors.length - 1;
+  const t = Math.min(1, Math.max(0, u)) * segs;
+  const i0 = Math.min(segs - 1, Math.floor(t));
+  const i1 = i0 + 1;
+  const f = t - i0;
+  const a = colors[i0];
+  const b = colors[i1];
+  return {
+    r: Math.round(a.r + (b.r - a.r) * f),
+    g: Math.round(a.g + (b.g - a.g) * f),
+    b: Math.round(a.b + (b.b - a.b) * f),
+  };
+}
+
 /**
  * Pinta UNA hebra (hoja, brizna, pelo, lengua de fuego) que nace en `(bx,by)`
  * y crece hacia `angle` — a diferencia de la marca alargada suelta (centrada,
@@ -593,11 +635,20 @@ export function generateRakeTexturePixels(
  *
  * `curl` combado suave en forma de arco (cero en la base y en la punta,
  * máximo a la mitad) — nada se dobla en línea recta: una brizna real cede al
- * peso, un pelo cae con la gravedad, una llama serpentea. `color`, si se da,
- * se escribe en el RGB del propio texel allí donde esta hebra gana el
- * canal alfa — así una sola textura puede llevar sombra/base/brillo por
- * hebra en vez de un color plano para todo el racimo (ver `uUseTextureColor`
- * en `STAMP_FS`, que decide si leer este RGB o el del pincel).
+ * peso, un pelo cae con la gravedad, una llama serpentea.
+ *
+ * `colors`, si se da, es un degradado (ver `lerpColorStops`) que se escribe
+ * en el RGB del propio texel allí donde esta hebra gana el canal alfa — así
+ * una sola textura puede llevar su propio color en vez de uno plano para
+ * todo el racimo (ver `uUseTextureColor` en `STAMP_FS`, que decide si leer
+ * este RGB o el del pincel).
+ *
+ * `glow` añade un halo tenue más ancho que el núcleo nítido, alrededor —
+ * "bordes difuminados" en vez de un recorte duro. Sale del mismo degradado
+ * de color que el núcleo, sólo que más flojo de alfa; donde el núcleo de
+ * otra hebra ya cubre ese texel con más alfa, el halo pierde (el `if (v >
+ * buf[idx])` de siempre), así que el halo sólo asoma alrededor, nunca
+ * encima de un núcleo ajeno.
  */
 function paintBlade(
   buf: Uint8Array,
@@ -610,15 +661,17 @@ function paintBlade(
   taper: number,
   roughness: number,
   curl: number,
+  glow: number,
   opacity: number,
   rand: () => number,
-  color?: { r: number; g: number; b: number },
+  colors?: { r: number; g: number; b: number }[],
 ) {
   if (len <= 0) return;
   const c = Math.cos(angle);
   const s = Math.sin(angle);
   const curlAmount = curl * len * 0.35;
-  const reach = len + halfThick + Math.abs(curlAmount) + 2;
+  const glowReach = halfThick * glow * 4;
+  const reach = len + halfThick + Math.abs(curlAmount) + glowReach + 2;
   const x0 = Math.max(0, Math.floor(bx - reach));
   const x1 = Math.min(size - 1, Math.ceil(bx + reach));
   const y0 = Math.max(0, Math.floor(by - reach));
@@ -654,18 +707,27 @@ function paintBlade(
 
       const bow = curlAmount * Math.sin(u * Math.PI);
       const lenFalloff = along < 0 ? 0 : 1 - smoothstep(len * 0.85, len, along);
-      const edge = Math.abs(perp - bow) - halfThickHere;
+      const distFromAxis = Math.abs(perp - bow);
+      const edge = distFromAxis - halfThickHere;
       const edgeAlpha = 1 - smoothstep(-1, 1, edge);
-      const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * opacity;
+      const coreAlpha = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * opacity;
+
+      let a = coreAlpha;
+      if (glow > 0) {
+        const glowOuter = halfThickHere + Math.max(1, glowReach);
+        const glowAlpha = Math.max(0, 1 - smoothstep(halfThickHere, glowOuter, distFromAxis)) * glow * 0.55 * lenFalloff * opacity;
+        a = Math.max(a, glowAlpha);
+      }
 
       const idx = (y * size + x) * 4 + 3;
       const v = Math.round(a * 255);
       if (v > buf[idx]) {
         buf[idx] = v;
-        if (color) {
-          buf[idx - 3] = color.r;
-          buf[idx - 2] = color.g;
-          buf[idx - 1] = color.b;
+        if (colors && colors.length > 0) {
+          const px = lerpColorStops(colors, u);
+          buf[idx - 3] = px.r;
+          buf[idx - 2] = px.g;
+          buf[idx - 1] = px.b;
         }
       }
     }
@@ -714,29 +776,27 @@ export interface ClusterTextureParams {
   /** 0..1: combado en arco de cada hebra — nada real es una línea recta. */
   curl?: number;
   /**
-   * Hasta 3 colores (0..255 por canal) que se reparten entre las hebras —
-   * sombra/base/brillo, como pintar pelo a mano con tres tonos en vez de
-   * uno plano. Ausente o vacío: sin color propio, cada hebra sale en blanco
-   * y el pincel la tiñe con su color activo (comportamiento de siempre).
+   * Hasta 3 colores (0..255 por canal), como paradas de un degradado de la
+   * BASE de cada hebra a su PUNTA (ver `lerpColorStops`) — el fuego real es
+   * casi blanco donde hay más calor y se enfría hacia la punta; hasta el
+   * pelo pintado a mano suele llevar la base más oscura. Con 1 color, sale
+   * plano; con 2 o 3, cada hebra pasa de uno a otro según su propio largo,
+   * no un color fijo por hebra. Ausente o vacío: sin color propio, cada
+   * hebra sale en blanco y el pincel la tiñe con su color activo
+   * (comportamiento de siempre).
    */
   colors?: { r: number; g: number; b: number }[];
-}
-
-/** Con 1 color todas las hebras lo llevan; con 2, mitad y mitad; con 3, sesga
- *  hacia el del medio (~50%) y deja los extremos —sombra/brillo— más
- *  raros (~25% cada uno), igual que un mechón pintado a mano es sobre todo
- *  el tono base con detalles de sombra y luz salpicados, no un tercio exacto
- *  de cada uno. */
-function pickClusterColor(
-  rand: () => number,
-  colors: { r: number; g: number; b: number }[],
-): { r: number; g: number; b: number } {
-  if (colors.length === 1) return colors[0];
-  if (colors.length === 2) return colors[rand() < 0.5 ? 0 : 1];
-  const r = rand();
-  if (r < 0.25) return colors[0];
-  if (r < 0.75) return colors[1];
-  return colors[2];
+  /** 0..1: halo tenue alrededor de cada hebra, más ancho que el núcleo
+   *  nítido — bordes difuminados en vez de un recorte duro. Pensado para
+   *  fuego/luz: combínalo con una capa en modo "Trama" o "Añadir" para que
+   *  de verdad brille sobre un fondo oscuro (ver `BLEND_LABELS` en
+   *  types.ts) — esto sólo dibuja el halo, no lo hace emitir luz por sí
+   *  solo, eso es cosa del modo de fusión de la capa, no de la textura. */
+  glow?: number;
+  /** Cuántas motas sueltas (chispas) salpicar por encima de las puntas —
+   *  0 desactiva. Reutiliza `paintDot`, con el color de la parada más
+   *  cercana a la punta si hay `colors`. */
+  sparks?: number;
 }
 
 export function generateClusterTexturePixels(
@@ -754,11 +814,13 @@ export function generateClusterTexturePixels(
   const count = Math.max(1, Math.round(params.count));
   const parallel = params.layout === 'parallel';
   const curl = params.curl ?? 0;
+  const glow = params.glow ?? 0;
   const colors = params.colors;
   // Base cerca del borde inferior del lienzo: las hebras nacen "del suelo"
   // y crecen hacia arriba (ángulo base -90°, hacia v=0 — ver la convención
   // Y-hacia-abajo de la cabecera del archivo), como una mata real.
   const baseY = size * 0.9;
+  let minTipY = baseY;
 
   for (let i = 0; i < count; i++) {
     // "parallel": reparte las bases en fila (como un peine) en vez de al
@@ -776,8 +838,24 @@ export function generateClusterTexturePixels(
     const angle = -Math.PI / 2 + (rand() * 2 - 1) * (Math.PI / 2) * angleSpreadHere;
     const halfThick = Math.max(0.5, (size * params.thickness) / 2);
     const curlHere = (rand() * 2 - 1) * curl;
-    const color = colors && colors.length > 0 ? pickClusterColor(rand, colors) : undefined;
-    paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, curlHere, params.opacity, rand, color);
+    paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, curlHere, glow, params.opacity, rand, colors);
+    // Punta aproximada (ángulo mayormente vertical, así que restar `len` en
+    // y es suficiente para saber dónde salpicar chispas por encima).
+    minTipY = Math.min(minTipY, by - len);
+  }
+
+  const sparks = params.sparks ?? 0;
+  if (sparks > 0) {
+    const sparkColor = colors && colors.length > 0 ? colors[colors.length - 1] : undefined;
+    const sparkCount = Math.round(sparks * 10);
+    for (let i = 0; i < sparkCount; i++) {
+      const sx = size / 2 + (rand() * 2 - 1) * size * 0.5 * Math.max(0.3, params.spread);
+      // Por encima de las puntas, con más probabilidad cerca de ellas que
+      // muy lejos — una chispa que se ha desprendido y todavía sube.
+      const sy = minTipY - rand() * rand() * size * 0.35;
+      const r = size * (0.01 + rand() * 0.015);
+      paintDot(buf, size, sx, sy, r, 0.7 + rand() * 0.3, sparkColor);
+    }
   }
 
   return buf;
