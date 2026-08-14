@@ -1,6 +1,12 @@
 import { Renderer, type Surface } from '../gl/renderer';
 import { StrokeBuilder, TAPER_LENGTH_FACTOR, taperScale, type BrushPreset } from './brush';
 import {
+  BRUSH_TEXTURE_SIZE,
+  generateBrushTexturePixels,
+  isBuiltinTextureId,
+  type CustomTexture,
+} from './brushTexture';
+import {
   buildClipGroups,
   celAt,
   celStartFrame,
@@ -1297,6 +1303,59 @@ export class Engine {
     });
   }
 
+  /* --- texturas de punta personalizadas --- */
+
+  /**
+   * Píxeles de una textura de punta por id: las 4 integradas se generan al
+   * vuelo (deterministas, ver `brushTexture.ts`); cualquier otro id se busca
+   * en `doc.customTextures` — las que ha importado quien dibuja para ESTE
+   * proyecto. Si el id no aparece en ninguna (p. ej. el pincel activo
+   * apuntaba a una textura ya borrada), cae a un buffer transparente en vez
+   * de fallar: una punta sin cobertura visible, no un trazo roto.
+   */
+  private resolveTexturePixels(id: string): Uint8Array {
+    if (isBuiltinTextureId(id)) return generateBrushTexturePixels(id, BRUSH_TEXTURE_SIZE);
+    const custom = this.doc.customTextures.find((t) => t.id === id);
+    return custom?.pixels ?? new Uint8Array(BRUSH_TEXTURE_SIZE * BRUSH_TEXTURE_SIZE * 4);
+  }
+
+  /** Registra una textura ya decodificada (ver `importCustomBrushTexture` en
+   *  `io.ts`) como activo del proyecto — viaja con el `.trace`, no con la app. */
+  addCustomTexture(texture: CustomTexture) {
+    this.history.run({
+      label: 'Importar textura de pincel',
+      redo: () => {
+        this.doc.customTextures.push(texture);
+        this.touch();
+      },
+      undo: () => {
+        this.doc.customTextures = this.doc.customTextures.filter((t) => t.id !== texture.id);
+        this.touch();
+      },
+    });
+  }
+
+  /** Quita una textura personalizada. Un pincel que la tuviera activa no se
+   *  toca aquí (las presets de pincel son estado de interfaz, no del
+   *  documento) — vuelve a resolver a un buffer transparente, ver
+   *  `resolveTexturePixels`. */
+  removeCustomTexture(id: string) {
+    const index = this.doc.customTextures.findIndex((t) => t.id === id);
+    if (index < 0) return;
+    const texture = this.doc.customTextures[index];
+    this.history.run({
+      label: 'Quitar textura de pincel',
+      redo: () => {
+        this.doc.customTextures = this.doc.customTextures.filter((t) => t.id !== id);
+        this.touch();
+      },
+      undo: () => {
+        this.doc.customTextures.splice(index, 0, texture);
+        this.touch();
+      },
+    });
+  }
+
   /**
    * Cambia qué variante se ve en el fotograma actual. Sin `history.run` a
    * propósito, igual que `setTransformValue`/`setBonePose`: es lo que
@@ -2342,7 +2401,7 @@ export class Engine {
       wet,
       allStamps,
       ctx.color,
-      texId ? this.renderer.getBrushTexture(texId) : undefined,
+      texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
     );
   }
 
@@ -2392,7 +2451,14 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(cel.surface, rect);
-    this.mergeStroke(cel.surface, this.renderer.scratch('wet'), ctx.brush.opacity, ctx.brush.erase, layer);
+    this.mergeStroke(
+      cel.surface,
+      this.renderer.scratch('wet'),
+      ctx.brush.opacity,
+      ctx.brush.erase,
+      layer,
+      ctx.brush.pigmentMix,
+    );
     const after = this.renderer.readRect(cel.surface, rect);
     this.renderer.clear(this.renderer.scratch('wet'));
 
@@ -2484,7 +2550,7 @@ export class Engine {
         wet,
         stamps,
         ctx.color,
-        texId ? this.renderer.getBrushTexture(texId) : undefined,
+        texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
       );
     }
   }
@@ -2634,7 +2700,7 @@ export class Engine {
     }
 
     const before = this.renderer.readRect(p.cel.surface, rect);
-    this.mergeStroke(p.cel.surface, wet, p.ctx.brush.opacity, p.ctx.brush.erase, p.layer);
+    this.mergeStroke(p.cel.surface, wet, p.ctx.brush.opacity, p.ctx.brush.erase, p.layer, p.ctx.brush.pigmentMix);
     const after = this.renderer.readRect(p.cel.surface, rect);
     this.renderer.clear(wet);
 
@@ -2957,7 +3023,7 @@ export class Engine {
           tail,
           [...scaled, ...this.mirrorStamps(scaled)],
           wetCtx.color,
-          texId ? this.renderer.getBrushTexture(texId) : undefined,
+          texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
         );
         this.renderer.drawOver(combined, tail, wetCtx.brush.opacity, undefined, erase, mask);
       }
@@ -2969,7 +3035,7 @@ export class Engine {
           predict,
           this.predictedStamps,
           wetCtx.color,
-          texId ? this.renderer.getBrushTexture(texId) : undefined,
+          texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
         );
         this.renderer.drawOver(
           combined,
@@ -3025,7 +3091,7 @@ export class Engine {
             tail,
             [...scaled, ...this.mirrorStamps(scaled)],
             maskCtx.color,
-            texId ? this.renderer.getBrushTexture(texId) : undefined,
+            texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
           );
           this.renderer.drawOver(liveMask, tail, maskCtx.brush.opacity, undefined, erase);
         }
@@ -3037,7 +3103,7 @@ export class Engine {
             predict,
             this.predictedStamps,
             maskCtx.color,
-            texId ? this.renderer.getBrushTexture(texId) : undefined,
+            texId ? this.renderer.getBrushTexture(texId, () => this.resolveTexturePixels(texId)) : undefined,
           );
           this.renderer.drawOver(liveMask, predict, maskCtx.brush.opacity, undefined, erase);
         }
@@ -3367,18 +3433,51 @@ export class Engine {
    * verdad usando el bloqueo de alfa como máscara — en vez de un shader
    * nuevo sólo para multiplicar dos máscaras. Sin ninguna de las dos
    * activa (el caso normal), es exactamente el `drawOver` de siempre.
+   *
+   * Con `pigmentMix > 0` (y sin borrar — borrar no tiene "color" que
+   * mezclar) el fundido final pasa por `mixOver` en vez de `drawOver`: hace
+   * falta una copia de `dst` en un scratch aparte porque `MIX_FS` lee el
+   * color de debajo en el propio shader, no vía el blend fijo de la GPU
+   * (ver `Renderer.mixOver`) — WebGL2 no deja leer y escribir la misma
+   * textura en un pase, la misma razón por la que `composite()` pide tres
+   * superficies.
    */
-  private mergeStroke(dst: Surface, src: Surface, opacity: number, erase: boolean, layer: Layer) {
+  private mergeStroke(
+    dst: Surface,
+    src: Surface,
+    opacity: number,
+    erase: boolean,
+    layer: Layer,
+    pigmentMix = 0,
+  ) {
     const selMask = this.clipMask;
     const lockMask = layer.alphaLock ? this.alphaLockMask(dst) : null;
+
+    let finalSrc = src;
+    let finalMask = selMask ?? lockMask;
     if (selMask && lockMask) {
       const pre = this.renderer.scratch('paintmask');
       this.renderer.clear(pre);
       this.renderer.drawOver(pre, src, 1, undefined, false, selMask);
-      this.renderer.drawOver(dst, pre, opacity, undefined, erase, lockMask);
+      finalSrc = pre;
+      finalMask = lockMask;
+    }
+
+    if (!erase && pigmentMix > 0) {
+      let mixSrc = finalSrc;
+      if (finalMask) {
+        const masked = this.renderer.scratch('mixMasked');
+        this.renderer.clear(masked);
+        this.renderer.drawOver(masked, finalSrc, 1, undefined, false, finalMask);
+        mixSrc = masked;
+      }
+      const backdrop = this.renderer.scratch('mixBackdrop');
+      this.renderer.copy(backdrop, dst, 1);
+      this.renderer.mixOver(dst, backdrop, mixSrc, { opacity, pigmentMix });
       return;
     }
-    this.renderer.drawOver(dst, src, opacity, undefined, erase, selMask ?? lockMask);
+
+    this.renderer.drawOver(dst, finalSrc, opacity, undefined, erase, finalMask);
   }
 
   private selectionSurfaceCanvas(): HTMLCanvasElement {

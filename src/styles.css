@@ -856,6 +856,65 @@ button:focus-visible {
   border-radius: 6px;
 }
 
+.texture-generator {
+  position: relative;
+}
+
+.texture-generator__close {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.texture-generator__close:hover {
+  color: var(--text);
+}
+
+.texture-generator__preview {
+  display: flex;
+  justify-content: center;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background:
+    repeating-conic-gradient(#3a3a44 0% 25%, #2b2b33 0% 50%) 50% / 10px 10px;
+}
+
+.texture-generator__preview canvas {
+  width: 96px;
+  height: 96px;
+  border-radius: 4px;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.chip {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
 .sv-area {
   position: relative;
   height: 170px;

@@ -4,13 +4,13 @@ import {
   COMPOSITE_FS,
   COPY_FS,
   MAX_SKIN_BONES,
+  MIX_FS,
   PRESENT_FS,
   QUAD_VS,
   SKIN_VS,
   STAMP_FS,
   STAMP_VS,
 } from './shaders';
-import { generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
 import { extractRect } from '../core/flood';
 import { mat3Identity, type Mat3 } from '../core/math';
 import type { Mesh } from '../core/rig';
@@ -86,9 +86,10 @@ export class Renderer {
    *  vértices pesa kilobytes, no megabytes, frente a una superficie del
    *  tamaño del documento — ver plan de diseño del módulo de rig. */
   private meshGPU = new Map<string, { vao: WebGLVertexArrayObject; vbo: WebGLBuffer; ibo: WebGLBuffer; indexCount: number }>();
-  /** Máscaras de punta de pincel, generadas una vez y cacheadas por id: no
-   * dependen del tamaño del documento, así que sobreviven a `setDocumentSize`. */
-  private brushTextures = new Map<BuiltinTextureId, WebGLTexture>();
+  /** Máscaras de punta de pincel, generadas o subidas una vez y cacheadas
+   * por id (integrada o `CustomTexture.id`): no dependen del tamaño del
+   * documento, así que sobreviven a `setDocumentSize`. */
+  private brushTextures = new Map<string, WebGLTexture>();
   private resident = new Set<Surface>();
   private clock = 0;
   private maxResident = MAX_RESIDENT;
@@ -177,6 +178,15 @@ export class Renderer {
       'uMask',
       'uOpacity',
       'uUseMask',
+    ]);
+    this.link('mix', QUAD_VS, MIX_FS, [
+      'uMatrix',
+      'uResolution',
+      'uFlipY',
+      'uSource',
+      'uBackdrop',
+      'uOpacity',
+      'uPigmentMix',
     ]);
     this.link('ants', QUAD_VS, ANTS_FS, [
       'uMatrix',
@@ -433,17 +443,20 @@ export class Renderer {
    * ---------------------------------------------------------------- */
 
   /**
-   * Textura de máscara para una punta de pincel con textura, generada la
-   * primera vez que se pide y cacheada después. `null` (punta lisa) no pasa
-   * por aquí: lo resuelve el llamador antes de invocar este método.
+   * Textura de máscara para una punta de pincel con textura, generada o
+   * subida la primera vez que se pide y cacheada después. `null` (punta
+   * lisa) no pasa por aquí: lo resuelve el llamador antes de invocar este
+   * método. `resolvePixels` sólo se llama en un fallo de caché — así una
+   * textura integrada (cara de generar, con cientos de `paintDot`) no se
+   * recalcula en cada estampa, sólo la primera vez.
    */
-  getBrushTexture(id: BuiltinTextureId): WebGLTexture {
+  getBrushTexture(id: string, resolvePixels: () => Uint8Array): WebGLTexture {
     const cached = this.brushTextures.get(id);
     if (cached) return cached;
 
     const gl = this.gl;
     const size = 128;
-    const pixels = generateBrushTexturePixels(id, size);
+    const pixels = resolvePixels();
     const levels = Math.floor(Math.log2(size)) + 1;
 
     const tex = gl.createTexture()!;
@@ -764,6 +777,47 @@ export class Renderer {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     dst.empty = backdrop.empty && src.empty;
+    dst.version++;
+  }
+
+  /**
+   * `dst = mezclaDePigmento(backdrop, src)` — mismo requisito de tres
+   * superficies distintas que `composite()`, y por la misma razón: el
+   * shader de `MIX_FS` necesita leer el color de debajo a la vez que
+   * escribe el resultado, así que `backdrop` no puede ser `dst`. Quien
+   * llama es responsable de haber copiado el `dst` de antes ahí (ver
+   * `Engine.mergeStroke`) — este método no lo hace por si el llamador ya
+   * tiene esa copia hecha por otra razón.
+   */
+  mixOver(dst: Surface, backdrop: Surface, src: Surface, opts: { opacity: number; pigmentMix: number }) {
+    const gl = this.gl;
+    this.ensureResident(dst);
+    this.ensureResident(backdrop);
+    this.ensureResident(src);
+    const p = this.programs.get('mix')!;
+    gl.useProgram(p.program);
+    gl.bindVertexArray(this.quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, this.docWidth, this.docHeight);
+    gl.disable(gl.BLEND);
+
+    gl.uniformMatrix3fv(p.uniforms.uMatrix, false, this.docMatrix());
+    gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
+    gl.uniform1f(p.uniforms.uFlipY, 0);
+    gl.uniform1f(p.uniforms.uOpacity, opts.opacity);
+    gl.uniform1f(p.uniforms.uPigmentMix, opts.pigmentMix);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(p.uniforms.uSource, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, backdrop.tex);
+    gl.uniform1i(p.uniforms.uBackdrop, 1);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!src.empty) dst.empty = false;
     dst.version++;
   }
 

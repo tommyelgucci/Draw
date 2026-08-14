@@ -6,12 +6,29 @@ import {
   type BlendMode,
   type RGB,
 } from '../core/types';
-import { BUILTIN_TEXTURES, generateBrushTexturePixels, type BuiltinTextureId } from '../core/brushTexture';
-import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS } from '../core/brush';
+import {
+  BRUSH_TEXTURE_SIZE,
+  BUILTIN_TEXTURES,
+  generateBrushTexturePixels,
+  generateBurstTexturePixels,
+  generateParametricTexturePixels,
+  generateRakeTexturePixels,
+  generateStreakTexturePixels,
+  generateWispTexturePixels,
+  type BuiltinTextureId,
+  type BurstTextureParams,
+  type CustomTexture,
+  type ParametricTextureParams,
+  type RakeTextureParams,
+  type StreakTextureParams,
+  type WispTextureParams,
+} from '../core/brushTexture';
+import { BRUSH_CATEGORIES, BRUSH_CATEGORY_LABELS, type BrushPreset } from '../core/brush';
 import {
   MAX_FRAME_COUNT,
   TRANSFORM_LABELS,
   TRANSFORM_PROPS,
+  uid,
   type Layer,
   type LayerGroup,
   type TransformProp,
@@ -25,11 +42,13 @@ import {
   exportFramePNG,
   exportSequenceZip,
   importAudioTrack,
+  importCustomBrushTexture,
   importReferenceImage,
   importReferenceVideo,
   serializeProject,
 } from '../core/io';
 import { describeVideoSupport, exportImageSequenceAsVideo, exportVideo, type VideoSupport } from '../core/video';
+import { buildLoopEmbedSnippet, buildScrollEmbedSnippet } from '../core/webExport';
 import { useActiveBrush, useEngineRevision, useUI, type UserPalette } from '../state/store';
 import { Field, IconButton, Panel, Segmented, Slider } from './controls';
 import {
@@ -55,6 +74,7 @@ import {
   IconText,
   IconTrash,
   IconVideo,
+  IconWand,
 } from './icons';
 
 /* ================================================================== *
@@ -878,6 +898,7 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
   const quickShapeEnabled = useUI((s) => s.quickShapeEnabled);
   const quickShapePrecision = useUI((s) => s.quickShapePrecision);
   const setQuickShapePrecision = useUI((s) => s.setQuickShapePrecision);
+  const textureFileInput = useRef<HTMLInputElement>(null);
 
   return (
     <Panel title="Pincel" onClose={() => setPanel(null)} width={310}>
@@ -1007,6 +1028,20 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           onChange={(v) => updateBrush({ scatter: v })}
         />
         <Slider
+          label="Giro al azar"
+          value={brush.angleJitter}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => updateBrush({ angleJitter: v })}
+        />
+        <p className="hint">
+          Con una textura de trazo (marca alargada, sección "Generar trazo") y algo
+          de dispersión, esto reparte muchas hebras giradas al azar por el ancho del
+          trazo — un mechón de pelo o césped disperso. En 0%, todas las hebras salen
+          alineadas, como las púas de un peine.
+        </p>
+        <Slider
           label="Punta achatada"
           value={brush.aspect}
           min={0.05}
@@ -1014,6 +1049,21 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
           format={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => updateBrush({ aspect: v })}
         />
+        <Slider
+          label="Mezcla de pigmento"
+          value={brush.pigmentMix}
+          min={0}
+          max={1}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => updateBrush({ pigmentMix: v })}
+        />
+        <p className="hint">
+          Al soltar el trazo, se funde con lo que hubiera debajo como pigmento en vez
+          de superponerse en alfa plano: se oscurece y satura donde se cruza con otro
+          color, en vez de aclararse hacia un promedio gris — no es una simulación
+          física de pigmento, pero se aparta de la mezcla digital en esa dirección.
+          En 0% no cambia nada respecto a como pintaba antes.
+        </p>
 
         <h3 className="panel__subtitle">Textura de punta</h3>
         <div className="texture-grid">
@@ -1032,11 +1082,56 @@ export function BrushPanel({ engine }: { engine: Engine | null }) {
               onClick={() => updateBrush({ textureId: t.id })}
             />
           ))}
+          {(engine?.doc.customTextures ?? []).map((t) => (
+            <CustomTextureSwatch
+              key={t.id}
+              texture={t}
+              active={brush.textureId === t.id}
+              onClick={() => updateBrush({ textureId: t.id })}
+              onRemove={() => {
+                if (brush.textureId === t.id) updateBrush({ textureId: null });
+                engine?.removeCustomTexture(t.id);
+              }}
+            />
+          ))}
         </div>
         <p className="hint">
           Cada estampa lleva esta máscara de cobertura en vez de un círculo liso: es lo
           que da la textura granulada del lápiz o la salpicadura del aerógrafo.
         </p>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          disabled={!engine}
+          onClick={() => textureFileInput.current?.click()}
+        >
+          <IconImage size={16} /> Importar textura…
+        </button>
+        <input
+          ref={textureFileInput}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file || !engine) return;
+            const label = file.name.replace(/\.[^.]+$/, '');
+            const tex = await importCustomBrushTexture(file, label);
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+          }}
+        />
+        <p className="hint">
+          Se guarda con este proyecto (viaja en el .trace), no con la app: cada quien
+          importa las suyas. Usa el canal de transparencia del PNG como forma de la
+          estampa — una imagen sin transparencia entra como un cuadrado sólido.
+        </p>
+        <TextureGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <StreakGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <WispGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <BurstGeneratorSection engine={engine} updateBrush={updateBrush} />
+        <RakeGeneratorSection engine={engine} updateBrush={updateBrush} />
 
         <h3 className="panel__subtitle">QuickShape</h3>
         <Slider
@@ -1189,6 +1284,710 @@ function TextureSwatch({
       <canvas className="texture-chip__canvas" ref={ref} width={size} height={size} />
       <span>{label}</span>
     </button>
+  );
+}
+
+/** Igual que `TextureSwatch`, pero lee el buffer guardado en el documento en
+ *  vez de generarlo — mismo tamaño fijo (`BRUSH_TEXTURE_SIZE`) para todas,
+ *  reescalado al tamaño de la miniatura con el propio canvas. */
+function CustomTextureSwatch({
+  texture,
+  active,
+  onClick,
+  onRemove,
+}: {
+  texture: CustomTexture;
+  active: boolean;
+  onClick: () => void;
+  onRemove: () => void;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const size = 40;
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const full = Math.round(Math.sqrt(texture.pixels.length / 4));
+    const src = document.createElement('canvas');
+    src.width = full;
+    src.height = full;
+    src
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(texture.pixels.buffer as ArrayBuffer), full, full), 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(src, 0, 0, full, full, 0, 0, size, size);
+  }, [texture]);
+
+  return (
+    <div className="pose-cell">
+      <button
+        type="button"
+        className={`brush-chip ${active ? 'is-active' : ''}`}
+        onClick={onClick}
+        title={texture.label}
+      >
+        <canvas className="texture-chip__canvas" ref={ref} width={size} height={size} />
+        <span>{texture.label}</span>
+      </button>
+      <button
+        type="button"
+        className="pose-cell__remove"
+        aria-label={`Quitar ${texture.label}`}
+        onClick={onRemove}
+      >
+        <IconTrash size={12} />
+      </button>
+    </div>
+  );
+}
+
+/** Los 5 mandos simples que expone el panel, ya traducidos a los campos finos
+ *  de `ParametricTextureParams` — así "Tamaño" y "Opacidad" siguen dando una
+ *  mota con algo de variedad propia (min≠max) en vez de un tamaño exacto. */
+function paramsFromSliders(s: {
+  seed: number;
+  weave: number;
+  density: number;
+  size: number;
+  opacity: number;
+  dust: number;
+}): ParametricTextureParams {
+  return {
+    seed: s.seed,
+    weave: s.weave,
+    dotDensity: s.density,
+    dotCells: 14,
+    dotSizeMin: s.size * 0.4,
+    dotSizeMax: Math.min(1, s.size * 0.4 + 0.35),
+    dotOpacityMin: s.opacity * 0.5,
+    dotOpacityMax: Math.min(1, s.opacity * 0.5 + 0.5),
+    dustCount: Math.round(s.dust * 300),
+    dustOpacityMax: s.dust * 0.6,
+  };
+}
+
+/**
+ * Puntos de partida para los cinco mandos — no cambian lo que puede hacer el
+ * generador, sólo ahorran encontrar a tientas la zona de valores de un
+ * estilo reconocible. Ajustados a mano contra el aspecto general de esa
+ * clase de textura, no calcados de ninguna imagen concreta.
+ */
+const TEXTURE_PRESETS: {
+  label: string;
+  values: { weave: number; density: number; size: number; opacity: number; dust: number };
+}[] = [
+  { label: 'Salpicadura', values: { weave: 0, density: 0.22, size: 0.85, opacity: 0.9, dust: 0.55 } },
+  { label: 'Luciérnagas', values: { weave: 0, density: 0.12, size: 0.2, opacity: 0.8, dust: 0.25 } },
+  { label: 'Destellos', values: { weave: 0, density: 0.06, size: 0.15, opacity: 1, dust: 0.5 } },
+];
+
+/**
+ * Generador procedural por parámetros: en vez de elegir entre las 4 texturas
+ * integradas o importar un PNG ajeno, se ajustan cuatro mandos continuos
+ * (trama, densidad, tamaño, opacidad de mota, más polvo suelto) y se ve el
+ * resultado en vivo — cálculo puro sobre una semilla, no mira ninguna imagen
+ * de nadie. "Crear textura" guarda el resultado con el mismo mecanismo que
+ * ya usa el importador (`engine.addCustomTexture`), así que hereda gratis el
+ * guardado con el proyecto, la miniatura y el botón de quitar.
+ */
+function TextureGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [weave, setWeave] = useState(0);
+  const [density, setDensity] = useState(0.5);
+  const [size, setSize] = useState(0.4);
+  const [opacity, setOpacity] = useState(0.7);
+  const [dust, setDust] = useState(0);
+  const [label, setLabel] = useState('Generada');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params = paramsFromSliders({ seed, weave, density, size, opacity, dust });
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateParametricTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, weave, density, size, opacity, dust]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar textura…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {TEXTURE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setWeave(p.values.weave);
+              setDensity(p.values.density);
+              setSize(p.values.size);
+              setOpacity(p.values.opacity);
+              setDust(p.values.dust);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Trama" value={weave} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setWeave} />
+      <Slider label="Densidad de motas" value={density} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDensity} />
+      <Slider label="Tamaño de mota" value={size} min={0.05} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSize} />
+      <Slider label="Opacidad de mota" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <Slider label="Polvo" value={dust} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDust} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateParametricTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Generada');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Matemática pura sobre una semilla al azar: no mira ni copia ninguna imagen, así
+        que el resultado es tan tuyo como cualquiera de las 4 integradas.
+      </p>
+    </div>
+  );
+}
+
+const STREAK_PRESETS: {
+  label: string;
+  values: { length: number; thickness: number; taper: number; roughness: number; opacity: number };
+}[] = [
+  { label: 'Cicatriz', values: { length: 0.7, thickness: 0.12, taper: 0.6, roughness: 0.6, opacity: 0.9 } },
+  { label: 'Subrayado', values: { length: 0.85, thickness: 0.08, taper: 0.05, roughness: 0.05, opacity: 1 } },
+  { label: 'Brizna', values: { length: 0.9, thickness: 0.04, taper: 0.75, roughness: 0.15, opacity: 1 } },
+];
+
+/**
+ * Segundo generador, con forma de base distinta al de motas: una marca
+ * alargada a lo largo de un eje (longitud, grosor, cuánto se afinan las
+ * puntas, cuánto tiembla el borde) en vez de dispersión radial — cicatrices,
+ * subrayados o arañazos son el mismo mando de aspereza en extremos
+ * opuestos, no dos moldes cerrados. Mismo mecanismo de guardado que el
+ * generador de motas y el importador (`engine.addCustomTexture`).
+ */
+function StreakGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [length, setLength] = useState(0.7);
+  const [thickness, setThickness] = useState(0.12);
+  const [taper, setTaper] = useState(0.4);
+  const [roughness, setRoughness] = useState(0.4);
+  const [opacity, setOpacity] = useState(0.9);
+  const [label, setLabel] = useState('Trazo');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: StreakTextureParams = { seed, length, thickness, taper, roughness, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateStreakTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, length, thickness, taper, roughness, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar trazo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {STREAK_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setTaper(p.values.taper);
+              setRoughness(p.values.roughness);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.02} max={0.6} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Puntas afiladas" value={taper} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTaper} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateStreakTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Trazo');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Se orienta con la rotación de cada estampa — recta por defecto. Aspereza al
+        mínimo y puntas romas da un subrayado limpio; al máximo, un borde rasgado de
+        cicatriz o arañazo. "Brizna" (fina y muy afilada) más "Dispersión" y "Giro al
+        azar" (mandos de Dinámicas, arriba) reparten muchas hebras al azar por el
+        trazo — pelo o césped disperso, no una sola marca.
+      </p>
+    </div>
+  );
+}
+
+const WISP_PRESETS: {
+  label: string;
+  values: { spread: number; turbulence: number; density: number; opacity: number };
+}[] = [
+  { label: 'Humo', values: { spread: 0.55, turbulence: 0.6, density: 0.5, opacity: 0.8 } },
+  { label: 'Niebla', values: { spread: 0.9, turbulence: 0.25, density: 0.65, opacity: 0.5 } },
+  { label: 'Acuarela', values: { spread: 0.85, turbulence: 0.3, density: 0.4, opacity: 0.65 } },
+];
+
+/**
+ * Tercer generador: contorno redondeado deformado por ruido en vez de
+ * dispersión de motas o marca alargada — humo, niebla, nube.
+ */
+function WispGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [spread, setSpread] = useState(0.6);
+  const [turbulence, setTurbulence] = useState(0.5);
+  const [density, setDensity] = useState(0.5);
+  const [opacity, setOpacity] = useState(0.7);
+  const [label, setLabel] = useState('Humo');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: WispTextureParams = { seed, spread, turbulence, density, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateWispTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, spread, turbulence, density, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar humo…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {WISP_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setSpread(p.values.spread);
+              setTurbulence(p.values.turbulence);
+              setDensity(p.values.density);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Extensión" value={spread} min={0.15} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setSpread} />
+      <Slider label="Turbulencia" value={turbulence} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setTurbulence} />
+      <Slider label="Densidad interna" value={density} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setDensity} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateWispTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Humo');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Turbulencia baja da una nube redondeada; alta, zarcillos sueltos que se
+        deshilachan por el borde.
+      </p>
+    </div>
+  );
+}
+
+const BURST_PRESETS: {
+  label: string;
+  values: { spokeCount: number; length: number; thickness: number; irregularity: number; coreSize: number; opacity: number };
+}[] = [
+  { label: 'Destello', values: { spokeCount: 8, length: 0.85, thickness: 0.08, irregularity: 0.3, coreSize: 0.15, opacity: 1 } },
+  { label: 'Chispa', values: { spokeCount: 16, length: 0.6, thickness: 0.04, irregularity: 0.7, coreSize: 0.08, opacity: 0.9 } },
+];
+
+/**
+ * Cuarto generador: rayos que salen de un núcleo, medidos en polar — lente,
+ * chispa, estrella, sol. Ni motas ni un eje recto ni un contorno de ruido.
+ */
+function BurstGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [spokeCount, setSpokeCount] = useState(8);
+  const [length, setLength] = useState(0.8);
+  const [thickness, setThickness] = useState(0.06);
+  const [irregularity, setIrregularity] = useState(0.3);
+  const [coreSize, setCoreSize] = useState(0.12);
+  const [opacity, setOpacity] = useState(1);
+  const [label, setLabel] = useState('Destello');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: BurstTextureParams = { seed, spokeCount, length, thickness, irregularity, coreSize, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateBurstTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, spokeCount, length, thickness, irregularity, coreSize, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar destello…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {BURST_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setSpokeCount(p.values.spokeCount);
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setIrregularity(p.values.irregularity);
+              setCoreSize(p.values.coreSize);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Número de rayos" value={spokeCount} min={3} max={24} step={1} format={(v) => `${Math.round(v)}`} onChange={setSpokeCount} />
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.01} max={0.25} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Irregularidad" value={irregularity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setIrregularity} />
+      <Slider label="Núcleo" value={coreSize} min={0} max={0.4} format={(v) => `${Math.round(v * 100)}%`} onChange={setCoreSize} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateBurstTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Destello');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Irregularidad baja da un asterisco regular; alta, un estallido de rayos
+        desiguales — más rayos y menos grosor da algo más parecido a una chispa.
+      </p>
+    </div>
+  );
+}
+
+const RAKE_PRESETS: {
+  label: string;
+  values: { count: number; length: number; thickness: number; irregularity: number; roughness: number; opacity: number };
+}[] = [
+  { label: 'Peine', values: { count: 7, length: 0.85, thickness: 0.9, irregularity: 0.08, roughness: 0.1, opacity: 1 } },
+  { label: 'Cerdas', values: { count: 14, length: 0.7, thickness: 0.55, irregularity: 0.35, roughness: 0.45, opacity: 0.85 } },
+];
+
+/**
+ * Quinto generador: varias marcas alargadas en carriles paralelos dentro de
+ * la misma textura — peine, cerdas. Distinto de "Generar trazo" en que ahí
+ * es una marca sola; aquí son varias a la vez, del mismo tirón de pincel.
+ * Combinado con "Giro al azar" (mandos de Dinámicas, arriba) cada estampa
+ * gira al azar y el conjunto se lee como un mechón disperso en vez de un
+ * peine fijo — la orientación no vive en la textura, vive en el estampado.
+ */
+function RakeGeneratorSection({
+  engine,
+  updateBrush,
+}: {
+  engine: Engine | null;
+  updateBrush: (patch: Partial<BrushPreset>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState(1);
+  const [count, setCount] = useState(8);
+  const [length, setLength] = useState(0.8);
+  const [thickness, setThickness] = useState(0.7);
+  const [irregularity, setIrregularity] = useState(0.15);
+  const [roughness, setRoughness] = useState(0.2);
+  const [opacity, setOpacity] = useState(1);
+  const [label, setLabel] = useState('Peine');
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  const params: RakeTextureParams = { seed, count, length, thickness, irregularity, roughness, opacity };
+  const previewSize = 96;
+
+  useEffect(() => {
+    if (!open) return;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const pixels = generateRakeTexturePixels(params, previewSize);
+    canvas
+      .getContext('2d')!
+      .putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), previewSize, previewSize), 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seed, count, length, thickness, irregularity, roughness, opacity]);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost" disabled={!engine} onClick={() => setOpen(true)}>
+        <IconWand size={16} /> Generar púas…
+      </button>
+    );
+  }
+
+  return (
+    <div className="panel__section texture-generator">
+      <button
+        type="button"
+        className="texture-generator__close"
+        aria-label="Cerrar generador"
+        onClick={() => setOpen(false)}
+      >
+        <IconClose size={14} />
+      </button>
+      <div className="texture-generator__preview">
+        <canvas ref={previewRef} width={previewSize} height={previewSize} />
+      </div>
+      <div className="preset-row">
+        {RAKE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="chip"
+            onClick={() => {
+              setCount(p.values.count);
+              setLength(p.values.length);
+              setThickness(p.values.thickness);
+              setIrregularity(p.values.irregularity);
+              setRoughness(p.values.roughness);
+              setOpacity(p.values.opacity);
+              setLabel(p.label);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Slider label="Número de púas" value={count} min={2} max={20} step={1} format={(v) => `${Math.round(v)}`} onChange={setCount} />
+      <Slider label="Longitud" value={length} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setLength} />
+      <Slider label="Grosor" value={thickness} min={0.1} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setThickness} />
+      <Slider label="Irregularidad" value={irregularity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setIrregularity} />
+      <Slider label="Aspereza del borde" value={roughness} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setRoughness} />
+      <Slider label="Opacidad" value={opacity} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={setOpacity} />
+      <div className="panel__actions">
+        <button type="button" className="action" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+          <IconWand size={16} />
+          <span>Aleatorizar</span>
+        </button>
+        <button
+          type="button"
+          className="action"
+          disabled={!engine}
+          onClick={() => {
+            if (!engine) return;
+            const pixels = generateRakeTexturePixels(params, BRUSH_TEXTURE_SIZE);
+            const tex: CustomTexture = { id: uid('tex'), label, pixels };
+            engine.addCustomTexture(tex);
+            updateBrush({ textureId: tex.id });
+            setOpen(false);
+            setLabel('Peine');
+          }}
+        >
+          <IconPlus size={16} />
+          <span>Crear textura</span>
+        </button>
+      </div>
+      <p className="hint">
+        Grosor alto casi sin hueco entre púas da un peine sólido; menos grosor y
+        más irregularidad, cerdas sueltas. Sube "Giro al azar" para que cada
+        estampa caiga en un ángulo distinto — el peine se dispersa en mechones.
+      </p>
+    </div>
   );
 }
 
@@ -1677,6 +2476,8 @@ export function ExportPanel({ engine }: { engine: Engine }) {
   useEngineRevision(engine);
   const [progress, setProgress] = useState<string | null>(null);
   const [videoQuality, setVideoQuality] = useState(0.7);
+  const [framesFolder, setFramesFolder] = useState('frames');
+  const [copied, setCopied] = useState<string | null>(null);
   // Consultar los códecs es asíncrono, pero el resultado no cambia durante la
   // sesión. Hasta que responde se muestra el botón deshabilitado.
   const [videoSupport, setVideoSupport] = useState<VideoSupport>({
@@ -1707,6 +2508,17 @@ export function ExportPanel({ engine }: { engine: Engine }) {
     } finally {
       setBusy(null);
       setProgress(null);
+    }
+  };
+
+  const copySnippet = async (which: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
+    } catch (err) {
+      console.error(err);
+      alert('No se pudo copiar al portapapeles.');
     }
   };
 
@@ -1880,6 +2692,40 @@ export function ExportPanel({ engine }: { engine: Engine }) {
         El vídeo es lo que sirve para publicar y para montar en un editor. El APNG
         conserva transparencia y color sin pérdida pero pesa mucho más; la secuencia de
         PNG es la opción sin pérdidas para seguir trabajando en otro programa.
+      </p>
+
+      <h3 className="panel__subtitle">Exportar para web</h3>
+      <p className="hint">
+        Descarga primero el APNG o la secuencia de PNG de arriba; estos botones sólo
+        copian el fragmento HTML que los incrusta, no generan un archivo nuevo.
+      </p>
+      <button
+        className="btn btn--ghost"
+        onClick={() =>
+          copySnippet('loop', buildLoopEmbedSnippet(engine, `${safeName}.png`))
+        }
+      >
+        <IconCopy size={16} /> Código de inserción · loop transparente (APNG)
+      </button>
+      <div className="field-row">
+        <Field label="Carpeta de fotogramas en tu web">
+          <input value={framesFolder} onChange={(e) => setFramesFolder(e.target.value)} />
+        </Field>
+      </div>
+      <button
+        className="btn btn--ghost"
+        onClick={() =>
+          copySnippet('scroll', buildScrollEmbedSnippet(engine, framesFolder || 'frames'))
+        }
+      >
+        <IconCopy size={16} /> Código de inserción · animación con el scroll
+      </button>
+      {copied && <p className="hint">Copiado al portapapeles.</p>}
+      <p className="hint">
+        El loop es un simple {'<img>'}: el navegador anima el APNG solo. El de scroll
+        dibuja la secuencia de PNG en un {'<canvas>'} fijo y avanza el fotograma según
+        cuánto se ha desplazado la página — descomprime el .zip de la secuencia en la
+        carpeta indicada, junto al HTML donde pegues el código.
       </p>
 
       <h3 className="panel__subtitle">Time-lapse</h3>

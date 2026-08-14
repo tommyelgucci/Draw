@@ -1,4 +1,5 @@
 import type { Surface } from '../gl/renderer';
+import type { CustomTexture } from './brushTexture';
 import { clamp, lerp } from './math';
 import type { LayerRig, Mesh, Skeleton } from './rig';
 import type { BlendMode, RGB } from './types';
@@ -326,6 +327,12 @@ export interface TraceDocument {
   layerGroups: LayerGroup[];
   /** Presente si el proyecto tiene una pista de audio importada. */
   audio?: AudioTrack;
+  /**
+   * Texturas de punta importadas por quien dibuja — a diferencia de las 4
+   * integradas (`BUILTIN_TEXTURES`), viajan con el proyecto en vez de con la
+   * app: así lo que se importa aquí nunca se distribuye con Trace.
+   */
+  customTextures: CustomTexture[];
 }
 
 let idCounter = 0;
@@ -372,6 +379,7 @@ export function newDocument(
     skeletons: [],
     meshes: [],
     layerGroups: [],
+    customTextures: [],
   };
 }
 
