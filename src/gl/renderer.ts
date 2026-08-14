@@ -90,6 +90,11 @@ export class Renderer {
    * por id (integrada o `CustomTexture.id`): no dependen del tamaño del
    * documento, así que sobreviven a `setDocumentSize`. */
   private brushTextures = new Map<string, WebGLTexture>();
+  /** Qué texturas de punta ya cacheadas llevan color propio por texel (ver
+   *  `CustomTexture.hasColor`) — indexado por el mismo `WebGLTexture` que
+   *  cachea `brushTextures`, para que `drawStamps` lo consulte sin tener que
+   *  cargar con el id de vuelta desde cada punto de llamada. */
+  private brushTextureHasColor = new Map<WebGLTexture, boolean>();
   private resident = new Set<Surface>();
   private clock = 0;
   private maxResident = MAX_RESIDENT;
@@ -157,6 +162,7 @@ export class Renderer {
       'uResolution',
       'uColor',
       'uUseTexture',
+      'uUseTextureColor',
       'uTexture',
     ]);
     this.link('composite', QUAD_VS, COMPOSITE_FS, [
@@ -450,13 +456,13 @@ export class Renderer {
    * textura integrada (cara de generar, con cientos de `paintDot`) no se
    * recalcula en cada estampa, sólo la primera vez.
    */
-  getBrushTexture(id: string, resolvePixels: () => Uint8Array): WebGLTexture {
+  getBrushTexture(id: string, resolvePixels: () => { pixels: Uint8Array; hasColor: boolean }): WebGLTexture {
     const cached = this.brushTextures.get(id);
     if (cached) return cached;
 
     const gl = this.gl;
     const size = 128;
-    const pixels = resolvePixels();
+    const { pixels, hasColor } = resolvePixels();
     const levels = Math.floor(Math.log2(size)) + 1;
 
     const tex = gl.createTexture()!;
@@ -481,6 +487,7 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     this.brushTextures.set(id, tex);
+    this.brushTextureHasColor.set(tex, hasColor);
     return tex;
   }
 
@@ -525,6 +532,8 @@ export class Renderer {
     gl.uniform2f(p.uniforms.uResolution, this.docWidth, this.docHeight);
     gl.uniform3f(p.uniforms.uColor, color.r, color.g, color.b);
     gl.uniform1f(p.uniforms.uUseTexture, brushTexture ? 1 : 0);
+    const useTextureColor = brushTexture ? (this.brushTextureHasColor.get(brushTexture) ?? false) : false;
+    gl.uniform1f(p.uniforms.uUseTextureColor, useTextureColor ? 1 : 0);
     // Siempre se toca la unidad 0, incluso sin textura: si se deja lo que
     // hubiera antes, puede ser justo la textura de este mismo `target` (por
     // ejemplo, la de `drawOver` al volcar el trazo anterior sobre el cel), y

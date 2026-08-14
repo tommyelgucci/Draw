@@ -1312,11 +1312,19 @@ export class Engine {
    * proyecto. Si el id no aparece en ninguna (p. ej. el pincel activo
    * apuntaba a una textura ya borrada), cae a un buffer transparente en vez
    * de fallar: una punta sin cobertura visible, no un trazo roto.
+   *
+   * `hasColor` viaja junto a los píxeles (no sólo el `Uint8Array`) porque
+   * `Renderer.getBrushTexture` la cachea junto a la textura de GPU — sólo
+   * las integradas y las de `doc.customTextures` con `hasColor` puesto (el
+   * generador de racimo con sombra/base/brillo) devuelven `true`.
    */
-  private resolveTexturePixels(id: string): Uint8Array {
-    if (isBuiltinTextureId(id)) return generateBrushTexturePixels(id, BRUSH_TEXTURE_SIZE);
+  private resolveTexturePixels(id: string): { pixels: Uint8Array; hasColor: boolean } {
+    if (isBuiltinTextureId(id)) return { pixels: generateBrushTexturePixels(id, BRUSH_TEXTURE_SIZE), hasColor: false };
     const custom = this.doc.customTextures.find((t) => t.id === id);
-    return custom?.pixels ?? new Uint8Array(BRUSH_TEXTURE_SIZE * BRUSH_TEXTURE_SIZE * 4);
+    return {
+      pixels: custom?.pixels ?? new Uint8Array(BRUSH_TEXTURE_SIZE * BRUSH_TEXTURE_SIZE * 4),
+      hasColor: custom?.hasColor ?? false,
+    };
   }
 
   /** Registra una textura ya decodificada (ver `importCustomBrushTexture` en

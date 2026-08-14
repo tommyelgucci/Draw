@@ -8,10 +8,17 @@
  * en la interfaz (`ui/Panels.tsx`), sin duplicar el algoritmo en dos sitios
  * ni acoplar la generación a ningún runtime concreto.
  *
- * El shader sólo lee el canal alfa como cobertura (`texture(uTexture, uv).a`),
- * así que el RGB del buffer es irrelevante para la GPU; se deja en blanco
- * para que la miniatura en la interfaz también se vea bien sobre el fondo
- * oscuro del panel.
+ * El shader lee el canal alfa como cobertura (`texture(uTexture, uv).a`)
+ * siempre. El RGB, en cambio, sólo se usa cuando el pincel lo pide
+ * explícitamente (`uUseTextureColor` en `STAMP_FS`, activado por
+ * `CustomTexture.hasColor`): el generador de racimo puede escribir ahí
+ * sombra/base/brillo por hebra en vez de dejarlo en blanco. El resto de
+ * texturas (integradas, importadas, u otros generadores) siguen dejando el
+ * RGB en blanco y `hasColor` sin poner — el pincel las tiñe con su color
+ * activo como siempre. Es a propósito que esto no se infiera mirando los
+ * píxeles: una textura importada con colores propios (una foto, un PNG con
+ * dibujo real) debe seguir funcionando como máscara de forma, no imponer su
+ * propio color por sorpresa.
  */
 
 export type BuiltinTextureId = 'grain' | 'chalk' | 'canvas' | 'splatter';
@@ -44,6 +51,10 @@ export interface CustomTexture {
   id: string;
   label: string;
   pixels: Uint8Array;
+  /** Ausente/`false` en toda textura de siempre: el pincel la tiñe con su
+   *  color activo. `true` sólo cuando el propio buffer lleva color por hebra
+   *  (racimo con sombra/base/brillo) — ver la cabecera del archivo. */
+  hasColor?: boolean;
 }
 
 const SEEDS: Record<BuiltinTextureId, number> = {
@@ -574,11 +585,19 @@ export function generateRakeTexturePixels(
 }
 
 /**
- * Pinta UNA hebra (hoja, brizna, pelo) que nace en `(bx,by)` y crece hacia
- * `angle` — a diferencia de la marca alargada suelta (centrada, simétrica
- * hacia los dos lados), esto crece en una sola dirección desde una base,
- * como brota de verdad una brizna del suelo. Reutilizada muchas veces por
- * `generateClusterTexturePixels` con posición y ángulo distintos cada vez.
+ * Pinta UNA hebra (hoja, brizna, pelo, lengua de fuego) que nace en `(bx,by)`
+ * y crece hacia `angle` — a diferencia de la marca alargada suelta (centrada,
+ * simétrica hacia los dos lados), esto crece en una sola dirección desde una
+ * base, como brota de verdad una brizna del suelo. Reutilizada muchas veces
+ * por `generateClusterTexturePixels` con posición y ángulo distintos cada vez.
+ *
+ * `curl` combado suave en forma de arco (cero en la base y en la punta,
+ * máximo a la mitad) — nada se dobla en línea recta: una brizna real cede al
+ * peso, un pelo cae con la gravedad, una llama serpentea. `color`, si se da,
+ * se escribe en el RGB del propio texel allí donde esta hebra gana el
+ * canal alfa — así una sola textura puede llevar sombra/base/brillo por
+ * hebra en vez de un color plano para todo el racimo (ver `uUseTextureColor`
+ * en `STAMP_FS`, que decide si leer este RGB o el del pincel).
  */
 function paintBlade(
   buf: Uint8Array,
@@ -590,13 +609,16 @@ function paintBlade(
   halfThick: number,
   taper: number,
   roughness: number,
+  curl: number,
   opacity: number,
   rand: () => number,
+  color?: { r: number; g: number; b: number },
 ) {
   if (len <= 0) return;
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  const reach = len + halfThick + 2;
+  const curlAmount = curl * len * 0.35;
+  const reach = len + halfThick + Math.abs(curlAmount) + 2;
   const x0 = Math.max(0, Math.floor(bx - reach));
   const x1 = Math.min(size - 1, Math.ceil(bx + reach));
   const y0 = Math.max(0, Math.floor(by - reach));
@@ -630,14 +652,22 @@ function paintBlade(
       const wobble = 1 + noiseAt(u) * roughness * 0.5;
       const halfThickHere = Math.max(0.4, halfThick * tipTaper * Math.max(0.12, baseTaper) * wobble);
 
+      const bow = curlAmount * Math.sin(u * Math.PI);
       const lenFalloff = along < 0 ? 0 : 1 - smoothstep(len * 0.85, len, along);
-      const edge = Math.abs(perp) - halfThickHere;
+      const edge = Math.abs(perp - bow) - halfThickHere;
       const edgeAlpha = 1 - smoothstep(-1, 1, edge);
       const a = Math.min(1, Math.max(0, edgeAlpha * lenFalloff)) * opacity;
 
       const idx = (y * size + x) * 4 + 3;
       const v = Math.round(a * 255);
-      if (v > buf[idx]) buf[idx] = v;
+      if (v > buf[idx]) {
+        buf[idx] = v;
+        if (color) {
+          buf[idx - 3] = color.r;
+          buf[idx - 2] = color.g;
+          buf[idx - 1] = color.b;
+        }
+      }
     }
   }
 }
@@ -670,6 +700,43 @@ export interface ClusterTextureParams {
   /** 0..1: cuánto varía el ángulo de cada hebra respecto a "hacia arriba". */
   angleSpread: number;
   opacity: number;
+  /**
+   * "scatter" (césped, hojas): posición y ángulo de cada hebra al azar,
+   * como brota vegetación real. "parallel" (pelo): posiciones repartidas en
+   * fila y ángulo casi idéntico entre hebras — el pelo no crece hacia
+   * cualquier lado, un mechón se peina en una dirección. La referencia real
+   * (brochas de pelo en Photoshop/Procreate) monta el mechón con hebras
+   * paralelas más un puñado de "flyaways" que rompen la uniformidad; sin
+   * eso se ve como un peine de plástico. Por defecto "scatter" para no
+   * romper las texturas ya creadas antes de añadir este campo.
+   */
+  layout?: 'scatter' | 'parallel';
+  /** 0..1: combado en arco de cada hebra — nada real es una línea recta. */
+  curl?: number;
+  /**
+   * Hasta 3 colores (0..255 por canal) que se reparten entre las hebras —
+   * sombra/base/brillo, como pintar pelo a mano con tres tonos en vez de
+   * uno plano. Ausente o vacío: sin color propio, cada hebra sale en blanco
+   * y el pincel la tiñe con su color activo (comportamiento de siempre).
+   */
+  colors?: { r: number; g: number; b: number }[];
+}
+
+/** Con 1 color todas las hebras lo llevan; con 2, mitad y mitad; con 3, sesga
+ *  hacia el del medio (~50%) y deja los extremos —sombra/brillo— más
+ *  raros (~25% cada uno), igual que un mechón pintado a mano es sobre todo
+ *  el tono base con detalles de sombra y luz salpicados, no un tercio exacto
+ *  de cada uno. */
+function pickClusterColor(
+  rand: () => number,
+  colors: { r: number; g: number; b: number }[],
+): { r: number; g: number; b: number } {
+  if (colors.length === 1) return colors[0];
+  if (colors.length === 2) return colors[rand() < 0.5 ? 0 : 1];
+  const r = rand();
+  if (r < 0.25) return colors[0];
+  if (r < 0.75) return colors[1];
+  return colors[2];
 }
 
 export function generateClusterTexturePixels(
@@ -685,18 +752,32 @@ export function generateClusterTexturePixels(
   }
   const rand = mulberry32(params.seed);
   const count = Math.max(1, Math.round(params.count));
+  const parallel = params.layout === 'parallel';
+  const curl = params.curl ?? 0;
+  const colors = params.colors;
   // Base cerca del borde inferior del lienzo: las hebras nacen "del suelo"
   // y crecen hacia arriba (ángulo base -90°, hacia v=0 — ver la convención
   // Y-hacia-abajo de la cabecera del archivo), como una mata real.
   const baseY = size * 0.9;
 
   for (let i = 0; i < count; i++) {
-    const bx = size / 2 + (rand() * 2 - 1) * size * 0.5 * params.spread;
+    // "parallel": reparte las bases en fila (como un peine) en vez de al
+    // azar, y sólo deja que el ángulo se desvíe una fracción pequeña de la
+    // dispersión pedida — salvo una hebra suelta de vez en cuando (flyaway),
+    // que sí toma el abanico completo, igual que un pelo rebelde de verdad.
+    const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+    const bx = parallel
+      ? size / 2 + t * size * 0.5 * params.spread + (rand() * 2 - 1) * size * 0.015
+      : size / 2 + (rand() * 2 - 1) * size * 0.5 * params.spread;
     const by = baseY - rand() * size * 0.05;
     const len = size * 0.5 * params.bladeLength * (1 + (rand() * 2 - 1) * params.lengthVariation);
-    const angle = -Math.PI / 2 + (rand() * 2 - 1) * (Math.PI / 2) * params.angleSpread;
+    const isFlyaway = parallel && rand() < 0.12;
+    const angleSpreadHere = parallel && !isFlyaway ? params.angleSpread * 0.2 : params.angleSpread;
+    const angle = -Math.PI / 2 + (rand() * 2 - 1) * (Math.PI / 2) * angleSpreadHere;
     const halfThick = Math.max(0.5, (size * params.thickness) / 2);
-    paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, params.opacity, rand);
+    const curlHere = (rand() * 2 - 1) * curl;
+    const color = colors && colors.length > 0 ? pickClusterColor(rand, colors) : undefined;
+    paintBlade(buf, size, bx, by, angle, len, halfThick, params.taper, params.roughness, curlHere, params.opacity, rand, color);
   }
 
   return buf;
