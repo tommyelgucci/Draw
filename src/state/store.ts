@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { DEFAULT_BRUSHES, type BrushPreset } from '../core/brush';
 import type { Engine } from '../core/engine';
-import { clamp, hsvToRgb } from '../core/math';
+import { clamp, hexToRgb, hsvToRgb } from '../core/math';
 import type { SelectionMode } from '../core/selection';
 import type { RGB } from '../core/types';
 
@@ -184,12 +184,82 @@ const EARTH_SKIN: RGB[] = [
   { r: 0.28, g: 0.16, b: 0.11 }, // chocolate
 ];
 
+/** Convierte una lista de hex en `RGB[]` — más legible que teclear
+ *  fracciones a mano para paletas curadas a partir de una imagen de
+ *  referencia (no se copia ningún píxel, sólo el juicio de qué color
+ *  representa cada mancha). */
+const hexList = (hexes: string[]): RGB[] => hexes.map(hexToRgb);
+
+// Las diez paletas de abajo vienen de capturas que trajo quien usa la app
+// (varias generadas por Gemini, con el texto del código hex a veces
+// equivocado respecto al color real de la mancha — un fallo conocido de
+// generación de imagen, no un dato fiable). Los hex de aquí son juicio
+// visual sobre el color de cada mancha, no una transcripción del texto
+// que traía la imagen.
+const FOREST: RGB[] = hexList([
+  '#2f4f2f', '#3a6b35', '#4f9d5c', '#0f3d2e', '#6b8f47',
+  '#9caf6b', '#c9d94a', '#7a5230', '#5c4030', '#8a8a7a', '#c9a86a', '#d98a8a',
+]);
+const ANCIENT_ART: RGB[] = hexList([
+  '#3d7ea6', '#2f7a7a', '#f0c419', '#d4691e', '#a13d1f', '#4a2e1a', '#c9a876', '#8fa8c9',
+]);
+const RENAISSANCE_ART: RGB[] = hexList([
+  '#7a8a6a', '#a15c4a', '#6a7a8a', '#4a3826', '#c97a3a', '#e8dcc0', '#3a5a6a', '#8a6a8a',
+]);
+const IMPRESSIONIST_ART: RGB[] = hexList([
+  '#d9a521', '#4a7a3a', '#1f4a2f', '#7a8ac9', '#e88a5a', '#f0c8a0', '#8aa87a', '#2f5a8a', '#6a4a8a',
+]);
+const WINTER: RGB[] = hexList(['#8a1a5c', '#3a1a5c', '#1a2a6c', '#0a5c3a', '#2ab5c9', '#e91e8a']);
+const SUMMER: RGB[] = hexList(['#c97a94', '#b0a0c9', '#a0bcd9', '#8fae94', '#a67c94', '#d9c9a0']);
+const AUTUMN: RGB[] = hexList(['#a83a1f', '#6a5c1f', '#c98a1f', '#4a3020', '#c9602f']);
+const SPRING: RGB[] = hexList(['#e85c6a', '#f0c020', '#4aa83a', '#4a9ad9', '#e88aa8']);
+const OCEAN: RGB[] = hexList([
+  '#7ab0d9', '#2a6a9a', '#1a3a5c', '#2fae9a', '#0a6a5a', '#f0a888', '#e8654a', '#8a7a6a', '#4a4038',
+]);
+const TWILIGHT: RGB[] = hexList([
+  '#1a1a3a', '#3a2a6a', '#6a4a9a', '#a05a8a', '#c97a5a', '#e8a83a', '#f0d980', '#1a2a1a', '#0a0a0a',
+]);
+const GOLDEN_HOUR: RGB[] = hexList([
+  '#ffd700', '#ffa500', '#ff6a2a', '#d9391f', '#8a1a1a', '#a83a5c', '#6a2a7a', '#4a1a5c',
+]);
+const MOUNTAIN: RGB[] = hexList([
+  '#2f3320', '#5c6a5a', '#515c43', '#9d989a', '#445454', '#8a684c', '#5c768f', '#382a40', '#cc7105', '#b56323',
+]);
+
+// Estas dos, en cambio, las trajo quien usa la app desde fuera de Gemini
+// (una ficha de pintura real y una lámina de combinaciones pastel) — se
+// suman a la paleta "Pasteles" ya existente en vez de abrir una nueva,
+// tal como se pidió.
+const PASTEL_EXTRA: RGB[] = hexList([
+  '#c7c0b4', // beige apagado
+  '#54615f', // peltre
+  '#c2bc8a', // hierba seca
+  '#f2ebd9', // crema
+  '#cc8148', // terracota
+  '#9cc2a0', '#b8e0bc', '#d4edb0', '#363a54', '#4a8a78', '#f0d0d8',
+  '#f4837e', '#f5c79a', '#1a6e7e', '#c9bc9e', '#c0dce0',
+  '#90b89a', '#e0a85c', '#9a7268', '#93a8b8',
+]);
+
 const DEFAULT_PALETTE_GROUPS: PaletteGroup[] = [
   { name: 'Neutros', colors: NEUTRALS },
   { name: 'Espectro', colors: hueWheel(12, 0.8, 0.92) },
-  // Desplazada respecto al espectro para no repetir los mismos tonos aclarados.
-  { name: 'Pasteles', colors: hueWheel(6, 0.35, 0.98, 0.04) },
+  // Desplazada respecto al espectro para no repetir los mismos tonos
+  // aclarados; ampliada con selección de dos láminas de referencia.
+  { name: 'Pasteles', colors: [...hueWheel(6, 0.35, 0.98, 0.04), ...PASTEL_EXTRA] },
   { name: 'Tierras y piel', colors: EARTH_SKIN },
+  { name: 'Bosque', colors: FOREST },
+  { name: 'Arte antiguo', colors: ANCIENT_ART },
+  { name: 'Arte renacentista', colors: RENAISSANCE_ART },
+  { name: 'Arte impresionista', colors: IMPRESSIONIST_ART },
+  { name: 'Invierno', colors: WINTER },
+  { name: 'Verano', colors: SUMMER },
+  { name: 'Otoño', colors: AUTUMN },
+  { name: 'Primavera', colors: SPRING },
+  { name: 'Océano', colors: OCEAN },
+  { name: 'Crepúsculo', colors: TWILIGHT },
+  { name: 'Hora dorada', colors: GOLDEN_HOUR },
+  { name: 'Montaña', colors: MOUNTAIN },
 ];
 
 export const useUI = create<UIState>((set, get) => ({
