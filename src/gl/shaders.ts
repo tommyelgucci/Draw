@@ -340,6 +340,7 @@ uniform float uHue;        // radianes
 uniform float uSaturation; // -1..1, 0 = sin cambio
 uniform float uBrightness; // -1..1
 uniform float uContrast;   // -1..1
+uniform float uPosterize;  // 0 = sin cambio; si no, niveles por canal (2..32)
 out vec4 fragColor;
 
 vec3 rgb2hsv(vec3 c) {
@@ -369,6 +370,16 @@ void main() {
 
   rgb = clamp(rgb + uBrightness, 0.0, 1.0);
   rgb = clamp((rgb - 0.5) * (1.0 + uContrast) + 0.5, 0.0, 1.0);
+
+  // Al final de la cadena, sobre el color ya tonificado/contrastado: menos
+  // niveles por canal, más plano y "cartel" — floor(x*(n-1)+0.5)/(n-1)
+  // reparte n valores exactos entre 0 y 1, con redondeo al más cercano en
+  // vez de truncar (así el nivel 0 y el 1 siguen llegando al blanco y al
+  // negro puros, no se quedan cortos por un pelo).
+  if (uPosterize > 1.0) {
+    float levels = uPosterize - 1.0;
+    rgb = floor(rgb * levels + 0.5) / levels;
+  }
 
   fragColor = vec4(rgb * src.a, src.a);
 }

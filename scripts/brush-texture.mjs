@@ -87,12 +87,31 @@ const flatGeometry = await page.evaluate(() => {
       }
       if (rowMaxX >= rowMinX) rowWidths.add(rowMaxX - rowMinX);
     }
-    return { inkPx, w: maxX - minX, h: maxY - minY, distinctRowWidths: rowWidths.size };
+    // Fila central: el rasgado de los bordes nunca debería llegar tan
+    // adentro como para partir la barra en trozos sueltos — si el
+    // rasgado come demasiado de cada lado (regresión real que hubo:
+    // hasta 70% de cada borde, independiente uno del otro, podía
+    // pellizcar la barra a cero en algún punto), aparecerían huecos
+    // aquí, en el centro, no sólo en el borde.
+    const cy = Math.round(size / 2);
+    let centerGaps = 0;
+    let centerMinX = Infinity, centerMaxX = -Infinity;
+    for (let x = 0; x < size; x++) {
+      if (pixels[(cy * size + x) * 4 + 3] > 120) {
+        if (x < centerMinX) centerMinX = x;
+        if (x > centerMaxX) centerMaxX = x;
+      }
+    }
+    for (let x = centerMinX + 3; x < centerMaxX - 3; x++) {
+      if (pixels[(cy * size + x) * 4 + 3] <= 120) centerGaps++;
+    }
+    return { inkPx, w: maxX - minX, h: maxY - minY, distinctRowWidths: rowWidths.size, centerGaps };
   });
 });
 check('"Plana" pinta algo medible', flatGeometry.inkPx > 0, `${flatGeometry.inkPx}px`);
 check('"Plana" es mucho más ancha que alta (barra, no gota)', flatGeometry.w > flatGeometry.h * 1.8, JSON.stringify(flatGeometry));
 check('el borde superior/inferior varía fila a fila (rasgado, no un rectángulo perfecto)', flatGeometry.distinctRowWidths > 5, `${flatGeometry.distinctRowWidths} anchos distintos`);
+check('la fila central no tiene huecos (el rasgado no parte la barra en trozos)', flatGeometry.centerGaps === 0, `${flatGeometry.centerGaps} huecos`);
 
 log('\n— Selector de textura —');
 await page.click('.rail--top [aria-label="Pincel"]');

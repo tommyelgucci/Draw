@@ -276,8 +276,14 @@ export function generateBrushTexturePixels(id: BuiltinTextureId, size = 128): Ui
 
           // Cada borde "come" una fracción distinta del grosor desde su
           // lado — así el corte queda irregular, no una franja perfecta.
-          const topEat = noiseAt(topNoise, u) * halfH * 0.7;
-          const botEat = noiseAt(botNoise, u) * halfH * 0.7;
+          // Tope bajo a propósito (0.25 en vez de, por ejemplo, 0.7): con
+          // los dos bordes comiendo de forma independiente, un tope alto
+          // deja que se toquen y pellizquen la barra hasta cortarla en
+          // trozos sueltos (`localTop >= localBot` más abajo) — que es
+          // justo lo que NO se quiere: una barra sólida con el borde
+          // rasgado, no una fila de motas separadas.
+          const topEat = noiseAt(topNoise, u) * halfH * 0.25;
+          const botEat = noiseAt(botNoise, u) * halfH * 0.25;
           const localTop = -halfH + topEat;
           const localBot = halfH - botEat;
           if (localTop >= localBot) continue;

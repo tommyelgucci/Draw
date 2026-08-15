@@ -1087,13 +1087,13 @@ export class Engine {
 
   /* --- capas de ajuste --- */
 
-  /** Crea una capa de ajuste (tono/saturación/brillo/contraste) sin efecto
-   *  encima de la activa — no tiene dibujo propio, `compositeGroups` la
-   *  reconoce por `kind` y aplica el ajuste al acumulador en vez de
-   *  componer un cel. */
+  /** Crea una capa de ajuste (tono/saturación/brillo/contraste/posterizar)
+   *  sin efecto encima de la activa — no tiene dibujo propio,
+   *  `compositeGroups` la reconoce por `kind` y aplica el ajuste al
+   *  acumulador en vez de componer un cel. */
   createAdjustmentLayer() {
     const layer = newLayer('Ajuste', false, 'adjustment');
-    layer.adjustment = { hue: 0, saturation: 0, brightness: 0, contrast: 0 };
+    layer.adjustment = { hue: 0, saturation: 0, brightness: 0, contrast: 0, posterize: 0 };
 
     const index = this.activeLayerIndex + 1;
     const at = index < 0 ? this.doc.layers.length : index;

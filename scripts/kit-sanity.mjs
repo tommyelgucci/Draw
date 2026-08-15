@@ -149,6 +149,24 @@ if (results.error) {
 
 await page.screenshot({ path: `${out}/kit-sanity-01.png` });
 
+log('\n— Los pinceles planos no achatan la estampa además de la textura —');
+// Regresión real: el shader mapea la textura sobre el espacio SIN achatar
+// de la estampa (`vLocal` se calcula antes de `aspect`, ver STAMP_VS), así
+// que un `aspect` bajo en un pincel con la textura "flat" (que YA lleva su
+// propia forma de barra) la aplana DOS VECES — salía como una ranura casi
+// invisible con huecos entre estampa y estampa, en vez de un trazo
+// continuo. "Pincel plano" y "Brocha ancha" deben llevar aspect=1: la
+// forma la pone la textura, no el achatamiento de la estampa.
+const flatAspects = await page.evaluate(async () => {
+  const { DEFAULT_BRUSHES } = await import('/src/core/brush.ts');
+  return DEFAULT_BRUSHES.filter((b) => b.textureId === 'flat').map((b) => ({ id: b.id, aspect: b.aspect }));
+});
+check(
+  '"Pincel plano" y "Brocha ancha" (textura "flat") llevan aspect=1',
+  flatAspects.length === 2 && flatAspects.every((b) => b.aspect === 1),
+  JSON.stringify(flatAspects),
+);
+
 log('\n— Consola —');
 check('sin errores en consola', errors.length === 0, errors.join(' | '));
 

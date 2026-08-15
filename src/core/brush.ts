@@ -614,7 +614,15 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: false,
     angleJitter: 0,
     taper: 0,
-    aspect: 0.35,
+    // aspect en 1 a propósito: la textura "flat" YA lleva la forma de barra
+    // horqueada (ver `generateBrushTexturePixels`, caso 'flat'). El shader
+    // mapea la textura sobre el espacio SIN achatar de la estampa (`vLocal`
+    // se calcula antes de aplicar `aspect`, ver STAMP_VS) — así que un
+    // `aspect` bajo aquí no "aplana más" la barra, la aplana DOS VECES:
+    // una por la propia forma de la textura, otra por el achatamiento de
+    // la estampa. El resultado salía como una ranura casi invisible, con
+    // huecos entre estampa y estampa en vez de un trazo continuo.
+    aspect: 1,
     erase: false,
     pigmentMix: 0,
     smudge: 0,
@@ -640,7 +648,10 @@ export const DEFAULT_BRUSHES: BrushPreset[] = [
     followDirection: false,
     angleJitter: 0,
     taper: 0,
-    aspect: 0.3,
+    // aspect en 1 — ver el comentario largo en "flat-brush": la textura
+    // "flat" ya trae su propia forma de barra, aplanarla otra vez con
+    // `aspect` la deja en una ranura casi invisible.
+    aspect: 1,
     erase: false,
     // Un poco de mezcla de pigmento: cubrir mucha área de una pasada pide
     // que se note dónde se solapa, no sólo un alfa plano encima.

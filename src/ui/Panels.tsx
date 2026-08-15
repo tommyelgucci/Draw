@@ -610,9 +610,20 @@ export function LayersPanel({ engine }: { engine: Engine }) {
             format={(v) => `${Math.round(v * 100)}%`}
             onChange={(v) => engine.setLayerAdjustment(active.id, { contrast: v })}
           />
+          <Slider
+            label="Posterizar"
+            value={active.adjustment.posterize ?? 0}
+            min={0}
+            max={32}
+            step={1}
+            format={(v) => (v === 0 ? 'Desactivado' : `${Math.round(v)} niveles`)}
+            onChange={(v) => engine.setLayerAdjustment(active.id, { posterize: Math.round(v) })}
+          />
           <p className="hint">
             Afecta a todo lo que hay por debajo, no a un dibujo propio — como cualquier
-            capa, se puede ocultar, reordenar o borrar sin tocar las de abajo.
+            capa, se puede ocultar, reordenar o borrar sin tocar las de abajo. Posterizar
+            reduce el color a pocos niveles por canal, para un efecto plano de cartel —
+            menos niveles, más brusco; 0 lo desactiva.
           </p>
         </div>
       )}
